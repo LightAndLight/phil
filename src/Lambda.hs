@@ -59,83 +59,47 @@ free :: Context -> Set Type
 free
   = foldl (\frees (name,ty) -> frees `S.union` freeInScheme ty) S.empty . M.toList
 
+bound :: TypeScheme -> (Type, Set Type)
+bound (Base ty) = (ty, S.empty)
+bound (Forall name scheme) = S.insert (TypeVar name) <$> bound scheme
+
 type Substitutions = Map Identifier Type
 
-substitute :: Substitutions -> Type -> Type
-substitute subs ty@(TypeVar name) = fromMaybe ty (M.lookup name subs)
-substitute subs (FunType from to)
-  = FunType (substitute subs from) (substitute subs to)
-substitute subs ty = ty
-
-instantiate :: Substitutions -> TypeScheme -> TypeScheme
-instantiate subs (Base ty) = Base $ substitute subs ty
-instantiate subs (Forall name scheme)
-  = case M.lookup name subs of
-      Just (TypeVar name') -> Forall name' $ instantiate subs scheme
-      Just _ -> instantiate subs scheme
-      Nothing -> Forall name $ instantiate subs scheme
-
-ge :: TypeScheme -> TypeScheme -> Bool
-ge scheme (Base ty) = geGivenBound S.empty scheme ty
+specializeTypes :: Set Type -> Type -> Type -> Bool
+specializeTypes names ty ty'
+  = evalState (canSpecialize names ty ty') M.empty
   where
-    geGivenBound :: Set Identifier -> TypeScheme -> Type -> Bool
-    geGivenBound names (Forall name s) t = geGivenBound (S.insert name names) s t
-    geGivenBound names (Base t) t' = evalState (ge' names t t') M.empty
+    canSpecializeMulti names a a' b b'
+      = liftA2 (&&) (canSpecialize names a a') (canSpecialize names b b')
 
-    subsAreConsistent :: Map String Type -> Map String Type -> Bool
-    subsAreConsistent subs subs'
-      = getAll . M.foldMapWithKey (\k a -> All a) $ M.intersectionWith (==) subs subs'
+    canSpecialize :: Set Type -> Type -> Type -> State Substitutions Bool
+    canSpecialize names ty@(TypeVar name) ty' = do
+      sub <- gets $ M.lookup name
+      case sub of
+        Just ty -> return $ ty == ty'
+        Nothing -> do
+          let nameInNames = ty `S.member` names
+          when nameInNames . modify $ M.insert name ty'
+          return nameInNames
+    canSpecialize names ty@PrimType{} ty' = return $ ty == ty'
+    canSpecialize names (FunType from to) (FunType from' to')
+      = canSpecializeMulti names from from' to to'
+    canSpecialize names (ProdType one two) (ProdType one' two')
+      = canSpecializeMulti names one one' two two'
+    canSpecialize names (SumType left right) (SumType left' right')
+      = canSpecializeMulti names left left' right right'
+    canSpecialize names Bottom ty' = return True
+    canSpecialize names _ _ = return False
 
-    geGivenNestedSubs :: Set Identifier
-                      -> Type -> Type
-                      -> Type -> Type
-                      -> State Substitutions Bool
-    geGivenNestedSubs names a a' b b' = do
-      subs <- get
-      aRes <- ge' names a a'
-      aSubs <- get
-      put subs
-      bRes <- ge' names b b'
-      bSubs <- get
-      let subsConsistent = subsAreConsistent aSubs bSubs
-      unless subsConsistent $ put subs
-      return $ aRes && bRes && subsConsistent
-
-    ge' :: Set Identifier -> Type -> Type -> State Substitutions Bool
-    ge' _ _ Bottom = return True
-    ge' names (FunType from to) (FunType from' to')
-      = geGivenNestedSubs names from from' to to'
-    ge' names (ProdType one two) (ProdType one' two')
-      = geGivenNestedSubs names one one' two two'
-    ge' names (SumType left right) (SumType left' right')
-      = geGivenNestedSubs names left left' right right'
-    ge' names (TypeVar t) t'
-      | t `S.member` names = do
-          sub <- gets $ M.lookup t
-          case sub of
-            Just ty -> return $ ty == t'
-            Nothing -> do
-              let pred = case t' of
-                    TypeVar{} -> not (t' `S.member` freeInScheme scheme)
-                    FunType from to -> noFrees from to
-                    ProdType one two -> noFrees one two
-                    SumType left right -> noFrees left right
-                    _ -> True
-              when pred . modify $ M.insert t t'
-              return pred
-      | otherwise = return False
-    ge' names _ _ = return False
-
-    noFrees a b
-      = let frs = freeInScheme scheme
-        in S.null (frs `S.intersection` freeInType a) &&
-           S.null (frs `S.intersection` freeInType b)
-
-
-ge scheme scheme' = boundNotInFree (freeInScheme scheme) scheme'
-  where
-    boundNotInFree frs (Forall n s)
-      = not (TypeVar n `S.member` frs) && boundNotInFree frs s
-    boundNotInFree frs s = ge scheme s
-
-type Judgement = (Context,Expr,TypeScheme)
+specialize :: TypeScheme -> TypeScheme -> Bool
+specialize (Base ty) s@(Base ty') = ty == ty'
+specialize (Base scheme) scheme'
+  = freeInType scheme `S.intersection` snd (bound scheme') == S.empty
+specialize scheme scheme'@(Base ty')
+  = let (ty, tyVars) = bound scheme
+    in specializeTypes tyVars ty ty'
+specialize scheme scheme'
+  = let (ty, tyVars) = bound scheme
+        (ty', tyVars') = bound scheme'
+    in freeInScheme scheme `S.intersection` tyVars' == S.empty &&
+       specializeTypes tyVars ty ty'
