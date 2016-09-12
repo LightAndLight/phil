@@ -5,6 +5,7 @@ import Control.Monad.State
 import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Monoid
 import Data.Set (Set)
 import qualified Data.Set as S
 
@@ -31,6 +32,9 @@ data Type
   = TypeVar String
   | PrimType Prim
   | FunType Type Type
+  | ProdType Type Type
+  | SumType Type Type
+  | Bottom
   deriving (Eq, Show, Ord)
 
 -- Syntax of type schemes
@@ -76,20 +80,57 @@ ge scheme (Base ty) = geGivenBound S.empty scheme ty
   where
     geGivenBound :: Set Identifier -> TypeScheme -> Type -> Bool
     geGivenBound names (Forall name s) t = geGivenBound (S.insert name names) s t
-    geGivenBound names (Base t) t' = ge' names t t'
+    geGivenBound names (Base t) t' = evalState (ge' names t t') M.empty
 
-    ge' :: Set Identifier -> Type -> Type -> Bool
+    subsAreConsistent :: Map String Type -> Map String Type -> Bool
+    subsAreConsistent subs subs'
+      = getAll . M.foldMapWithKey (\k a -> All a) $ M.intersectionWith (==) subs subs'
+
+    geGivenNestedSubs :: Set Identifier
+                      -> Type -> Type
+                      -> Type -> Type
+                      -> State Substitutions Bool
+    geGivenNestedSubs names a a' b b' = do
+      subs <- get
+      aRes <- ge' names a a'
+      aSubs <- get
+      put subs
+      bRes <- ge' names b b'
+      bSubs <- get
+      let subsConsistent = subsAreConsistent aSubs bSubs
+      unless subsConsistent $ put subs
+      return $ aRes && bRes && subsConsistent
+
+    ge' :: Set Identifier -> Type -> Type -> State Substitutions Bool
+    ge' _ _ Bottom = return True
     ge' names (FunType from to) (FunType from' to')
-      = ge' names from from' || ge' names to to'
-    ge' names (TypeVar t) t' = t `S.member` names &&
-      case t' of
-        TypeVar{} -> not (t' `S.member` freeInScheme scheme)
-        FunType from to ->
-          let frees = freeInScheme scheme
-          in S.null (frees `S.intersection` freeInType from) &&
-             S.null (frees `S.intersection` freeInType to)
-        PrimType _ -> True
-    ge' names _ _ = False
+      = geGivenNestedSubs names from from' to to'
+    ge' names (ProdType one two) (ProdType one' two')
+      = geGivenNestedSubs names one one' two two'
+    ge' names (SumType left right) (SumType left' right')
+      = geGivenNestedSubs names left left' right right'
+    ge' names (TypeVar t) t'
+      | t `S.member` names = do
+          sub <- gets $ M.lookup t
+          case sub of
+            Just ty -> return $ ty == t'
+            Nothing -> do
+              let pred = case t' of
+                    TypeVar{} -> not (t' `S.member` freeInScheme scheme)
+                    FunType from to -> noFrees from to
+                    ProdType one two -> noFrees one two
+                    SumType left right -> noFrees left right
+                    _ -> True
+              when pred . modify $ M.insert t t'
+              return pred
+      | otherwise = return False
+    ge' names _ _ = return False
+
+    noFrees a b
+      = let frs = freeInScheme scheme
+        in S.null (frs `S.intersection` freeInType a) &&
+           S.null (frs `S.intersection` freeInType b)
+
 
 ge scheme scheme' = boundNotInFree (freeInScheme scheme) scheme'
   where
