@@ -13,7 +13,13 @@ import Data.Traversable
 import Data.Set (Set)
 import qualified Data.Set as S
 
+import Debug.Trace
+
 type Identifier = String
+
+data Pattern = IdPat Identifier
+             | ConstantPat Expr
+             | ConstructorPat Expr
 
 -- Syntax of expressions
 data Expr
@@ -165,12 +171,18 @@ instantiate scheme
 data InferenceError
   = NotInScope String
   | TypeError Type Type
+  | OccursError Identifier Type
   deriving Show
+
+occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
+occurs name ty
+  | name `S.member` freeInType ty = throwError $ OccursError name ty
+  | otherwise = return ()
 
 unify :: MonadError InferenceError m => Type -> Type -> m Type
 unify ty@TypeVar{} TypeVar{} = return ty
-unify TypeVar{} ty' = return ty'
-unify ty TypeVar{} = return ty
+unify (TypeVar name) ty = return ty
+unify ty (TypeVar name) = return ty
 unify (FunType from to) (FunType from' to')
   = liftA2 FunType (unify from from') (unify to to')
 unify (ProdType one two) (ProdType one' two')
@@ -194,7 +206,7 @@ unionWithError m m'
   
 
 mgu :: MonadError InferenceError m => Type -> Type -> m Substitutions
-mgu (TypeVar name) ty = return $ M.singleton name ty
+mgu (TypeVar name) ty = occurs name ty >> return (M.singleton name ty)
 mgu ty (TypeVar name) = return $ M.singleton name ty
 mgu (FunType from to) (FunType from' to') = do
   fromSubs <- mgu from from'
