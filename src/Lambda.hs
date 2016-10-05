@@ -219,7 +219,7 @@ data InferenceError
   | TypeError Type Type
   | PatternArgMismatch Int Int
   | OccursError Identifier Type
-  deriving Show
+  deriving (Eq, Show)
 
 occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
 occurs name ty
@@ -315,13 +315,19 @@ w e ctxt
           return (s2 `M.union` s1, t2)
         (Case e bs) -> do
           (s1,t1) <- w' e
-          ts <- for bs $ \(p,b) -> do
-            ctxt <- get
-            t <- patType t1 p -- Determine type of pattern
-            subs <- mgu t1 t -- unify pattern's type with case expr's type
-            (s',t') <- w' b -- infer right hand side
-            put ctxt
-            return (subs,t')
-          case ts of
-            [] -> error "Case expression cannot have zero branches"
-            ((subs,t):ts) -> traverse (unify t . snd) ts >> return (subs,t)
+          case bs of
+            [] -> error "Case expression can't have zero branches"
+            ((p,b):bs) -> do
+              ctxt <- get
+              pType <- patType t1 p -- Determine type of pattern
+              subs <- mgu t1 pType -- unify pattern's type with case expr's type
+              (_,bType) <- w' b -- infer right hand side
+              put ctxt
+              subsList <- for bs $ \(p,b) -> do
+                ctxt <- get
+                patType pType p
+                (_,t') <- w' b
+                subs' <- mgu bType t'
+                put ctxt
+                return subs'
+              return (subs `M.union` foldl M.union M.empty subsList,bType)
