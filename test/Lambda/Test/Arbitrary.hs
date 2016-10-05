@@ -16,8 +16,6 @@ sizedType n
   | otherwise
       = oneof 
           [ FunType <$> sizedType (n - 1) <*> sizedType (n - 1)
-          , ProdType <$> sizedType (n - 1) <*> sizedType (n - 1)
-          , SumType <$> sizedType (n - 1) <*> sizedType (n - 1)
           ]
 
 newtype Identifier = Identifier String

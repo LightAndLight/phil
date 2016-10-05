@@ -1,5 +1,7 @@
 {-# language TemplateHaskell #-}
 
+import Data.Either
+import qualified Data.Map as M
 import Test.QuickCheck
 import Lambda hiding (Identifier)
 import Lambda.Test.Arbitrary
@@ -56,6 +58,60 @@ prop_specialize_const_bad :: Identifier
                           -> Property
 prop_specialize_const_bad a b b'
   = b /= b' ==> not (specialize (constTypeSubbedB a b) (constTypeSubbedB a b'))
+
+prop_occurs_fail :: Identifier -> Bool
+prop_occurs_fail (Identifier a) = isLeft $ w (Abs a (App (Id a) (Id a))) M.empty
+
+prop_case_inference1 :: Bool
+prop_case_inference1 = left == right
+  where
+    left = Right $ Base (PrimType Bool)
+    right = w (Case (Lit (LitInt 1)) [(PatLit (LitInt 0),Lit (LitBool True))]) M.empty
+
+prop_case_inference2 :: Bool
+prop_case_inference2 = left == right
+  where
+    left = Right $ Base (FunType (PrimType Int) (PrimType Bool))
+    right = w (Abs "x" $ Case (Id "x") [(PatLit (LitInt 0),Lit (LitBool True))]) M.empty
+
+prop_case_inference_if_then_else :: Bool
+prop_case_inference_if_then_else
+  = case res of
+      Right (Forall a (Base
+        (FunType (PrimType Bool)
+          (FunType (TypeVar b)
+            (FunType (TypeVar c) (TypeVar d)))))) -> a == b && b == c && c == d
+      _ -> False
+  where
+    res = w (Abs "cond" $ Abs "i" $ Abs "e" $ Case (Id "cond")
+      [ (PatLit (LitBool True),Id "i")
+      , (PatLit (LitBool False),Id "e")
+      ]) M.empty
+
+prop_case_wrong_pattern_type1 :: Bool
+prop_case_wrong_pattern_type1 = isLeft res
+  where
+    res = w (Case (Lit (LitInt 1))
+      [ (PatLit (LitInt 0),Lit (LitBool True))
+      , (PatLit (LitBool True),Lit (LitBool False))
+      ]) M.empty
+
+prop_case_wrong_pattern_type2 :: Bool
+prop_case_wrong_pattern_type2 = isLeft res
+  where
+    res = w (Abs "x" $ Case (Id "x")
+      [ (PatLit (LitInt 0),Lit (LitBool True))
+      , (PatLit (LitBool True),Lit (LitBool False))
+      ]) M.empty
+
+prop_case_wrong_branch_type :: Bool
+prop_case_wrong_branch_type = isLeft res
+  where
+    res = w (Case (Lit (LitInt 1))
+      [ (PatLit (LitInt 0),Lit (LitBool True))
+      , (PatLit (LitInt 1),Lit (LitInt 0))
+      ]) M.empty
+
 
 return []
 main = $quickCheckAll
