@@ -5,6 +5,7 @@ module Lambda where
 import Control.Applicative
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Foldable
 import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -17,17 +18,21 @@ import Debug.Trace
 
 type Identifier = String
 
-data Pattern = IdPat Identifier
-             | ConstantPat Expr
-             | ConstructorPat Expr
+data Pattern = PatId Identifier
+             | PatCon [Identifier]
+             | PatLit Literal
+             deriving (Eq, Show)
+
+data Literal = LitInt Int
+             | LitString String
+             | LitChar Char
+             | LitBool Bool
+             deriving (Eq, Show)
 
 -- Syntax of expressions
 data Expr
   = Id Identifier
-  | ConstInt Int
-  | ConstStr String
-  | ConstChar Char
-  | ConstBool Bool
+  | Lit Literal
   | ConstSum (Either Expr Expr)
   | ConstProd (Expr,Expr)
   | App Expr Expr
@@ -48,8 +53,7 @@ data Type
   = TypeVar String
   | PrimType Prim
   | FunType Type Type
-  | ProdType Type Type
-  | SumType Type Type
+  | PolyType [Type]
   deriving (Eq, Show, Ord)
 
 -- Syntax of type schemes
@@ -103,10 +107,8 @@ specializeTypes names ty ty'
     canSpecialize names ty@PrimType{} ty' = return $ ty == ty'
     canSpecialize names (FunType from to) (FunType from' to')
       = canSpecializeMulti names from from' to to'
-    canSpecialize names (ProdType one two) (ProdType one' two')
-      = canSpecializeMulti names one one' two two'
-    canSpecialize names (SumType left right) (SumType left' right')
-      = canSpecializeMulti names left left' right right'
+    canSpecialize names (PolyType tys) (PolyType tys')
+      = getAll . fold <$> traverse (\(a,b) -> All <$> canSpecialize names a b) (zip tys tys')
     canSpecialize names _ _ = return False
 
 specialize :: TypeScheme -> TypeScheme -> Bool
@@ -132,8 +134,7 @@ generalize ctxt ty
 substitute :: Substitutions -> Type -> Type
 substitute subs ty@(TypeVar name) = fromMaybe ty $ M.lookup name subs
 substitute subs (FunType from to) = FunType (substitute subs from) (substitute subs to)
-substitute subs (ProdType one two) = ProdType (substitute subs one) (substitute subs two)
-substitute subs (SumType left right) = SumType (substitute subs left) (substitute subs right)
+substitute subs (PolyType tys) = PolyType $ map (substitute subs) tys
 substitute subs ty = ty
 
 substituteScheme :: Substitutions -> TypeScheme -> TypeScheme
@@ -185,10 +186,8 @@ unify (TypeVar name) ty = return ty
 unify ty (TypeVar name) = return ty
 unify (FunType from to) (FunType from' to')
   = liftA2 FunType (unify from from') (unify to to')
-unify (ProdType one two) (ProdType one' two')
-  = liftA2 ProdType (unify one one') (unify two two') 
-unify (SumType left right) (SumType left' right')
-  = liftA2 SumType (unify left left') (unify right right')
+unify (PolyType tys) (PolyType tys')
+  = PolyType <$> traverse (uncurry unify) (zip tys tys')
 unify ty ty'
   | ty == ty' = return ty'
   | otherwise = throwError $ TypeError ty ty'
@@ -212,14 +211,7 @@ mgu (FunType from to) (FunType from' to') = do
   fromSubs <- mgu from from'
   toSubs <- mgu (substitute fromSubs to) (substitute fromSubs to')
   return $ M.union fromSubs toSubs
-mgu (ProdType one two) (ProdType one' two') = do
-  oneSubs <- mgu one one'
-  twoSubs <- mgu (substitute oneSubs two) (substitute oneSubs two')
-  return $ M.union oneSubs twoSubs
-mgu (SumType left right) (SumType left' right') = do
-  leftSubs <- mgu left left'
-  rightSubs <- mgu (substitute leftSubs right) (substitute leftSubs right')
-  return $ M.union leftSubs rightSubs
+mgu (PolyType tys) (PolyType tys') = fold <$> traverse (uncurry mgu) (zip tys tys')
 mgu ty ty'
   | ty == ty' = return M.empty
   | otherwise = throwError $ TypeError ty ty'
@@ -246,10 +238,10 @@ w e ctxt
           case res of
             Nothing -> throwError $ NotInScope name
             Just scheme -> return (M.empty, instantiate scheme)
-        (ConstInt e) -> return (M.empty,PrimType Int)
-        (ConstStr e) -> return (M.empty, PrimType String)
-        (ConstChar e) -> return (M.empty, PrimType Char)
-        (ConstBool e) -> return (M.empty, PrimType Bool)
+        (Lit (LitInt e)) -> return (M.empty,PrimType Int)
+        (Lit (LitString e)) -> return (M.empty,PrimType Int)
+        (Lit (LitChar e)) -> return (M.empty,PrimType Int)
+        (Lit (LitBool e)) -> return (M.empty,PrimType Int)
         (App f x) -> do
           (s1,t1) <- w' f
           (s2,t2) <- usingState (substituteContext s1) $ w' x
