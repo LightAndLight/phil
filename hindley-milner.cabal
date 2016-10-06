@@ -15,10 +15,11 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lambda
+  exposed-modules:     Lambda, Lambda.Intepreter
   build-depends:       base >= 4.7 && < 5
                      , containers
                      , mtl
+                     , semigroups
   default-language:    Haskell2010
 
 executable hindley-milner-exe
