@@ -5,6 +5,7 @@ module Lambda where
 import Control.Applicative
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Foldable
 import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -17,22 +18,70 @@ import Debug.Trace
 
 type Identifier = String
 
-data Pattern = IdPat Identifier
-             | ConstantPat Expr
-             | ConstructorPat Expr
+data Pattern = PatId Identifier
+             | PatCon Identifier [Identifier]
+             | PatLit Literal
+             deriving (Eq, Show)
+
+lookupId :: (MonadError InferenceError m, MonadState Context m) => Identifier -> m TypeScheme
+lookupId name = do
+  maybeTy <- gets $ M.lookup name
+  case maybeTy of
+    Just ty -> return ty
+    Nothing -> throwError $ NotInScope name
+
+conArgTypes :: TypeScheme -> Maybe (Type,[Type])
+conArgTypes scheme = uncurry conArgTypes' $ bound scheme
+  where
+    conArgTypes' :: Type -> Set Identifier -> Maybe (Type,[Type])
+    conArgTypes' (FunType from@(TypeVar name) to) bound
+      | name `S.member` bound = fmap (from :) <$> conArgTypes' to bound
+      | otherwise = Nothing
+    conArgTypes' (FunType from to) bound = fmap (from :) <$> conArgTypes' to bound
+    conArgTypes' ty@PolyType{} bound = Just (ty,[])
+    conArgTypes' _ _ = Nothing
+
+patType :: (MonadError InferenceError m, MonadState Context m)
+        => Type
+        -> Pattern
+        -> m Type
+patType ty (PatId name) = do
+  modify . M.insert name $ Base ty
+  return ty
+patType ty (PatCon conName args) = do
+  conTy <- lookupId conName
+  case conArgTypes conTy of
+    Just (retTy,argTys) -> do
+      let argsLen = length args
+          argTysLen = length argTys
+      when (length args /= length argTys) . throwError $ PatternArgMismatch argsLen argTysLen
+      for_ (zip args argTys) $ \(arg,argTy) -> do
+        ctxt <- get
+        modify . M.insert arg $ case argTy of
+          TypeVar{} -> Base . TypeVar . fresh $ free ctxt `S.union` boundInContext ctxt
+          _ -> Base argTy
+      ctxt <- get
+      instantiate . generalize ctxt <$> unify ty retTy
+    Nothing -> error "Cannot determine data constructor arguments"
+patType ty (PatLit (LitInt p)) = unify ty $ PrimType Int
+patType ty (PatLit (LitString p)) = unify ty $ PrimType String
+patType ty (PatLit (LitChar p)) = unify ty $ PrimType Char
+patType ty (PatLit (LitBool p)) = unify ty $ PrimType Bool
+
+data Literal = LitInt Int
+             | LitString String
+             | LitChar Char
+             | LitBool Bool
+             deriving (Eq, Show)
 
 -- Syntax of expressions
 data Expr
   = Id Identifier
-  | ConstInt Int
-  | ConstStr String
-  | ConstChar Char
-  | ConstBool Bool
-  | ConstSum (Either Expr Expr)
-  | ConstProd (Expr,Expr)
+  | Lit Literal
   | App Expr Expr
   | Abs Identifier Expr
   | Let Identifier Expr Expr
+  | Case Expr [(Pattern,Expr)]
   deriving (Eq, Show)
 
 -- Primitive types
@@ -48,8 +97,7 @@ data Type
   = TypeVar String
   | PrimType Prim
   | FunType Type Type
-  | ProdType Type Type
-  | SumType Type Type
+  | PolyType String [Type]
   deriving (Eq, Show, Ord)
 
 -- Syntax of type schemes
@@ -103,10 +151,9 @@ specializeTypes names ty ty'
     canSpecialize names ty@PrimType{} ty' = return $ ty == ty'
     canSpecialize names (FunType from to) (FunType from' to')
       = canSpecializeMulti names from from' to to'
-    canSpecialize names (ProdType one two) (ProdType one' two')
-      = canSpecializeMulti names one one' two two'
-    canSpecialize names (SumType left right) (SumType left' right')
-      = canSpecializeMulti names left left' right right'
+    canSpecialize names (PolyType tyName tys) (PolyType tyName' tys')
+      = fmap (tyName == tyName' &&)
+        getAll . fold <$> traverse (\(a,b) -> All <$> canSpecialize names a b) (zip tys tys')
     canSpecialize names _ _ = return False
 
 specialize :: TypeScheme -> TypeScheme -> Bool
@@ -132,8 +179,7 @@ generalize ctxt ty
 substitute :: Substitutions -> Type -> Type
 substitute subs ty@(TypeVar name) = fromMaybe ty $ M.lookup name subs
 substitute subs (FunType from to) = FunType (substitute subs from) (substitute subs to)
-substitute subs (ProdType one two) = ProdType (substitute subs one) (substitute subs two)
-substitute subs (SumType left right) = SumType (substitute subs left) (substitute subs right)
+substitute subs (PolyType tyName tys) = PolyType tyName $ map (substitute subs) tys
 substitute subs ty = ty
 
 substituteScheme :: Substitutions -> TypeScheme -> TypeScheme
@@ -171,8 +217,9 @@ instantiate scheme
 data InferenceError
   = NotInScope String
   | TypeError Type Type
+  | PatternArgMismatch Int Int
   | OccursError Identifier Type
-  deriving Show
+  deriving (Eq, Show)
 
 occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
 occurs name ty
@@ -185,10 +232,9 @@ unify (TypeVar name) ty = return ty
 unify ty (TypeVar name) = return ty
 unify (FunType from to) (FunType from' to')
   = liftA2 FunType (unify from from') (unify to to')
-unify (ProdType one two) (ProdType one' two')
-  = liftA2 ProdType (unify one one') (unify two two') 
-unify (SumType left right) (SumType left' right')
-  = liftA2 SumType (unify left left') (unify right right')
+unify ty@(PolyType tyName tys) ty'@(PolyType tyName' tys')
+  | tyName == tyName' = PolyType tyName <$> traverse (uncurry unify) (zip tys tys')
+  | otherwise = throwError $ TypeError ty ty'
 unify ty ty'
   | ty == ty' = return ty'
   | otherwise = throwError $ TypeError ty ty'
@@ -212,14 +258,9 @@ mgu (FunType from to) (FunType from' to') = do
   fromSubs <- mgu from from'
   toSubs <- mgu (substitute fromSubs to) (substitute fromSubs to')
   return $ M.union fromSubs toSubs
-mgu (ProdType one two) (ProdType one' two') = do
-  oneSubs <- mgu one one'
-  twoSubs <- mgu (substitute oneSubs two) (substitute oneSubs two')
-  return $ M.union oneSubs twoSubs
-mgu (SumType left right) (SumType left' right') = do
-  leftSubs <- mgu left left'
-  rightSubs <- mgu (substitute leftSubs right) (substitute leftSubs right')
-  return $ M.union leftSubs rightSubs
+mgu ty@(PolyType tyName tys) ty'@(PolyType tyName' tys')
+  | tyName == tyName' = fold <$> traverse (uncurry mgu) (zip tys tys')
+  | otherwise = throwError $ TypeError ty ty'
 mgu ty ty'
   | ty == ty' = return M.empty
   | otherwise = throwError $ TypeError ty ty'
@@ -246,10 +287,10 @@ w e ctxt
           case res of
             Nothing -> throwError $ NotInScope name
             Just scheme -> return (M.empty, instantiate scheme)
-        (ConstInt e) -> return (M.empty,PrimType Int)
-        (ConstStr e) -> return (M.empty, PrimType String)
-        (ConstChar e) -> return (M.empty, PrimType Char)
-        (ConstBool e) -> return (M.empty, PrimType Bool)
+        (Lit (LitInt e)) -> return (M.empty,PrimType Int)
+        (Lit (LitString e)) -> return (M.empty,PrimType String)
+        (Lit (LitChar e)) -> return (M.empty,PrimType Char)
+        (Lit (LitBool e)) -> return (M.empty,PrimType Bool)
         (App f x) -> do
           (s1,t1) <- w' f
           (s2,t2) <- usingState (substituteContext s1) $ w' x
@@ -272,3 +313,21 @@ w e ctxt
           (s2,t2) <- w' e' 
           put ctxt
           return (s2 `M.union` s1, t2)
+        (Case e bs) -> do
+          (s1,t1) <- w' e
+          case bs of
+            [] -> error "Case expression can't have zero branches"
+            ((p,b):bs) -> do
+              ctxt <- get
+              pType <- patType t1 p -- Determine type of pattern
+              subs <- mgu t1 pType -- unify pattern's type with case expr's type
+              (_,bType) <- w' b -- infer right hand side
+              put ctxt
+              subsList <- for bs $ \(p,b) -> do
+                ctxt <- get
+                patType pType p
+                (_,t') <- w' b
+                subs' <- mgu bType t'
+                put ctxt
+                return subs'
+              return (subs `M.union` foldl M.union M.empty subsList,bType)
