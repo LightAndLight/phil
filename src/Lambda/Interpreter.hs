@@ -78,7 +78,11 @@ reduce (Case var (b:bs)) = do
       | a == a' = return b
       | otherwise = throwError $ InexhaustivePattern br
 
+typeCheck :: Expr -> Either InferenceError TypeScheme
+typeCheck expr = w expr M.empty
+
 evaluate :: Expr -> Either InterpreterError Expr
-evaluate expr = case w expr M.empty of
+evaluate expr = case typeCheck expr of
   Left err -> Left $ TypeInferenceError err
-  Right ty -> runExcept (evalStateT (reduce expr) M.empty)
+  _        -> runExcept . flip evalStateT M.empty $ reduce expr
+
