@@ -1,8 +1,10 @@
+{-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
 
 module Lambda.Interpreter where
 
 import Control.Monad.Except
+import Control.Monad.Free
 import Control.Monad.State
 import Data.List.NonEmpty
 import Data.Map (Map)
@@ -78,11 +80,66 @@ reduce (Case var (b:bs)) = do
       | a == a' = return b
       | otherwise = throwError $ InexhaustivePattern br
 
-typeCheck :: Expr -> Either InferenceError TypeScheme
-typeCheck expr = w expr M.empty
+--typeCheck :: Expr -> Either InferenceError TypeScheme
+--typeCheck expr = w expr M.empty
 
-evaluate :: Expr -> Either InterpreterError Expr
-evaluate expr = case typeCheck expr of
-  Left err -> Left $ TypeInferenceError err
-  _        -> runExcept . flip evalStateT M.empty $ reduce expr
+data ReplF a
+  = Read (String -> a)
+  | TypeCheck Expr a
+  | Evaluate Expr a
+  | Print String a
+  | Quit a
+  deriving Functor
+
+type Repl a = Free ReplF a
+
+readLine :: Repl String
+readLine = liftF $ Read id
+
+printLine :: String -> Repl ()
+printLine str = liftF $ Print str ()
+
+evaluate :: Expr -> Repl (Either InterpreterError Expr)
+evaluate expr = liftF . Evaluate expr $ evaluate' expr
+  where
+    evaluate' expr = case w expr M.empty of
+      Left err -> Left $ TypeInferenceError err
+      _        -> runExcept . flip evalStateT M.empty $ reduce expr
+
+typeCheck :: Expr -> Repl (Either InferenceError TypeScheme)
+typeCheck expr = liftF . TypeCheck expr $ w expr M.empty
+
+quit :: Repl ()
+quit = liftF $ Quit ()
+
+data ParseError = ParseError
+
+parseExpr :: String -> Either ParseError Expr
+parseExpr str = _
+
+showTypeScheme :: TypeScheme -> String
+showTypeScheme scheme = _
+
+showError :: ParseError -> String
+showError err = _
+
+showExpr :: Expr -> String
+showExpr expr = _
+
+repl :: Repl ()
+repl = do
+  input <- readLine
+  case input of
+    ":q" -> quit
+    ':':'t':rest -> case parseExpr rest of
+      Right expr -> do
+        scheme <- typeCheck expr
+        printLine $ showTypeScheme scheme
+      Left err -> printLine $ showError err
+    rest -> case parseExpr rest of
+      Right expr -> do
+        expr' <- evaluate expr
+        printLine $ showExpr expr'
+      Left err -> printLine $ showError err
+  repl
 
