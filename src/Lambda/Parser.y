@@ -66,6 +66,7 @@ Args : { [] }
 data ParseError
     = NoMoreTokens
     | Unexpected Token
+    deriving Show
 
 
 parseError [] = Left NoMoreTokens
