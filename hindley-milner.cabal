@@ -25,6 +25,7 @@ library
                      , semigroups
   default-language:    Haskell2010
   other-modules:       Lambda.Lexer
+                     , Lambda.Parser
   build-tools:         alex
                      , happy
 
