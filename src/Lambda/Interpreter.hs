@@ -6,11 +6,13 @@ module Lambda.Interpreter where
 import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.State
-import Data.List.NonEmpty
 import Data.Map (Map)
 import qualified Data.Map as M
+import System.Exit
 
 import Lambda
+import Lambda.Lexer
+import Lambda.Parser
 
 type SymbolTable = Map Identifier Expr
 
@@ -87,8 +89,9 @@ data ReplF a
   = Read (String -> a)
   | TypeCheck Expr a
   | Evaluate Expr a
-  | Print String a
-  | Quit a
+  | PrintLine String a
+  | PrintString String a
+  | Quit
   deriving Functor
 
 type Repl a = Free ReplF a
@@ -97,7 +100,10 @@ readLine :: Repl String
 readLine = liftF $ Read id
 
 printLine :: String -> Repl ()
-printLine str = liftF $ Print str ()
+printLine str = liftF $ PrintLine str ()
+
+printString :: String -> Repl ()
+printString str = liftF $ PrintString str ()
 
 evaluate :: Expr -> Repl (Either InterpreterError Expr)
 evaluate expr = liftF . Evaluate expr $ evaluate' expr
@@ -109,8 +115,8 @@ evaluate expr = liftF . Evaluate expr $ evaluate' expr
 typeCheck :: Expr -> Repl (Either InferenceError TypeScheme)
 typeCheck expr = liftF . TypeCheck expr $ w expr M.empty
 
-quit :: Repl ()
-quit = liftF $ Quit ()
+quit :: Repl a
+quit = liftF Quit
 
 data ParseError = ParseError
 
@@ -120,36 +126,65 @@ parseExpr str = Left ParseError
 showTypeScheme :: TypeScheme -> String
 showTypeScheme scheme = ""
 
-showError :: ParseError -> String
-showError err = ""
+showLiteral :: Literal -> String
+showLiteral (LitInt a) = show a
+showLiteral (LitString a) = show a
+showLiteral (LitChar a) = show a
+showLiteral (LitBool a) = show a
 
-showInferenceError :: InferenceError -> String
-showInferenceError err = ""
-
-showInterpreterError :: InterpreterError -> String
-showInterpreterError err = ""
+showPattern :: Pattern -> String
+showPattern (PatId a) = a
+showPattern (PatCon name args) = name ++ unwords args
+showPattern (PatLit lit) = showLiteral lit
 
 showExpr :: Expr -> String
-showExpr expr = ""
+showExpr (Id expr) = "expr"
+showExpr (Lit lit) = showLiteral lit
+showExpr (App f x) = showExpr f ++ " " ++ showExpr x
+showExpr (Abs name expr) = "\\" ++ name ++ ". " ++ showExpr expr
+showExpr (Let name expr rest)
+  = "let " ++ name ++ " = " ++ showExpr expr ++ " in " ++ showExpr rest
+showExpr (Case var branches)
+  = "case " ++ showExpr var ++ " of " ++ (branches >>= showBranch)
+  where
+    showBranch (p,b) = showPattern p ++ " -> " ++ showExpr b
 
 repl :: Repl ()
 repl = do
+  printString "> "
   input <- readLine
   case input of
-    ":q" -> quit
-    ':':'t':rest -> case parseExpr rest of
-      Right expr -> do
-        checked <- typeCheck expr
-        case checked of
-          Right scheme -> printLine $ showTypeScheme scheme
-          Left err -> printLine $ showInferenceError err
-      Left err -> printLine $ showError err
-    rest -> case parseExpr rest of
-      Right expr -> do
-        evaluated <- evaluate expr
-        case evaluated of
-          Right expr' -> printLine $ showExpr expr'
-          Left err -> printLine $ showInterpreterError err
-      Left err -> printLine $ showError err
+    ':':'q':_ -> quit
+    ':':'t':rest -> case tokenize rest of
+      Right toks -> case parse toks of
+        Right expr -> do
+          checked <- typeCheck expr
+          case checked of
+            Right scheme -> printLine $ showTypeScheme scheme
+            Left err -> printLine $ show err
+        Left err -> printLine $ show err
+      Left err -> printLine $ show err
+    rest -> case tokenize rest of
+      Right toks -> case parse toks of
+        Right expr -> do
+          evaluated <- evaluate expr
+          case evaluated of
+            Right expr' -> printLine $ showExpr expr'
+            Left err -> printLine $ show err
+        Left err -> printLine $ show err
+      Left err -> printLine $ show err
   repl
 
+replIO :: ReplF a -> IO a
+replIO (Read a) = a <$> getLine
+replIO (TypeCheck _ a) = return a
+replIO (Evaluate _ a) = return a
+replIO (PrintLine str a) = do
+  putStrLn str
+  return a
+replIO (PrintString str a) = do
+  putStr str
+  return a
+replIO Quit = exitSuccess
+
+runRepl = foldFree replIO repl
