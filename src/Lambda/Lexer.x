@@ -2,7 +2,7 @@
 module Lambda.Lexer (tokenize) where
 }
 
-%wrapper "posn"
+%wrapper "monad"
 
 $digit = 0-9
 $alpha = [a-zA-z]
@@ -12,29 +12,29 @@ $sym = [\:\!\@\#\$\%\^\&\*\+\-\=\<\>\?\/\|\~]
 tokens :-
     $white+;
     "--".*;
-    case { \p _ -> WithPos p TokCase }
-    of { \p _ -> WithPos p TokOf }
-    let { \p _ -> WithPos p TokLet }
-    in { \p _ -> WithPos p TokIn }
-    forall { \p _ -> WithPos p TokForall }
-    "=" { \p _ -> WithPos p TokEq }
-    "\\" { \p _ -> WithPos p TokLam }
-    "." { \p _ -> WithPos p TokDot }
-    ":" { \p _ -> WithPos p TokType }
-    "->" { \p _ -> WithPos p TokArr }
-    "(" { \p _ -> WithPos p TokLParen }
-    ")" { \p _ -> WithPos p TokRParen }
-    $upper [$alpha $digit \_ \'] { \p s -> WithPos p $ TokCons s }
-    $alpha [$alpha $digit \_ \']* { \p s -> WithPos p $ TokId s }
-    $sym+ { \p s -> WithPos p $ TokOp s }
-    $digit+ { \p s -> WithPos p $ TokNum s }
+    case { \(p,_,_,_) _ -> return $ Token p TokCase }
+    of { \(p,_,_,_) _ -> return $ Token p TokOf }
+    let { \(p,_,_,_) _ -> return $ Token p TokLet }
+    in { \(p,_,_,_) _ -> return $ Token p TokIn }
+    forall { \(p,_,_,_) _ -> return $ Token p TokForall }
+    "=" { \(p,_,_,_) _ -> return $ Token p TokEq }
+    "\\" { \(p,_,_,_) _ -> return $ Token p TokLam }
+    "." { \(p,_,_,_) _ -> return $ Token p TokDot }
+    ":" { \(p,_,_,_) _ -> return $ Token p TokType }
+    "->" { \(p,_,_,_) _ -> return $ Token p TokArr }
+    "(" { \(p,_,_,_) _ -> return $ Token p TokLParen }
+    ")" { \(p,_,_,_) _ -> return $ Token p TokRParen }
+    $upper [$alpha $digit \_ \'] { \(p,_,_,s) n -> return $ Token p $ TokCons (take n s) }
+    $alpha [$alpha $digit \_ \']* { \(p,_,_,s) n -> return $ Token p $ TokId (take n s) }
+    $sym+ { \(p,_,_,s) n -> return $ Token p $ TokOp (take n s) }
+    $digit+ { \(p,_,_,s) n -> return $ Token p $ TokNum (take n s) }
    
 {
-data WithPos = WithPos AlexPosn Token
+data Token = Token AlexPosn TokenType
              | TokEOF
              deriving Show
 
-data Token
+data TokenType
     = TokCase
     | TokOf
     | TokLet
@@ -55,13 +55,14 @@ data Token
 
 data LexerError = LexerError AlexPosn deriving Show
 
-tokenize str = go (alexStartPos,'\n',[],str)
+alexEOF = return TokEOF
+
+tokenize str = runAlex str loop
   where
-    go inp@(pos,_,_,str) =
-        case alexScan inp 0 of
-            AlexEOF -> Right []
-            AlexError (pos,_,_,_) -> Left $ LexerError pos
-            AlexSkip  inp' len     -> go inp'
-            AlexToken inp' len act -> (:) (act pos $ take len str) <$> go inp'
+    loop = do
+        res <- alexMonadScan
+        case res of
+            TokEOF -> return [res]
+            _ -> (:) res <$> loop
 
 }
