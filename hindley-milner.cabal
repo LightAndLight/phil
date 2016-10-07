@@ -15,13 +15,18 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lambda, Lambda.Intepreter
+  exposed-modules:     Lambda
+                     , Lambda.Interpreter
   build-depends:       base >= 4.7 && < 5
+                     , array
                      , containers
                      , free
                      , mtl
                      , semigroups
   default-language:    Haskell2010
+  other-modules:       Lambda.Lexer
+  build-tools:         alex
+                     , happy
 
 executable hindley-milner-exe
   hs-source-dirs:      app
