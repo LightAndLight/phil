@@ -6,7 +6,7 @@ import Lambda.Lexer
 }
 
 %name parse
-%monad { Either String }
+%monad { Either ParseError }
 %tokentype { Token }
 %error { parseError }
 
@@ -63,6 +63,11 @@ Args : { [] }
      | ident Args { $1:$2 }
 
 {
-parseError [] = Left "No more tokens"
-parseError (t:ts) = Left $ "Unexpected " ++ show t
+data ParseError
+    = NoMoreTokens
+    | Unexpected Token
+
+
+parseError [] = Left NoMoreTokens
+parseError (t:ts) = Left $ Unexpected t
 }
