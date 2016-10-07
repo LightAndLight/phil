@@ -115,16 +115,22 @@ quit = liftF $ Quit ()
 data ParseError = ParseError
 
 parseExpr :: String -> Either ParseError Expr
-parseExpr str = _
+parseExpr str = Left ParseError
 
 showTypeScheme :: TypeScheme -> String
-showTypeScheme scheme = _
+showTypeScheme scheme = ""
 
 showError :: ParseError -> String
-showError err = _
+showError err = ""
+
+showInferenceError :: InferenceError -> String
+showInferenceError err = ""
+
+showInterpreterError :: InterpreterError -> String
+showInterpreterError err = ""
 
 showExpr :: Expr -> String
-showExpr expr = _
+showExpr expr = ""
 
 repl :: Repl ()
 repl = do
@@ -133,13 +139,17 @@ repl = do
     ":q" -> quit
     ':':'t':rest -> case parseExpr rest of
       Right expr -> do
-        scheme <- typeCheck expr
-        printLine $ showTypeScheme scheme
+        checked <- typeCheck expr
+        case checked of
+          Right scheme -> printLine $ showTypeScheme scheme
+          Left err -> printLine $ showInferenceError err
       Left err -> printLine $ showError err
     rest -> case parseExpr rest of
       Right expr -> do
-        expr' <- evaluate expr
-        printLine $ showExpr expr'
+        evaluated <- evaluate expr
+        case evaluated of
+          Right expr' -> printLine $ showExpr expr'
+          Left err -> printLine $ showInterpreterError err
       Left err -> printLine $ showError err
   repl
 
