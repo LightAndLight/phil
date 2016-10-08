@@ -61,7 +61,9 @@ reduce (App func input) = do
   case func' of
     Abs name output -> replace name <$> reduce output <*> reduce input
     _ -> error "Malformed AST: App node without Abs on left hand side"
-reduce (Abs name expr) = Abs name <$> reduce expr
+reduce (Abs name expr) = do
+  modify $ M.insert name (Id name)
+  Abs name <$> reduce expr
 reduce (Let name expr rest) = do
   reduce expr >>= modify . M.insert name
   reduce rest
@@ -136,17 +138,11 @@ showPattern (PatId a) = a
 showPattern (PatCon name args) = name ++ unwords args
 showPattern (PatLit lit) = showLiteral lit
 
-showExpr :: Expr -> String
-showExpr (Id expr) = "expr"
-showExpr (Lit lit) = showLiteral lit
-showExpr (App f x) = showExpr f ++ " " ++ showExpr x
-showExpr (Abs name expr) = "\\" ++ name ++ ". " ++ showExpr expr
-showExpr (Let name expr rest)
-  = "let " ++ name ++ " = " ++ showExpr expr ++ " in " ++ showExpr rest
-showExpr (Case var branches)
-  = "case " ++ showExpr var ++ " of " ++ (branches >>= showBranch)
-  where
-    showBranch (p,b) = showPattern p ++ " -> " ++ showExpr b
+showValue :: Expr -> Maybe String
+showValue (Id expr) = Just expr
+showValue (Lit lit) = Just $ showLiteral lit
+showValue (Abs name expr) = Just "<Function>"
+showValue _ = Nothing
 
 repl :: Repl ()
 repl = do
@@ -168,7 +164,9 @@ repl = do
         Right expr -> do
           evaluated <- evaluate expr
           case evaluated of
-            Right expr' -> printLine $ showExpr expr'
+            Right expr' -> case showValue expr' of
+              Just val -> printLine val
+              Nothing -> error "Tree was not reduced to a value"
             Left err -> printLine $ show err
         Left err -> printLine $ show err
       Left err -> printLine $ show err
