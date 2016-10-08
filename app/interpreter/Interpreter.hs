@@ -1,14 +1,13 @@
 {-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
 
-module Lambda.Interpreter where
-
 import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.State
 import Data.Map (Map)
 import qualified Data.Map as M
 import System.Exit
+import System.IO
 
 import Lambda
 import Lambda.Lexer
@@ -184,7 +183,8 @@ replIO (PrintLine str a) = do
   return a
 replIO (PrintString str a) = do
   putStr str
+  hFlush stdout
   return a
 replIO Quit = exitSuccess
 
-runRepl = foldFree replIO repl
+main = foldFree replIO repl
