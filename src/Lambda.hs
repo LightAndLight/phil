@@ -306,8 +306,8 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
         (Lit (LitBool e)) -> return (M.empty,PrimType Bool)
         (App f x) -> do
           (s1,t1) <- w' f
-          (s2,t2) <- usingState (context %= substituteContext s1) $ w' x
-          ctxt <- get
+          context %= substituteContext s1
+          (s2,t2) <- w' x
           b <- TypeVar <$> fresh 
           s3 <- mgu (substitute s2 t1) (FunType t2 b)
           return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
