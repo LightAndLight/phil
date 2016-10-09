@@ -58,7 +58,6 @@ instance HasFreshCount InferenceState where
 data Literal = LitInt Int
              | LitString String
              | LitChar Char
-             | LitBool Bool
              deriving (Eq, Show)
 
 data Pattern = PatId Identifier
@@ -112,7 +111,6 @@ patType ty (PatCon conName args) = do
 patType ty (PatLit (LitInt p)) = unify ty $ PrimType Int
 patType ty (PatLit (LitString p)) = unify ty $ PrimType String
 patType ty (PatLit (LitChar p)) = unify ty $ PrimType Char
-patType ty (PatLit (LitBool p)) = unify ty $ PrimType Bool
 
 -- Syntax of expressions
 data Expr
@@ -305,7 +303,6 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
         (Lit (LitInt e)) -> return (M.empty,PrimType Int)
         (Lit (LitString e)) -> return (M.empty,PrimType String)
         (Lit (LitChar e)) -> return (M.empty,PrimType Char)
-        (Lit (LitBool e)) -> return (M.empty,PrimType Bool)
         (App f x) -> do
           (s1,t1) <- w' f
           context %= substituteContext s1

@@ -160,7 +160,6 @@ showLiteral :: Literal -> String
 showLiteral (LitInt a) = show a
 showLiteral (LitString a) = show a
 showLiteral (LitChar a) = show a
-showLiteral (LitBool a) = show a
 
 showPattern :: Pattern -> String
 showPattern (PatId a) = a
