@@ -12,6 +12,8 @@ import System.Console.Haskeline
 import System.Exit
 import System.IO
 
+import Debug.Trace
+
 import Lambda
 import Lambda.Lexer
 import Lambda.Parser
@@ -69,9 +71,7 @@ reduce (App func input) = do
 reduce (Abs name expr) = do
   modify $ M.insert name (Id name)
   Abs name <$> reduce expr
-reduce (Let name expr rest) = do
-  reduce expr >>= modify . M.insert name
-  reduce rest
+reduce (Let name expr rest) = replace name <$> reduce expr <*> pure rest >>= reduce
 reduce (Case var []) = error "Malformed AST: Case statement can't have zero branches"
 reduce c@(Case var (b:bs)) = do
   var' <- reduce var
@@ -167,7 +167,7 @@ showValue (Id expr) = Just expr
 showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
 showValue (Error message) = Just $ "Runtime Error: " ++ message
-showValue _ = Nothing
+showValue a = seq (traceShowId a) Nothing
 
 repl :: Repl ()
 repl = do
