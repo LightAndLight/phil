@@ -124,11 +124,16 @@ data ParseError = ParseError
 parseExpr :: String -> Either ParseError Expr
 parseExpr str = Left ParseError
 
+nested :: Type -> String
+nested ty@FunType{} = "(" ++ showType ty ++ ")"
+nested ty@PolyType{} = "(" ++ showType ty ++ ")"
+nested ty = showType ty
+
 showType :: Type -> String
 showType (TypeVar name) = name
 showType (PrimType ty) = show ty
-showType (FunType from to) = showType from ++ " -> " ++ showType to
-showType (PolyType cons args) = cons ++ " " ++ unwords (map showType args)
+showType (FunType from to) = nested from ++ " -> " ++ nested to
+showType (PolyType cons args) = cons ++ " " ++ unwords (map nested args)
 
 showTypeScheme :: TypeScheme -> String
 showTypeScheme (Base ty) = showType ty
