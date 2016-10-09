@@ -63,15 +63,18 @@ reduce (Id name) = do
     Just expr -> return expr
     Nothing -> throwError $ NotBound name
 reduce expr@Lit{} = return expr
-reduce (App func input) = do
-  func' <- reduce func
-  case func' of
-    Abs name output -> reduce $ replace name output input
-    _ -> error "Malformed AST: App node without Abs on left hand side"
+reduce (App func input) = case func of
+  Abs name output -> do
+    input' <- reduce input
+    modify $ M.insert name input
+    reduce $ replace name output input'
+  _ -> App <$> reduce func <*> pure input >>= reduce
 reduce (Abs name expr) = do
   modify $ M.insert name (Id name)
   Abs name <$> reduce expr
-reduce (Let name expr rest) = replace name <$> reduce expr <*> pure rest >>= reduce
+reduce (Let name expr rest) = do
+  reduce expr >>= modify . M.insert name 
+  reduce rest
 reduce (Case var []) = error "Malformed AST: Case statement can't have zero branches"
 reduce c@(Case var (b:bs)) = do
   var' <- reduce var
