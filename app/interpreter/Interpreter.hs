@@ -3,17 +3,18 @@
 
 import Control.Monad.Except
 import Control.Monad.Free
+import Control.Monad.Trans
 import Control.Monad.State
 import Data.Map (Map)
 import qualified Data.Map as M
+import Data.Maybe
+import System.Console.Haskeline
 import System.Exit
 import System.IO
 
 import Lambda
 import Lambda.Lexer
 import Lambda.Parser
-
-import Debug.Trace
 
 type SymbolTable = Map Identifier Expr
 
@@ -95,6 +96,7 @@ reduce c@(Case var (b:bs)) = do
 
 data ReplF a
   = Read (String -> a)
+  | Previous (String -> a)
   | TypeCheck Expr a
   | Evaluate Expr a
   | PrintLine String a
@@ -140,7 +142,7 @@ showType :: Type -> String
 showType (TypeVar name) = name
 showType (PrimType ty) = show ty
 showType (FunType from to) = nested from ++ " -> " ++ nested to
-showType (PolyType cons args) = cons ++ " " ++ unwords (map nested args)
+showType (PolyType cons args) = cons ++ " " ++ unwords (fmap nested args)
 
 showTypeScheme :: TypeScheme -> String
 showTypeScheme (Base ty) = showType ty
@@ -169,7 +171,6 @@ showValue _ = Nothing
 
 repl :: Repl ()
 repl = do
-  printString "> "
   input <- readLine
   case input of
     ':':'q':_ -> quit
@@ -195,17 +196,17 @@ repl = do
       Left err -> printLine $ show err
   repl
 
-replIO :: ReplF a -> IO a
-replIO (Read a) = a <$> getLine
+replIO :: ReplF a -> InputT IO a
+replIO (Read a) = a . fromMaybe "" <$> getInputLine "> "
 replIO (TypeCheck _ a) = return a
 replIO (Evaluate _ a) = return a
 replIO (PrintLine str a) = do
-  putStrLn str
+  outputStrLn str
   return a
 replIO (PrintString str a) = do
-  putStr str
-  hFlush stdout
+  outputStr str
+  -- liftIO $ hFlush stdout
   return a
-replIO Quit = exitSuccess
+replIO Quit = liftIO exitSuccess
 
-main = foldFree replIO repl
+main = runInputT defaultSettings $ foldFree replIO repl
