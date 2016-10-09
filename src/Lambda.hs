@@ -25,7 +25,6 @@ data Prim
   | Bool
   deriving (Eq, Show, Ord)
 
-
 -- Syntax of types
 data Type
   = TypeVar String
@@ -39,7 +38,6 @@ data TypeScheme
   = Base Type
   | Forall String TypeScheme
   deriving (Eq, Show, Ord)
-
 
 data InferenceState = InferenceState { _context :: Map Identifier TypeScheme, _freshCount :: Int }
 
@@ -72,7 +70,7 @@ lookupId name = do
   maybeTy <- use (context . at name)
   case maybeTy of
     Just ty -> return ty
-    Nothing -> throwError $ NotInScope name
+    Nothing -> throwError $ NotInScope [name]
 
 conArgTypes :: TypeScheme -> Maybe (Type,[Type])
 conArgTypes scheme = uncurry conArgTypes' $ bound scheme
@@ -112,10 +110,18 @@ patType ty (PatLit (LitInt p)) = unify ty $ PrimType Int
 patType ty (PatLit (LitString p)) = unify ty $ PrimType String
 patType ty (PatLit (LitChar p)) = unify ty $ PrimType Char
 
+data ProdDecl = ProdDecl Identifier [Type]
+data FuncDecl = FuncDecl Identifier [Pattern] Expr
+
+data Decl
+  = DeclData Identifier [String] [ProdDecl]
+  | DeclFunc [FuncDecl]
+
 -- Syntax of expressions
 data Expr
   = Id Identifier
   | Lit Literal
+  | Prod Identifier [Expr]
   | App Expr Expr
   | Abs Identifier Expr
   | Let Identifier Expr Expr
@@ -225,10 +231,11 @@ instantiate scheme = do
                 
 
 data InferenceError
-  = NotInScope String
+  = NotInScope [String]
   | TypeError Type Type
   | PatternArgMismatch Int Int
   | OccursError Identifier Type
+  | AlreadyDefined Identifier
   deriving (Eq, Show)
 
 occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
@@ -298,7 +305,7 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
         (Id name) -> do
           res <- use (context . at name)
           case res of
-            Nothing -> throwError $ NotInScope name
+            Nothing -> throwError $ NotInScope [name]
             Just scheme -> (,) M.empty <$> instantiate scheme
         (Lit (LitInt e)) -> return (M.empty,PrimType Int)
         (Lit (LitString e)) -> return (M.empty,PrimType String)
@@ -341,3 +348,31 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
                 put ctxt
                 return subs'
               return (subs `M.union` foldl M.union M.empty subsList,bType)
+
+buildFunction :: (HasContext s, MonadState s m) => [Type] -> Type -> m TypeScheme
+buildFunction argTys retTy = do
+  ctxt <- use context
+  return . generalize ctxt $ foldr FunType retTy argTys
+
+checkDecl :: (HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m Decl
+checkDecl (DeclData _ _ []) = error "Empty data declarations NIH"
+checkDecl (DeclData tyCon tyVars decls)
+  = DeclData tyCon tyVars <$> traverse (checkDataDecl tyCon tyVars) decls
+  where
+    tyVarsNotInScope tyVars argTys =
+      S.fromList tyVars `S.difference` foldl S.union S.empty (fmap freeInType argTys)
+
+    checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
+      maybeCon <- use (context . at dataCon)
+      case maybeCon of
+        Just _ -> throwError $ AlreadyDefined dataCon
+        Nothing -> do
+          let notInScope = tyVarsNotInScope tyVars argTys
+          when (notInScope /= S.empty) . throwError . NotInScope $ S.toList notInScope
+          conFun <- buildFunction argTys $ PolyType tyCon (fmap TypeVar tyVars)
+          context %= M.insert dataCon conFun
+          return p
+
+checkDecl (DeclFunc decls) = DeclFunc <$> traverse checkFuncDecl decls
+  where
+    checkFuncDecl f@(FuncDecl name argPats value) = return f
