@@ -109,12 +109,12 @@ printString str = liftF $ PrintString str ()
 evaluate :: Expr -> Repl (Either InterpreterError Expr)
 evaluate expr = liftF . Evaluate expr $ evaluate' expr
   where
-    evaluate' expr = case w expr M.empty of
+    evaluate' expr = case w expr of
       Left err -> Left $ TypeInferenceError err
       _        -> runExcept . flip evalStateT M.empty $ reduce expr
 
 typeCheck :: Expr -> Repl (Either InferenceError TypeScheme)
-typeCheck expr = liftF . TypeCheck expr $ w expr M.empty
+typeCheck expr = liftF . TypeCheck expr $ w expr
 
 quit :: Repl a
 quit = liftF Quit
