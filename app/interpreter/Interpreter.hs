@@ -9,7 +9,9 @@ import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
 import System.Console.Haskeline
+import System.Directory
 import System.Exit
+import System.FilePath
 import System.IO
 
 import Debug.Trace
@@ -212,4 +214,7 @@ replIO (PrintString str a) = do
   return a
 replIO Quit = liftIO exitSuccess
 
-main = runInputT defaultSettings $ foldFree replIO repl
+main = do
+  tempDir <- getTemporaryDirectory
+  runInputT defaultSettings
+    { historyFile = Just $ tempDir </> "lambdai_history" } $ foldFree replIO repl
