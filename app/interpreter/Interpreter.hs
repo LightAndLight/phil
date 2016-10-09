@@ -124,8 +124,18 @@ data ParseError = ParseError
 parseExpr :: String -> Either ParseError Expr
 parseExpr str = Left ParseError
 
+showType :: Type -> String
+showType (TypeVar name) = name
+showType (PrimType ty) = show ty
+showType (FunType from to) = showType from ++ " -> " ++ showType to
+showType (PolyType cons args) = cons ++ " " ++ unwords (map showType args)
+
 showTypeScheme :: TypeScheme -> String
-showTypeScheme scheme = ""
+showTypeScheme (Base ty) = showType ty
+showTypeScheme (Forall name scheme) = "forall " ++ name ++ showTypeScheme' scheme
+  where
+    showTypeScheme' (Base ty) = ". " ++ showType ty
+    showTypeScheme' scheme = name ++ " " ++ showTypeScheme' scheme
 
 showLiteral :: Literal -> String
 showLiteral (LitInt a) = show a
