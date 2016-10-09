@@ -104,6 +104,7 @@ data ReplF a
   | Previous (String -> a)
   | TypeCheck Expr a
   | Evaluate Expr a
+  | Declare DataDecl a
   | PrintLine String a
   | PrintString String a
   | Quit
@@ -127,6 +128,11 @@ evaluate expr = liftF . Evaluate expr $ evaluate' expr
       Left err -> Left $ TypeInferenceError err
       _        -> runExcept . flip evalStateT M.empty $ reduce expr
 
+declare :: DataDecl -> Repl (Either InferenceError ())
+declare dat = liftF . Declare dat $ declare' dat
+  where
+    declare' dat = return ()
+
 typeCheck :: Expr -> Repl (Either InferenceError TypeScheme)
 typeCheck expr = liftF . TypeCheck expr $ w expr
 
@@ -134,9 +140,6 @@ quit :: Repl a
 quit = liftF Quit
 
 data ParseError = ParseError
-
-parseExpr :: String -> Either ParseError Expr
-parseExpr str = Left ParseError
 
 nested :: Type -> String
 nested ty@FunType{} = "(" ++ showType ty ++ ")"
@@ -179,7 +182,7 @@ repl = do
   case input of
     ':':'q':_ -> quit
     ':':'t':rest -> case tokenize rest of
-      Right toks -> case parse toks of
+      Right toks -> case parseExpression toks of
         Right expr -> do
           checked <- typeCheck expr
           case checked of
@@ -188,14 +191,20 @@ repl = do
         Left err -> printLine $ show err
       Left err -> printLine $ show err
     rest -> case tokenize rest of
-      Right toks -> case parse toks of
-        Right expr -> do
-          evaluated <- evaluate expr
-          case evaluated of
-            Right expr' -> case showValue expr' of
-              Just val -> printLine val
-              Nothing -> error "Tree was not reduced to a value"
-            Left err -> printLine $ show err
+      Right toks -> case parseExprOrData toks of
+        Right input -> case input of
+          ReplExpr expr -> do
+            evaluated <- evaluate expr
+            case evaluated of
+              Right expr' -> case showValue expr' of
+                Just val -> printLine val
+                Nothing -> error "Tree was not reduced to a value"
+              Left err -> printLine $ show err
+          ReplData dat -> do
+            declared <- declare dat
+            case declared of
+              Left err -> printLine $ show err
+              _ -> return ()
         Left err -> printLine $ show err
       Left err -> printLine $ show err
   repl
@@ -204,6 +213,7 @@ replIO :: ReplF a -> InputT IO a
 replIO (Read a) = a . fromMaybe "" <$> getInputLine "> "
 replIO (TypeCheck _ a) = return a
 replIO (Evaluate _ a) = return a
+replIO (Declare _ a) = return a
 replIO (PrintLine str a) = do
   outputStrLn str
   return a
