@@ -13,12 +13,14 @@ import Lambda
 import Lambda.Lexer
 import Lambda.Parser
 
+import Debug.Trace
+
 type SymbolTable = Map Identifier Expr
 
 data InterpreterError
   = NotBound String
   | TypeInferenceError InferenceError
-  | InexhaustivePattern (Pattern,Expr)
+  | RuntimeError String
   deriving Show
 
 replace :: Identifier -> Expr -> Expr -> Expr
@@ -44,12 +46,14 @@ replace name (Case var branches) expr
       | name `elem` args = (p,b)
       | otherwise = (p,replace name b expr)
     replaceBranch name expr (p,b) = (p,replace name b expr)
+replace name (Error _) _ = error "Error contains no identifier to replace"
 
 tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
 
 reduce :: (MonadState SymbolTable m, MonadError InterpreterError m) => Expr -> m Expr
+reduce (Error message) = throwError $ RuntimeError message
 reduce (Id name) = do
   maybeExpr <- gets $ M.lookup name
   case maybeExpr of
@@ -59,7 +63,7 @@ reduce expr@Lit{} = return expr
 reduce (App func input) = do
   func' <- reduce func
   case func' of
-    Abs name output -> replace name <$> reduce output <*> reduce input
+    Abs name output -> reduce $ replace name output input
     _ -> error "Malformed AST: App node without Abs on left hand side"
 reduce (Abs name expr) = do
   modify $ M.insert name (Id name)
@@ -68,23 +72,26 @@ reduce (Let name expr rest) = do
   reduce expr >>= modify . M.insert name
   reduce rest
 reduce (Case var []) = error "Malformed AST: Case statement can't have zero branches"
-reduce (Case var (b:bs)) = do
+reduce c@(Case var (b:bs)) = do
   var' <- reduce var
-  tryAll (tryBranch var' b) (fmap (tryBranch var') bs)
+  case var' of
+    Id{} -> return c
+    _ -> tryBranch var' b bs
   where
-    tryBranch (Id a) _ = error "Reduction Error: Identifier was not replaced"
-    tryBranch (App a1 a2) _ = error "Reduction Error: Application was not reduced"
-    tryBranch (Abs a1 a2) _ = error "Malformed AST: Pattern matching on function"
-    tryBranch (Let a1 a2 a3) _ = error "Reduction Error: Let was not reduced"
-    tryBranch (Case a1 a2) _ = error "Reduction Error: Case was not reduced"
-    tryBranch (Lit a) (PatId name,b) = return $ replace name b (Lit a)
-    tryBranch _ (PatCon p1 p2,b) = error "Malformed AST: Literal matches as constructor"
-    tryBranch (Lit a) br@(PatLit a',b)
-      | a == a' = return b
-      | otherwise = throwError $ InexhaustivePattern br
-
---typeCheck :: Expr -> Either InferenceError TypeScheme
---typeCheck expr = w expr M.empty
+    tryBranch expr (PatId name,b) [] = reduce $ replace name b expr
+    tryBranch expr br@(p,b) [] = do
+      expr' <- reduce expr
+      case expr' of
+        Id a -> return b
+        Lit a
+          | p == PatLit a -> return b
+          | otherwise -> return $ Error "Inexhaustive case expression"
+        _ -> error "Pattern match on invalid expression"
+    tryBranch expr br (b:bs) = do
+      res <- tryBranch expr br []
+      case res of
+        Error _ -> tryBranch expr b bs
+        _ -> reduce res
 
 data ReplF a
   = Read (String -> a)
@@ -157,6 +164,7 @@ showValue :: Expr -> Maybe String
 showValue (Id expr) = Just expr
 showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
+showValue (Error message) = Just $ "Runtime Error: " ++ message
 showValue _ = Nothing
 
 repl :: Repl ()

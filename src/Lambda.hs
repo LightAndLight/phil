@@ -122,6 +122,7 @@ data Expr
   | Abs Identifier Expr
   | Let Identifier Expr Expr
   | Case Expr [(Pattern,Expr)]
+  | Error String
   deriving (Eq, Show)
 
 freeInType :: Type -> Set Identifier
@@ -295,6 +296,7 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
        => Expr
        -> m (Substitutions, Type)
     w' e = case e of
+        (Error _) -> (,) M.empty . TypeVar <$> fresh
         (Id name) -> do
           res <- use (context . at name)
           case res of
