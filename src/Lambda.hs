@@ -113,8 +113,14 @@ patType ty (PatLit (LitChar p)) = unify ty $ PrimType Char
 data ProdDecl = ProdDecl Identifier [Type]
 data FuncDecl = FuncDecl Identifier [Pattern] Expr
 
+data ReplInput
+  = ReplExpr Expr
+  | ReplData DataDecl
+
+data DataDecl = DataDecl Identifier [String] [ProdDecl]
+
 data Decl
-  = DeclData Identifier [String] [ProdDecl]
+  = DeclData DataDecl
   | DeclFunc [FuncDecl]
 
 -- Syntax of expressions
@@ -355,9 +361,9 @@ buildFunction argTys retTy = do
   return . generalize ctxt $ foldr FunType retTy argTys
 
 checkDecl :: (HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m Decl
-checkDecl (DeclData _ _ []) = error "Empty data declarations NIH"
-checkDecl (DeclData tyCon tyVars decls)
-  = DeclData tyCon tyVars <$> traverse (checkDataDecl tyCon tyVars) decls
+checkDecl (DeclData (DataDecl _ _ [])) = error "Empty data declarations NIH"
+checkDecl (DeclData (DataDecl tyCon tyVars decls))
+  = DeclData . DataDecl tyCon tyVars <$> traverse (checkDataDecl tyCon tyVars) decls
   where
     tyVarsNotInScope tyVars argTys =
       S.fromList tyVars `S.difference` foldl S.union S.empty (fmap freeInType argTys)
