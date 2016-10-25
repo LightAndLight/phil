@@ -184,9 +184,9 @@ showValue (Error message) = Just $ "Runtime Error: " ++ message
 showValue _ = Nothing
 
 repl :: ExceptT InterpreterError Repl ()
-repl = do
+repl = flip catchError handleError $ do
   input <- lift readLine
-  case input of
+  output <- case input of
     ':':'q':_ -> lift quit
     ':':'t':rest -> do
       toks <- tokenize rest
@@ -198,13 +198,16 @@ repl = do
       case input of
         ReplExpr expr -> fromJust . showValue <$> evaluate expr
         ReplData dat -> declare dat $> "\n"
+  lift $ printLine output
   repl
+  where
+    handleError e = do
+      lift . printLine $ show e
+      repl
 
 replIO :: ReplF a -> InputT IO a
 replIO (Read a) = a . fromMaybe "" <$> getInputLine "> "
-replIO (PrintLine str a) = do
-  outputStrLn str
-  return a
+replIO (PrintLine str a) = outputStrLn str $> a
 replIO (PrintString str a) = do
   outputStr str
   -- liftIO $ hFlush stdout
