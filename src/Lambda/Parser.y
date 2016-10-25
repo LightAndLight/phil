@@ -1,5 +1,5 @@
 {
-module Lambda.Parser (parseProgram, parseExpression, parseExprOrData) where
+module Lambda.Parser (ParseError(..), parseProgram, parseExpression, parseExprOrData) where
 
 import Lambda
 import Lambda.Lexer

@@ -5,6 +5,7 @@ import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.Trans
 import Control.Monad.State
+import Data.Functor
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
@@ -17,16 +18,29 @@ import System.IO
 import Debug.Trace
 
 import Lambda
-import Lambda.Lexer
-import Lambda.Parser
+import qualified Lambda.Lexer as L (tokenize)
+import Lambda.Lexer hiding (tokenize)
+import qualified Lambda.Parser as P (parseExpression, parseExprOrData)
+import Lambda.Parser hiding (parseExpression, parseExprOrData)
 
 type SymbolTable = Map Identifier Expr
 
 data InterpreterError
   = NotBound String
-  | TypeInferenceError InferenceError
+  | InterpreterInferenceError InferenceError
   | RuntimeError String
+  | InterpreterLexError String
+  | InterpreterParseError ParseError
   deriving Show
+
+tokenize :: String -> ExceptT InterpreterError Repl [Token]
+tokenize rest = withExceptT InterpreterLexError (ExceptT . pure $ L.tokenize rest)
+
+parseExpression :: [Token] -> ExceptT InterpreterError Repl Expr
+parseExpression toks = withExceptT InterpreterParseError (ExceptT . pure $ P.parseExpression toks)
+
+parseExprOrData :: [Token] -> ExceptT InterpreterError Repl ReplInput
+parseExprOrData toks = withExceptT InterpreterParseError (ExceptT . pure $ P.parseExprOrData toks)
 
 replace :: Identifier -> Expr -> Expr -> Expr
 replace name (Id name') expr
@@ -75,7 +89,7 @@ reduce (Abs name expr) = do
   modify $ M.insert name (Id name)
   Abs name <$> reduce expr
 reduce (Let name expr rest) = do
-  reduce expr >>= modify . M.insert name 
+  reduce expr >>= modify . M.insert name
   reduce rest
 reduce (Case var []) = error "Malformed AST: Case statement can't have zero branches"
 reduce c@(Case var (b:bs)) = do
@@ -102,15 +116,12 @@ reduce c@(Case var (b:bs)) = do
 data ReplF a
   = Read (String -> a)
   | Previous (String -> a)
-  | TypeCheck Expr a
-  | Evaluate Expr a
-  | Declare DataDecl a
   | PrintLine String a
   | PrintString String a
   | Quit
   deriving Functor
 
-type Repl a = Free ReplF a
+type Repl = Free ReplF
 
 readLine :: Repl String
 readLine = liftF $ Read id
@@ -121,25 +132,21 @@ printLine str = liftF $ PrintLine str ()
 printString :: String -> Repl ()
 printString str = liftF $ PrintString str ()
 
-evaluate :: Expr -> Repl (Either InterpreterError Expr)
-evaluate expr = liftF . Evaluate expr $ evaluate' expr
-  where
-    evaluate' expr = case w expr of
-      Left err -> Left $ TypeInferenceError err
-      _        -> runExcept . flip evalStateT M.empty $ reduce expr
+evaluate :: Expr -> ExceptT InterpreterError Repl Expr
+evaluate expr = do
+  withExceptT InterpreterInferenceError . ExceptT . return $ w expr
+  flip evalStateT M.empty $ reduce expr
 
-declare :: DataDecl -> Repl (Either InferenceError ())
-declare dat = liftF . Declare dat $ declare' dat
+declare :: DataDecl -> ExceptT InterpreterError Repl ()
+declare dat = withExceptT InterpreterInferenceError $ declare' dat
   where
     declare' dat = return ()
 
-typeCheck :: Expr -> Repl (Either InferenceError TypeScheme)
-typeCheck expr = liftF . TypeCheck expr $ w expr
+typeCheck :: Expr -> ExceptT InterpreterError Repl TypeScheme
+typeCheck expr = withExceptT InterpreterInferenceError . ExceptT . return $ w expr
 
 quit :: Repl a
 quit = liftF Quit
-
-data ParseError = ParseError
 
 nested :: Type -> String
 nested ty@FunType{} = "(" ++ showType ty ++ ")"
@@ -174,46 +181,27 @@ showValue (Id expr) = Just expr
 showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
 showValue (Error message) = Just $ "Runtime Error: " ++ message
-showValue a = seq (traceShowId a) Nothing
+showValue _ = Nothing
 
-repl :: Repl ()
+repl :: ExceptT InterpreterError Repl ()
 repl = do
-  input <- readLine
+  input <- lift readLine
   case input of
-    ':':'q':_ -> quit
-    ':':'t':rest -> case tokenize rest of
-      Right toks -> case parseExpression toks of
-        Right expr -> do
-          checked <- typeCheck expr
-          case checked of
-            Right scheme -> printLine $ showTypeScheme scheme
-            Left err -> printLine $ show err
-        Left err -> printLine $ show err
-      Left err -> printLine $ show err
-    rest -> case tokenize rest of
-      Right toks -> case parseExprOrData toks of
-        Right input -> case input of
-          ReplExpr expr -> do
-            evaluated <- evaluate expr
-            case evaluated of
-              Right expr' -> case showValue expr' of
-                Just val -> printLine val
-                Nothing -> error "Tree was not reduced to a value"
-              Left err -> printLine $ show err
-          ReplData dat -> do
-            declared <- declare dat
-            case declared of
-              Left err -> printLine $ show err
-              _ -> return ()
-        Left err -> printLine $ show err
-      Left err -> printLine $ show err
+    ':':'q':_ -> lift quit
+    ':':'t':rest -> do
+      toks <- tokenize rest
+      expr <- parseExpression toks
+      showTypeScheme <$> typeCheck expr
+    rest -> do
+      toks <- tokenize rest
+      input <- parseExprOrData toks
+      case input of
+        ReplExpr expr -> fromJust . showValue <$> evaluate expr
+        ReplData dat -> declare dat $> "\n"
   repl
 
 replIO :: ReplF a -> InputT IO a
 replIO (Read a) = a . fromMaybe "" <$> getInputLine "> "
-replIO (TypeCheck _ a) = return a
-replIO (Evaluate _ a) = return a
-replIO (Declare _ a) = return a
 replIO (PrintLine str a) = do
   outputStrLn str
   return a
@@ -226,4 +214,4 @@ replIO Quit = liftIO exitSuccess
 main = do
   tempDir <- getTemporaryDirectory
   runInputT defaultSettings
-    { historyFile = Just $ tempDir </> "lambdai_history" } $ foldFree replIO repl
+    { historyFile = Just $ tempDir </> "lambdai_history" } $ foldFree replIO (runExceptT repl)
