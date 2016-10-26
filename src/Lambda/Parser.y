@@ -105,25 +105,20 @@ Let : let ident '=' Expr in Expr { Let $2 $4 $6 }
 Case : case Expr of Branches { Case $2 $4 }
 Lam : lam ident '.' Expr { Abs $2 $4 }
 
-Apply : ident { Id $1 }
-      | cons { Id $1 }
-      | '(' Lam ')' { $2 }
-      | '(' Let ')' { $2 }
-      | '(' Case ')' { $2 }
+ArgExpr : Literal { Lit $1 }
+        | ident { Id $1 }
+        | cons { Id $1 }
+        | '(' Expr ')' { $2 }
 
-NestedExpr : Literal { Lit $1 }
-           | Apply { $1 }
-           | '(' NestedExpr ')' { $2 }
+FunExpr : ArgExpr { $1 }
+        | FunExpr ArgExpr { App $1 $2 }
 
 SingleExpr : Expr eof { $1 }
 
-Expr : '(' NestedExpr ')' { $2 }
-     | Literal { Lit $1 }
+Expr : FunExpr { $1 }
      | Let { $1 }
      | Lam { $1 }
      | Case { $1 }
-     | Apply { $1 }
-     | Apply Expr { App $1 $2 }
 
 {
 data ParseError
