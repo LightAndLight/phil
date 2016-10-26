@@ -33,11 +33,12 @@ class HasSymbolTable s where
 data InterpreterState
   = InterpreterState
     { _interpSymbolTable :: Map Identifier Expr
+    , _interpTypeTable :: Map Identifier Int
     , _interpContext :: Map Identifier TypeScheme
     , _interpFreshCount :: Int
     }
 
-initialInterpreterState = InterpreterState M.empty M.empty 0
+initialInterpreterState = InterpreterState M.empty M.empty M.empty 0
 
 instance HasSymbolTable InterpreterState where
   symbolTable = lens _interpSymbolTable (\s t -> s { _interpSymbolTable = t })
@@ -47,6 +48,9 @@ instance HasContext InterpreterState where
 
 instance HasFreshCount InterpreterState where
   freshCount = lens _interpFreshCount (\s c -> s { _interpFreshCount = c })
+
+instance HasTypeTable InterpreterState where
+  typeTable = lens _interpTypeTable (\s t -> s { _interpTypeTable = t })
 
 data InterpreterError
   = NotBound String
@@ -139,18 +143,20 @@ reduce c@(Case var (b:bs)) = do
         _ -> reduce res
 reduce (Prod name args) = Prod name <$> traverse reduce args
 
-liftCompile :: (HasFreshCount s', HasContext s', MonadError InterpreterError m', MonadState s' m')
+liftCompile :: (HasTypeTable s', HasFreshCount s', HasContext s', MonadError InterpreterError m', MonadState s' m')
             => (forall s m. (MonadError InferenceError m, MonadState InferenceState m) => a -> m b)
             -> a -> m' b
 liftCompile op a = do
   ctxt <- use context
   fc <- use freshCount
-  let (res,state) = flip runState (InferenceState ctxt fc) . runExceptT $ op a
+  tt <- use typeTable
+  let (res,state) = flip runState (InferenceState ctxt tt fc) . runExceptT $ op a
   case res of
     Left err -> throwError $ InterpreterInferenceError err
     Right res' -> do
       context .= state ^. context
       freshCount .= state ^. freshCount
+      typeTable .= state ^. typeTable
       return res'
 
 data ReplF a
@@ -172,17 +178,17 @@ printLine str = liftF $ PrintLine str ()
 printString :: MonadFree ReplF m => String -> m ()
 printString str = liftF $ PrintString str ()
 
-evaluate :: (HasContext s, HasFreshCount s, HasSymbolTable s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m Expr
+evaluate :: (HasTypeTable s, HasContext s, HasFreshCount s, HasSymbolTable s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m Expr
 evaluate expr = do
-  typeCheck expr
+  usingState (typeCheck expr)
   reduce expr
 
-declare :: (HasSymbolTable s, HasFreshCount s, HasContext s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Decl -> m ()
+declare :: (HasTypeTable s, HasSymbolTable s, HasFreshCount s, HasContext s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Decl -> m ()
 declare decl = do
   exprs <- liftCompile checkDecl decl
   symbolTable %= M.union exprs
 
-typeCheck :: (HasContext s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m TypeScheme
+typeCheck :: (HasTypeTable s, HasContext s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m TypeScheme
 typeCheck = liftCompile w
 
 quit :: MonadFree ReplF m => m a
@@ -196,7 +202,7 @@ nested ty = showType ty
 showType :: Type -> String
 showType (TypeVar name) = name
 showType (PrimType ty) = show ty
-showType (FunType from to) = nested from ++ " -> " ++ nested to
+showType (FunType from to) = nested from ++ " -> " ++ showType to
 showType (PolyType cons args) = cons ++ " " ++ unwords (fmap nested args)
 
 showTypeScheme :: TypeScheme -> String
@@ -204,7 +210,7 @@ showTypeScheme (Base ty) = showType ty
 showTypeScheme (Forall name scheme) = "forall " ++ name ++ showTypeScheme' scheme
   where
     showTypeScheme' (Base ty) = ". " ++ showType ty
-    showTypeScheme' scheme = name ++ " " ++ showTypeScheme' scheme
+    showTypeScheme' (Forall name scheme) = " " ++ name ++ showTypeScheme' scheme
 
 showLiteral :: Literal -> String
 showLiteral (LitInt a) = show a
@@ -221,10 +227,10 @@ showValue (Id expr) = Just expr
 showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
 showValue (Error message) = Just $ "Runtime Error: " ++ message
-showValue (Prod name args) = mappend (name ++ " ") . join <$> traverse showValue args
+showValue (Prod name args) = unwords . (:) name <$> traverse showValue args
 showValue _ = Nothing
 
-repl :: (HasContext s, HasSymbolTable s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => m ()
+repl :: (HasTypeTable s, HasContext s, HasSymbolTable s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => m ()
 repl = flip catchError handleError $ do
   input <- readLine
   output <- case input of
@@ -238,7 +244,7 @@ repl = flip catchError handleError $ do
       input <- parseExprOrData toks
       case input of
         ReplExpr expr -> fromJust . showValue <$> evaluate expr
-        ReplData dat -> declare (DeclData dat) $> "\n"
+        ReplData dat -> declare (DeclData dat) $> ""
   printLine output
   repl
   where
@@ -248,7 +254,7 @@ repl = flip catchError handleError $ do
 
 replIO :: ReplF a -> InputT IO a
 replIO (Read a) = a . fromMaybe "" <$> getInputLine "> "
-replIO (PrintLine str a) = outputStrLn str $> a
+replIO (PrintLine str a) = outputStrLn str >> outputStrLn "" $> a
 replIO (PrintString str a) = do
   outputStr str
   -- liftIO $ hFlush stdout
