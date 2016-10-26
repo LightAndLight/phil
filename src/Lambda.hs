@@ -16,6 +16,8 @@ import Data.Traversable
 import Data.Set (Set)
 import qualified Data.Set as S
 
+import Debug.Trace
+
 type Identifier = String
 
 -- Primitive types
@@ -382,7 +384,7 @@ checkDecl (DeclData (DataDecl tyCon tyVars decls))
   = M.fromList <$> traverse (checkDataDecl tyCon tyVars) decls
   where
     tyVarsNotInScope tyVars argTys =
-      S.fromList tyVars `S.difference` foldl S.union S.empty (fmap freeInType argTys)
+      foldr S.union S.empty (fmap freeInType argTys) `S.difference` S.fromList tyVars
 
     checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
       maybeCon <- use (context . at dataCon)

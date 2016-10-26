@@ -88,6 +88,7 @@ replace name (Case var branches) expr
       | name `elem` args = (p,b)
       | otherwise = (p,replace name b expr)
     replaceBranch name expr (p,b) = (p,replace name b expr)
+replace name (Prod conName vals) expr = Prod conName $ fmap (flip (replace name) expr) vals
 replace name (Error _) _ = error "Error contains no identifier to replace"
 
 tryAll :: MonadError e m => m a -> [m a] -> m a
@@ -220,7 +221,7 @@ showValue (Id expr) = Just expr
 showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
 showValue (Error message) = Just $ "Runtime Error: " ++ message
-showValue (Prod name args) = mappend name . join <$> traverse showValue args
+showValue (Prod name args) = mappend (name ++ " ") . join <$> traverse showValue args
 showValue _ = Nothing
 
 repl :: (HasContext s, HasSymbolTable s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => m ()

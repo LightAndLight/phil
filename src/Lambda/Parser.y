@@ -45,25 +45,20 @@ Start : Decls eof { $1 }
 Args : ident { [$1] }
      | ident Args { $1:$2 }
 
-NestedTypes : NestedType { [$1] }
-            | NestedType NestedTypes { $1:$2 }
+PolyType : cons A TypeArgs { PolyType $1 ($2:$3) }
 
-NoArgPolyType : cons { PolyType $1 [] }
+B : A { $1 }
+  | A '->' B { FunType $1 $3 }
+  | PolyType { $1 }
 
-MultiArgPolyType : cons NestedTypes { PolyType $1 $2 }
+A : cons { PolyType $1 [] }
+  | ident { TypeVar $1 }
+  | '(' B ')' { $2 }
 
-NestedType : '(' MultiArgPolyType ')' { $2 }
-           | '(' NonNestedType ')' { $2 }
+TypeArgs : { [] }
+         | A TypeArgs { $1:$2 }
 
-NonNestedType : ident { TypeVar $1 }
-              | NoArgPolyType { $1 }
-              | NestedType '->' NonNestedType { FunType $1 $3 }
-
-Types : NonNestedType { [$1] }
-      | NestedType Types { $1:$2 }
-
-Constructor : cons { ProdDecl $1 [] }
-            | cons Types { ProdDecl $1 $2 }
+Constructor : cons TypeArgs { ProdDecl $1 $2 }
 
 Constructors : Constructor { [$1] }
              | Constructor '|' Constructors { $1:$3 }
