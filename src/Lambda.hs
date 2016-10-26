@@ -6,6 +6,7 @@ import Control.Applicative
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Bifunctor
 import Data.Foldable
 import Data.Maybe
 import Data.Map (Map)
@@ -234,7 +235,7 @@ instantiate scheme = do
   where
     createSubs exclude
       = foldl (\acc name -> M.insert name <$> (TypeVar <$> fresh) <*> acc) (return M.empty)
-                
+
 
 data InferenceError
   = NotInScope [String]
@@ -272,7 +273,7 @@ unionWithError m m'
     comparison (a,b)
       | a == b = return a
       | otherwise = throwError $ TypeError a b
-  
+
 
 mgu :: MonadError InferenceError m => Type -> Type -> m Substitutions
 mgu (TypeVar name) ty@TypeVar{} = return (M.singleton name ty)
@@ -297,8 +298,12 @@ usingState mb ma = do
   put original
   return a
 
-w :: Expr -> Either InferenceError TypeScheme
-w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
+
+runW :: Map Identifier TypeScheme -> Int -> Expr -> Either InferenceError TypeScheme
+runW ctxt fc = runExcept . flip evalStateT (InferenceState ctxt fc) . w
+
+w :: (HasFreshCount s, HasContext s, MonadError InferenceError m, MonadState s m) => Expr -> m TypeScheme
+w e = do
   res <- w' e
   ctxt <- use context
   return . generalize ctxt $ uncurry substitute res
@@ -320,20 +325,20 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
           (s1,t1) <- w' f
           context %= substituteContext s1
           (s2,t2) <- w' x
-          b <- TypeVar <$> fresh 
+          b <- TypeVar <$> fresh
           s3 <- mgu (substitute s2 t1) (FunType t2 b)
           return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
         (Abs x expr) -> do
           ctxt <- get
           b <- TypeVar <$> fresh
-          (s1,t1) <- usingState (context %= M.insert x (Base b)) $ w' expr 
+          (s1,t1) <- usingState (context %= M.insert x (Base b)) $ w' expr
           return (s1,FunType (substitute s1 b) t1)
         (Let x e e') -> do
           (s1,t1) <- w' e
           ctxt <- use context
           context %= substituteContext s1
           context %= M.insert x (generalize (substituteContext s1 ctxt) t1)
-          (s2,t2) <- w' e' 
+          (s2,t2) <- w' e'
           context .= ctxt
           return (s2 `M.union` s1, t2)
         (Case e bs) -> do
@@ -360,10 +365,21 @@ buildFunction argTys retTy = do
   ctxt <- use context
   return . generalize ctxt $ foldr FunType retTy argTys
 
-checkDecl :: (HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m Decl
+
+-- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
+-- _:xs -> ([Id "a1"], Abs "a1")
+buildDataCon :: ProdDecl -> Expr
+buildDataCon (ProdDecl dataCon argTys)
+  = let (args, expr) = go (take (length argTys) (mappend "a" . show <$> [1..]))
+    in expr $ Prod dataCon args
+  where
+    go [] = ([], id)
+    go (var:vars) = bimap (++ [Id var]) (Abs var <$>) $ go vars
+
+checkDecl :: (HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m (Map Identifier Expr)
 checkDecl (DeclData (DataDecl _ _ [])) = error "Empty data declarations NIH"
 checkDecl (DeclData (DataDecl tyCon tyVars decls))
-  = DeclData . DataDecl tyCon tyVars <$> traverse (checkDataDecl tyCon tyVars) decls
+  = M.fromList <$> traverse (checkDataDecl tyCon tyVars) decls
   where
     tyVarsNotInScope tyVars argTys =
       S.fromList tyVars `S.difference` foldl S.union S.empty (fmap freeInType argTys)
@@ -377,8 +393,6 @@ checkDecl (DeclData (DataDecl tyCon tyVars decls))
           when (notInScope /= S.empty) . throwError . NotInScope $ S.toList notInScope
           conFun <- buildFunction argTys $ PolyType tyCon (fmap TypeVar tyVars)
           context %= M.insert dataCon conFun
-          return p
+          return (dataCon, buildDataCon p)
 
-checkDecl (DeclFunc decls) = DeclFunc <$> traverse checkFuncDecl decls
-  where
-    checkFuncDecl f@(FuncDecl name argPats value) = return f
+checkDecl (DeclFunc decls) = return M.empty

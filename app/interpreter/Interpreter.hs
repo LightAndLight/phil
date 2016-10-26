@@ -1,6 +1,8 @@
 {-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
+{-# language Rank2Types #-}
 
+import Control.Lens
 import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.Trans
@@ -25,6 +27,27 @@ import Lambda.Parser hiding (parseExpression, parseExprOrData)
 
 type SymbolTable = Map Identifier Expr
 
+class HasSymbolTable s where
+  symbolTable :: Lens' s (Map Identifier Expr)
+
+data InterpreterState
+  = InterpreterState
+    { _interpSymbolTable :: Map Identifier Expr
+    , _interpContext :: Map Identifier TypeScheme
+    , _interpFreshCount :: Int
+    }
+
+initialInterpreterState = InterpreterState M.empty M.empty 0
+
+instance HasSymbolTable InterpreterState where
+  symbolTable = lens _interpSymbolTable (\s t -> s { _interpSymbolTable = t })
+
+instance HasContext InterpreterState where
+  context = lens _interpContext (\s c -> s { _interpContext = c })
+
+instance HasFreshCount InterpreterState where
+  freshCount = lens _interpFreshCount (\s c -> s { _interpFreshCount = c })
+
 data InterpreterError
   = NotBound String
   | InterpreterInferenceError InferenceError
@@ -33,14 +56,14 @@ data InterpreterError
   | InterpreterParseError ParseError
   deriving Show
 
-tokenize :: String -> ExceptT InterpreterError Repl [Token]
-tokenize rest = withExceptT InterpreterLexError (ExceptT . pure $ L.tokenize rest)
+tokenize :: MonadError InterpreterError m => String -> m [Token]
+tokenize rest = either (throwError . InterpreterLexError) pure (L.tokenize rest)
 
-parseExpression :: [Token] -> ExceptT InterpreterError Repl Expr
-parseExpression toks = withExceptT InterpreterParseError (ExceptT . pure $ P.parseExpression toks)
+parseExpression :: MonadError InterpreterError m => [Token] -> m Expr
+parseExpression toks = either (throwError . InterpreterParseError) pure (P.parseExpression toks)
 
-parseExprOrData :: [Token] -> ExceptT InterpreterError Repl ReplInput
-parseExprOrData toks = withExceptT InterpreterParseError (ExceptT . pure $ P.parseExprOrData toks)
+parseExprOrData :: MonadError InterpreterError m => [Token] -> m ReplInput
+parseExprOrData toks = either (throwError . InterpreterParseError) pure (P.parseExprOrData toks)
 
 replace :: Identifier -> Expr -> Expr -> Expr
 replace name (Id name') expr
@@ -71,10 +94,10 @@ tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
 
-reduce :: (MonadState SymbolTable m, MonadError InterpreterError m) => Expr -> m Expr
+reduce :: (HasSymbolTable s, MonadState s m, MonadError InterpreterError m) => Expr -> m Expr
 reduce (Error message) = throwError $ RuntimeError message
 reduce (Id name) = do
-  maybeExpr <- gets $ M.lookup name
+  maybeExpr <- use (symbolTable . at name)
   case maybeExpr of
     Just expr -> return expr
     Nothing -> throwError $ NotBound name
@@ -82,14 +105,15 @@ reduce expr@Lit{} = return expr
 reduce (App func input) = case func of
   Abs name output -> do
     input' <- reduce input
-    modify $ M.insert name input
+    symbolTable %= M.insert name input
     reduce $ replace name output input'
   _ -> App <$> reduce func <*> pure input >>= reduce
 reduce (Abs name expr) = do
-  modify $ M.insert name (Id name)
+  symbolTable %= M.insert name (Id name)
   Abs name <$> reduce expr
 reduce (Let name expr rest) = do
-  reduce expr >>= modify . M.insert name
+  expr' <- reduce expr
+  symbolTable %= M.insert name expr'
   reduce rest
 reduce (Case var []) = error "Malformed AST: Case statement can't have zero branches"
 reduce c@(Case var (b:bs)) = do
@@ -112,6 +136,21 @@ reduce c@(Case var (b:bs)) = do
       case res of
         Error _ -> tryBranch expr b bs
         _ -> reduce res
+reduce (Prod name args) = Prod name <$> traverse reduce args
+
+liftCompile :: (HasFreshCount s', HasContext s', MonadError InterpreterError m', MonadState s' m')
+            => (forall s m. (MonadError InferenceError m, MonadState InferenceState m) => a -> m b)
+            -> a -> m' b
+liftCompile op a = do
+  ctxt <- use context
+  fc <- use freshCount
+  let (res,state) = flip runState (InferenceState ctxt fc) . runExceptT $ op a
+  case res of
+    Left err -> throwError $ InterpreterInferenceError err
+    Right res' -> do
+      context .= state ^. context
+      freshCount .= state ^. freshCount
+      return res'
 
 data ReplF a
   = Read (String -> a)
@@ -123,29 +162,29 @@ data ReplF a
 
 type Repl = Free ReplF
 
-readLine :: Repl String
+readLine :: MonadFree ReplF m => m String
 readLine = liftF $ Read id
 
-printLine :: String -> Repl ()
+printLine :: MonadFree ReplF m => String -> m ()
 printLine str = liftF $ PrintLine str ()
 
-printString :: String -> Repl ()
+printString :: MonadFree ReplF m => String -> m ()
 printString str = liftF $ PrintString str ()
 
-evaluate :: Expr -> ExceptT InterpreterError Repl Expr
+evaluate :: (HasContext s, HasFreshCount s, HasSymbolTable s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m Expr
 evaluate expr = do
-  withExceptT InterpreterInferenceError . ExceptT . return $ w expr
-  flip evalStateT M.empty $ reduce expr
+  typeCheck expr
+  reduce expr
 
-declare :: DataDecl -> ExceptT InterpreterError Repl ()
-declare dat = withExceptT InterpreterInferenceError $ declare' dat
-  where
-    declare' dat = return ()
+declare :: (HasSymbolTable s, HasFreshCount s, HasContext s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Decl -> m ()
+declare decl = do
+  exprs <- liftCompile checkDecl decl
+  symbolTable %= M.union exprs
 
-typeCheck :: Expr -> ExceptT InterpreterError Repl TypeScheme
-typeCheck expr = withExceptT InterpreterInferenceError . ExceptT . return $ w expr
+typeCheck :: (HasContext s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m TypeScheme
+typeCheck = liftCompile w
 
-quit :: Repl a
+quit :: MonadFree ReplF m => m a
 quit = liftF Quit
 
 nested :: Type -> String
@@ -181,13 +220,14 @@ showValue (Id expr) = Just expr
 showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
 showValue (Error message) = Just $ "Runtime Error: " ++ message
+showValue (Prod name args) = mappend name . join <$> traverse showValue args
 showValue _ = Nothing
 
-repl :: ExceptT InterpreterError Repl ()
+repl :: (HasContext s, HasSymbolTable s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => m ()
 repl = flip catchError handleError $ do
-  input <- lift readLine
+  input <- readLine
   output <- case input of
-    ':':'q':_ -> lift quit
+    ':':'q':_ -> quit
     ':':'t':rest -> do
       toks <- tokenize rest
       expr <- parseExpression toks
@@ -197,12 +237,12 @@ repl = flip catchError handleError $ do
       input <- parseExprOrData toks
       case input of
         ReplExpr expr -> fromJust . showValue <$> evaluate expr
-        ReplData dat -> declare dat $> "\n"
-  lift $ printLine output
+        ReplData dat -> declare (DeclData dat) $> "\n"
+  printLine output
   repl
   where
     handleError e = do
-      lift . printLine $ show e
+      printLine $ show e
       repl
 
 replIO :: ReplF a -> InputT IO a
@@ -217,4 +257,4 @@ replIO Quit = liftIO exitSuccess
 main = do
   tempDir <- getTemporaryDirectory
   runInputT defaultSettings
-    { historyFile = Just $ tempDir </> "lambdai_history" } $ foldFree replIO (runExceptT repl)
+    { historyFile = Just $ tempDir </> "lambdai_history" } $ foldFree replIO (runExceptT . flip evalStateT initialInterpreterState $ repl)
