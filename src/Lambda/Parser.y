@@ -1,16 +1,20 @@
 {
-module Lambda.Parser (parse) where
+module Lambda.Parser (ParseError(..), parseProgram, parseExpression, parseExprOrData) where
 
 import Lambda
 import Lambda.Lexer
 }
 
-%name parse
+%name parseProgram Start
+%name parseExpression SingleExpr
+%name parseExprOrData SingleExprOrDataDecl
 %monad { Either ParseError }
 %tokentype { Token }
 %error { parseError }
 
 %token
+    eol { Token _ TokEOL }
+    data { Token _ TokData }
     case { Token _ TokCase }
     of { Token _ TokOf }
     let { Token _ TokLet }
@@ -30,37 +34,91 @@ import Lambda.Lexer
     ':' { Token _ TokType }
     '(' { Token _ TokLParen }
     ')' { Token _ TokRParen }
-    ';' { Token _ TokSep }
     '"' { Token _ TokDQuote }
     '\'' { Token _ TokSQuote }
+    '|' { Token _ TokPipe }
 
 %%
 
-Start : Expr eof { $1 }
+Start : Decls eof { $1 }
 
-Expr : '(' Expr ')' { $2 }
-     | ident { Id $1 }
-     | Literal { Lit $1 }
-     | lam ident '.' Expr { Abs $2 $4 }
-     | let ident '=' Expr in Expr { Let $2 $4 $6 }
-     | case Expr of Branches { Case $2 $4 }
-     | Expr Expr { App $1 $2 }
+Args : ident { [$1] }
+     | ident Args { $1:$2 }
+
+PolyType : cons A TypeArgs { PolyType $1 ($2:$3) }
+
+B : A { $1 }
+  | A '->' B { FunType $1 $3 }
+  | PolyType { $1 }
+
+A : cons { PolyType $1 [] }
+  | ident { TypeVar $1 }
+  | '(' B ')' { $2 }
+
+TypeArgs : { [] }
+         | A TypeArgs { $1:$2 }
+
+Constructor : cons TypeArgs { ProdDecl $1 $2 }
+
+Constructors : Constructor { [$1] }
+             | Constructor '|' Constructors { $1:$3 }
+
+DataDecl : data cons Args '=' Constructors { DataDecl $2 $3 $5 }
+         | data cons '=' Constructors { DataDecl $2 [] $4 }
+
+SingleExprOrDataDecl : DataDecl eof { ReplData $1 }
+                     | Expr eof { ReplExpr $1 }
+
+Decl : DataDecl eol { DeclData $1 }
+     | ident Patterns '=' Expr eol { DeclFunc [FuncDecl $1 $2 $4] }
+
+Decls : Decl { [$1] }
+      | Decl Decls { $1:$2 }
 
 Literal : int { LitInt $ read $1 }
         | '"' string_lit '"' { LitString $2 }
         | '\'' char_lit '\'' { LitChar $ head $2 }
 
-Branches : Branch { [$1] }
-         | Branch ';' Branches { $1:$3 }
+NoArgCon : cons { PatCon $1 [] }
 
-Branch : Pattern '->' Expr { ($1,$3) }
+MultiArgCon : cons Args { PatCon $1 $2 }
 
-Pattern : cons Args { PatCon $1 $2 }
+Pattern : NoArgCon { $1 }
+        | MultiArgCon { $1 }
         | ident { PatId $1 }
         | Literal { PatLit $1 }
 
-Args : { [] }
-     | ident Args { $1:$2 }
+Arg : NoArgCon { $1 }
+    | '(' MultiArgCon ')' { $2 }
+    | ident { PatId $1 }
+    | Literal { PatLit $1 }
+
+Patterns : Arg { [$1] }
+         | Arg Patterns { $1:$2 }
+
+Branch : Pattern '->' Expr { ($1,$3) }
+
+Branches : Branch eol { [$1] }
+         | Branch eol Branches { $1:$3 }
+
+Let : let ident '=' Expr in Expr { Let $2 $4 $6 }
+Case : case Expr of Branches { Case $2 $4 }
+Lam : lam ident '.' Expr { Abs $2 $4 }
+
+ArgExpr : Literal { Lit $1 }
+        | ident { Id $1 }
+        | cons { Id $1 }
+        | '(' Expr ')' { $2 }
+
+FunExpr : ArgExpr { $1 }
+        | FunExpr ArgExpr { App $1 $2 }
+
+SingleExpr : Expr eof { $1 }
+
+Expr : FunExpr { $1 }
+     | Let { $1 }
+     | Lam { $1 }
+     | Case { $1 }
 
 {
 data ParseError

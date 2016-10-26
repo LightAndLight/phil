@@ -6,6 +6,7 @@ import Control.Applicative
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Bifunctor
 import Data.Foldable
 import Data.Maybe
 import Data.Map (Map)
@@ -14,6 +15,8 @@ import Data.Monoid
 import Data.Traversable
 import Data.Set (Set)
 import qualified Data.Set as S
+
+import Debug.Trace
 
 type Identifier = String
 
@@ -24,7 +27,6 @@ data Prim
   | Char
   | Bool
   deriving (Eq, Show, Ord)
-
 
 -- Syntax of types
 data Type
@@ -40,11 +42,20 @@ data TypeScheme
   | Forall String TypeScheme
   deriving (Eq, Show, Ord)
 
-
-data InferenceState = InferenceState { _context :: Map Identifier TypeScheme, _freshCount :: Int }
+data InferenceState
+  = InferenceState
+    { _context :: Map Identifier TypeScheme
+    , _typeTable :: Map Identifier Int
+    , _freshCount :: Int
+    }
 
 class HasContext s where
   context :: Lens' s (Map Identifier TypeScheme)
+
+-- Currently the only information stored in this table is the arity of a type
+-- contructor
+class HasTypeTable s where
+  typeTable :: Lens' s (Map Identifier Int)
 
 class HasFreshCount s where
   freshCount :: Lens' s Int
@@ -52,19 +63,32 @@ class HasFreshCount s where
 instance HasContext InferenceState where
   context = lens _context (\s c -> s { _context = c })
 
+instance HasTypeTable InferenceState where
+  typeTable = lens _typeTable (\s t -> s { _typeTable = t })
+
 instance HasFreshCount InferenceState where
   freshCount = lens _freshCount (\s c -> s { _freshCount = c })
 
 data Literal = LitInt Int
              | LitString String
              | LitChar Char
-             | LitBool Bool
              deriving (Eq, Show)
 
 data Pattern = PatId Identifier
              | PatCon Identifier [Identifier]
              | PatLit Literal
              deriving (Eq, Show)
+
+data InferenceError
+  = NotInScope [String]
+  | TypeError Type Type
+  | PatternArgMismatch Int Int
+  | OccursError Identifier Type
+  | AlreadyDefined Identifier
+  | TooManyArguments TypeScheme
+  | WrongArity [Type]
+  | NotDefined Identifier
+  deriving (Eq, Show)
 
 lookupId :: (HasContext s, MonadError InferenceError m, MonadState s m)
          => Identifier
@@ -73,7 +97,7 @@ lookupId name = do
   maybeTy <- use (context . at name)
   case maybeTy of
     Just ty -> return ty
-    Nothing -> throwError $ NotInScope name
+    Nothing -> throwError $ NotInScope [name]
 
 conArgTypes :: TypeScheme -> Maybe (Type,[Type])
 conArgTypes scheme = uncurry conArgTypes' $ bound scheme
@@ -103,7 +127,7 @@ patType ty (PatCon conName args) = do
       for_ (zip args argTys) $ \(arg,argTy) -> do
         ctxt <- use context
         toInsert <- case argTy of
-          TypeVar{} -> Base . TypeVar <$> fresh
+          TypeVar{} -> Base <$> fresh
           _ -> return $ Base argTy
         context %= M.insert arg toInsert
       ctxt <- use context
@@ -112,12 +136,25 @@ patType ty (PatCon conName args) = do
 patType ty (PatLit (LitInt p)) = unify ty $ PrimType Int
 patType ty (PatLit (LitString p)) = unify ty $ PrimType String
 patType ty (PatLit (LitChar p)) = unify ty $ PrimType Char
-patType ty (PatLit (LitBool p)) = unify ty $ PrimType Bool
+
+data ProdDecl = ProdDecl Identifier [Type]
+data FuncDecl = FuncDecl Identifier [Pattern] Expr
+
+data ReplInput
+  = ReplExpr Expr
+  | ReplData DataDecl
+
+data DataDecl = DataDecl Identifier [String] [ProdDecl]
+
+data Decl
+  = DeclData DataDecl
+  | DeclFunc [FuncDecl]
 
 -- Syntax of expressions
 data Expr
   = Id Identifier
   | Lit Literal
+  | Prod Identifier [Expr]
   | App Expr Expr
   | Abs Identifier Expr
   | Let Identifier Expr Expr
@@ -206,11 +243,11 @@ substituteScheme subs (Forall name scheme) = substituteScheme (M.delete name sub
 substituteContext :: Substitutions -> Map Identifier TypeScheme -> Map Identifier TypeScheme
 substituteContext subs = fmap (substituteScheme subs)
 
-fresh :: (HasFreshCount s, MonadState s m) => m Identifier
+fresh :: (HasFreshCount s, MonadState s m) => m Type
 fresh = do
   n <- use freshCount
   freshCount += 1
-  return $ "t" ++ show n
+  return . TypeVar $ "t" ++ show n
 
 instantiate :: (HasContext s, HasFreshCount s, MonadState s m) => TypeScheme -> m Type
 instantiate (Base ty) = return ty
@@ -223,15 +260,8 @@ instantiate scheme = do
   return $ substitute subs ty
   where
     createSubs exclude
-      = foldl (\acc name -> M.insert name <$> (TypeVar <$> fresh) <*> acc) (return M.empty)
-                
+      = foldl (\acc name -> M.insert name <$> fresh <*> acc) (return M.empty)
 
-data InferenceError
-  = NotInScope String
-  | TypeError Type Type
-  | PatternArgMismatch Int Int
-  | OccursError Identifier Type
-  deriving (Eq, Show)
 
 occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
 occurs name ty
@@ -261,7 +291,7 @@ unionWithError m m'
     comparison (a,b)
       | a == b = return a
       | otherwise = throwError $ TypeError a b
-  
+
 
 mgu :: MonadError InferenceError m => Type -> Type -> m Substitutions
 mgu (TypeVar name) ty@TypeVar{} = return (M.singleton name ty)
@@ -278,16 +308,18 @@ mgu ty ty'
   | ty == ty' = return M.empty
   | otherwise = throwError $ TypeError ty ty'
 
-usingState :: MonadState s m => m b -> m a -> m a
-usingState mb ma = do
+usingState :: MonadState s m => m a -> m a
+usingState ma = do
   original <- get
-  mb
   a <- ma
   put original
   return a
 
-w :: Expr -> Either InferenceError TypeScheme
-w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
+runW :: Expr -> Either InferenceError TypeScheme
+runW = runExcept . flip evalStateT (InferenceState M.empty M.empty 0) . w
+
+w :: (HasFreshCount s, HasContext s, MonadError InferenceError m, MonadState s m) => Expr -> m TypeScheme
+w e = do
   res <- w' e
   ctxt <- use context
   return . generalize ctxt $ uncurry substitute res
@@ -296,34 +328,35 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
        => Expr
        -> m (Substitutions, Type)
     w' e = case e of
-        (Error _) -> (,) M.empty . TypeVar <$> fresh
+        (Error _) -> (,) M.empty <$> fresh
         (Id name) -> do
           res <- use (context . at name)
           case res of
-            Nothing -> throwError $ NotInScope name
+            Nothing -> throwError $ NotInScope [name]
             Just scheme -> (,) M.empty <$> instantiate scheme
         (Lit (LitInt e)) -> return (M.empty,PrimType Int)
         (Lit (LitString e)) -> return (M.empty,PrimType String)
         (Lit (LitChar e)) -> return (M.empty,PrimType Char)
-        (Lit (LitBool e)) -> return (M.empty,PrimType Bool)
         (App f x) -> do
           (s1,t1) <- w' f
           context %= substituteContext s1
           (s2,t2) <- w' x
-          b <- TypeVar <$> fresh 
+          b <- fresh
           s3 <- mgu (substitute s2 t1) (FunType t2 b)
           return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
         (Abs x expr) -> do
           ctxt <- get
-          b <- TypeVar <$> fresh
-          (s1,t1) <- usingState (context %= M.insert x (Base b)) $ w' expr 
+          b <- fresh
+          (s1,t1) <- usingState $ do
+            context %= M.insert x (Base b)
+            w' expr
           return (s1,FunType (substitute s1 b) t1)
         (Let x e e') -> do
           (s1,t1) <- w' e
           ctxt <- use context
           context %= substituteContext s1
           context %= M.insert x (generalize (substituteContext s1 ctxt) t1)
-          (s2,t2) <- w' e' 
+          (s2,t2) <- w' e'
           context .= ctxt
           return (s2 `M.union` s1, t2)
         (Case e bs) -> do
@@ -344,3 +377,50 @@ w e = runExcept . flip evalStateT (InferenceState M.empty 0) $ do
                 put ctxt
                 return subs'
               return (subs `M.union` foldl M.union M.empty subsList,bType)
+
+buildFunction :: [Type] -> Type -> Type
+buildFunction argTys retTy = foldr FunType retTy argTys
+
+-- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
+-- _:xs -> ([Id "a1"], Abs "a1")
+buildDataCon :: ProdDecl -> Expr
+buildDataCon (ProdDecl dataCon argTys)
+  = let (args, expr) = go (take (length argTys) (mappend "a" . show <$> [1..]))
+    in expr $ Prod dataCon args
+  where
+    go [] = ([], id)
+    go (var:vars) = bimap (Id var :) (Abs var <$>) $ go vars
+
+checkDecl :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m (Map Identifier Expr)
+checkDecl (DeclData (DataDecl _ _ [])) = error "Empty data declarations NIH"
+checkDecl (DeclData (DataDecl tyCon tyVars decls))
+  = M.fromList <$> traverse (checkDataDecl tyCon tyVars) decls
+  where
+    tyVarsNotInScope tyVars argTys =
+      foldr S.union S.empty (fmap freeInType argTys) `S.difference` S.fromList tyVars
+
+    arity n (PolyType name as) = do
+      maybeArity <- use (typeTable . at name)
+      case maybeArity of
+        Nothing -> throwError $ NotDefined name
+        Just maxArity -> return $ maxArity - length as == n
+    arity 0 _ = return True
+    arity _ _ = return False
+
+    checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
+      maybeCon <- use (context . at dataCon)
+      case maybeCon of
+        Just _ -> throwError $ AlreadyDefined dataCon
+        Nothing -> do
+          let notInScope = tyVarsNotInScope tyVars argTys
+          when (notInScope /= S.empty) . throwError . NotInScope $ S.toList notInScope
+          typeTable %= M.insert tyCon (length tyVars)
+          wrongArities <- filterM (fmap not . arity 0) argTys
+          when (wrongArities /= []) . throwError $ WrongArity wrongArities
+          let conFun = buildFunction argTys $ PolyType tyCon (fmap TypeVar tyVars)
+          subs <- M.fromList . zip tyVars <$> replicateM (length tyVars) fresh
+          ctxt <- use context
+          context %= M.insert dataCon (generalize ctxt $ substitute subs conFun)
+          return (dataCon, buildDataCon p)
+
+checkDecl (DeclFunc decls) = return M.empty

@@ -9,11 +9,14 @@ $alpha = [a-zA-z]
 $upper = [A-Z]
 $lower = [a-z]
 $sym = [\:\!\@\#\$\%\^\&\*\+\-\=\<\>\?\/\|\~]
+$eol = [\n\;]
 
 tokens :-
+    <0> $eol+ { \(p,_,_,_) _ -> return $ Token p TokEOL }
     <0> $white+;
     <0> "--".*;
     <0> case { \(p,_,_,_) _ -> return $ Token p TokCase }
+    <0> data { \(p,_,_,_) _ -> return $ Token p TokData }
     <0> of { \(p,_,_,_) _ -> return $ Token p TokOf }
     <0> let { \(p,_,_,_) _ -> return $ Token p TokLet }
     <0> in { \(p,_,_,_) _ -> return $ Token p TokIn }
@@ -21,9 +24,9 @@ tokens :-
     <0> "=" { \(p,_,_,_) _ -> return $ Token p TokEq }
     <0> \\ { \(p,_,_,_) _ -> return $ Token p TokLam }
     <0> "." { \(p,_,_,_) _ -> return $ Token p TokDot }
+    <0> "|" { \(p,_,_,_) _ -> return $ Token p TokPipe }
     <0> ":" { \(p,_,_,_) _ -> return $ Token p TokType }
     <0> "->" { \(p,_,_,_) _ -> return $ Token p TokArr }
-    <0> ";" { \(p,_,_,_) _ -> return $ Token p TokSep }
     <0> "(" { \(p,_,_,_) _ -> return $ Token p TokLParen }
     <0> ")" { \(p,_,_,_) _ -> return $ Token p TokRParen }
     <0> \" { beginString }
@@ -52,15 +55,17 @@ data Token = Token AlexPosn TokenType
 data TokenType
     = TokCase
     | TokOf
+    | TokData
     | TokLet
     | TokIn
+    | TokPipe
     | TokEq
     | TokLam
     | TokForall
     | TokDot
     | TokArr
     | TokType
-    | TokSep
+    | TokEOL
     | TokLParen
     | TokRParen
     | TokCons String
