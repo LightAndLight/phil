@@ -315,8 +315,8 @@ usingState ma = do
   put original
   return a
 
-runW :: Map Identifier TypeScheme -> Map Identifier Int -> Int -> Expr -> Either InferenceError TypeScheme
-runW ctxt tt fc = runExcept . flip evalStateT (InferenceState ctxt tt fc) . w
+runW :: Expr -> Either InferenceError TypeScheme
+runW = runExcept . flip evalStateT (InferenceState M.empty M.empty 0) . w
 
 w :: (HasFreshCount s, HasContext s, MonadError InferenceError m, MonadState s m) => Expr -> m TypeScheme
 w e = do
