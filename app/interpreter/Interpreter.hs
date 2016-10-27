@@ -127,14 +127,22 @@ reduce c@(Case var (b:bs)) = do
     Id{} -> return c
     _ -> tryBranch var' b bs
   where
+    inexhaustiveCase = Error "Inexhaustive case expression"
     tryBranch expr (PatId name,b) [] = reduce $ replace name b expr
-    tryBranch expr br@(p,b) [] = do
+    tryBranch expr (PatCon con args,b) [] = do
       expr' <- reduce expr
       case expr' of
-        Id a -> return b
+        Prod name vals
+          | con == name -> reduce . foldr (\(a,v) e -> replace a e v) b $ zip args vals
+          | otherwise  -> return inexhaustiveCase
+        _ -> error "Structure pattern in branch but matching on non-structured value"
+    tryBranch expr br@(p,b) [] = do
+      expr' <- reduce expr
+      return $ case expr' of
+        Id a -> b
         Lit a
-          | p == PatLit a -> return b
-          | otherwise -> return $ Error "Inexhaustive case expression"
+          | p == PatLit a -> b
+          | otherwise -> inexhaustiveCase
         _ -> error "Pattern match on invalid expression"
     tryBranch expr br (b:bs) = do
       res <- tryBranch expr br []
