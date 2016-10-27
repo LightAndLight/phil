@@ -387,8 +387,9 @@ buildDataCon (ProdDecl dataCon argTys)
 
 checkDecl :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m (Map Identifier Expr)
 checkDecl (DeclData (DataDecl _ _ [])) = error "Empty data declarations NIH"
-checkDecl (DeclData (DataDecl tyCon tyVars decls))
-  = M.fromList <$> traverse (checkDataDecl tyCon tyVars) decls
+checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
+  freshCount .= 0
+  M.fromList <$> traverse (checkDataDecl tyCon tyVars) decls
   where
     tyVarsNotInScope tyVars argTys =
       foldr S.union S.empty (fmap freeInType argTys) `S.difference` S.fromList tyVars
