@@ -99,43 +99,37 @@ lookupId name = do
     Just ty -> return ty
     Nothing -> throwError $ NotInScope [name]
 
-conArgTypes :: TypeScheme -> Maybe (Type,[Type])
-conArgTypes scheme = uncurry conArgTypes' $ bound scheme
-  where
-    conArgTypes' :: Type -> Set Identifier -> Maybe (Type,[Type])
-    conArgTypes' (FunType from@(TypeVar name) to) bound
-      | name `S.member` bound = fmap (from :) <$> conArgTypes' to bound
-      | otherwise = Nothing
-    conArgTypes' (FunType from to) bound = fmap (from :) <$> conArgTypes' to bound
-    conArgTypes' ty@PolyType{} bound = Just (ty,[])
-    conArgTypes' _ _ = Nothing
+conArgTypes :: Type -> Maybe (Type,[Type])
+conArgTypes (FunType from to) = fmap (from :) <$> conArgTypes to
+conArgTypes ty@PolyType{} = Just (ty,[])
+conArgTypes _ = Nothing
 
 patType :: (HasContext s, HasFreshCount s, MonadError InferenceError m, MonadState s m)
         => Type
         -> Pattern
-        -> m Type
+        -> m (Substitutions, Type)
 patType ty (PatId name) = do
   context %= M.insert name (Base ty)
-  return ty
+  return (M.empty,ty)
 patType ty (PatCon conName args) = do
-  conTy <- lookupId conName
+  conTy <- instantiate =<< lookupId conName
   case conArgTypes conTy of
     Just (retTy,argTys) -> do
       let argsLen = length args
           argTysLen = length argTys
       when (length args /= length argTys) . throwError $ PatternArgMismatch argsLen argTysLen
-      for_ (zip args argTys) $ \(arg,argTy) -> do
+      argSubs <- for (zip args argTys) $ \(arg,argTy) -> do
         ctxt <- use context
-        toInsert <- case argTy of
-          TypeVar{} -> Base <$> fresh
-          _ -> return $ Base argTy
-        context %= M.insert arg toInsert
+        toInsert@(TypeVar v) <- fresh
+        context %= M.insert arg (Base toInsert)
+        return (v,argTy)
       ctxt <- use context
-      (generalize ctxt <$> unify ty retTy) >>= instantiate
+      subs <- mgu ty retTy
+      return (subs `M.union` M.fromList argSubs,ty)
     Nothing -> error "Cannot determine data constructor arguments"
-patType ty (PatLit (LitInt p)) = unify ty $ PrimType Int
-patType ty (PatLit (LitString p)) = unify ty $ PrimType String
-patType ty (PatLit (LitChar p)) = unify ty $ PrimType Char
+patType ty (PatLit (LitInt p)) = liftA2 (,) (mgu ty (PrimType Int)) (pure ty)
+patType ty (PatLit (LitString p)) = liftA2 (,) (mgu ty (PrimType String)) (pure ty)
+patType ty (PatLit (LitChar p)) = liftA2 (,) (mgu ty (PrimType Char)) (pure ty)
 
 data ProdDecl = ProdDecl Identifier [Type]
 data FuncDecl = FuncDecl Identifier [Pattern] Expr
@@ -165,6 +159,7 @@ data Expr
 freeInType :: Type -> Set Identifier
 freeInType (TypeVar name) = S.singleton name
 freeInType (FunType from to) = freeInType from `S.union` freeInType to
+freeInType (PolyType _ args) = foldr (\a b -> freeInType a `S.union` b) S.empty args
 freeInType _ = S.empty
 
 freeInScheme :: TypeScheme -> Set Identifier
@@ -365,18 +360,17 @@ w e = do
             [] -> error "Case expression can't have zero branches"
             ((p,b):bs) -> do
               ctxt <- get
-              pType <- patType t1 p -- Determine type of pattern
-              subs <- mgu t1 pType -- unify pattern's type with case expr's type
+              (pSubs,pType) <- patType t1 p -- Determine type of pattern
               (_,bType) <- w' b -- infer right hand side
               put ctxt
               subsList <- for bs $ \(p,b) -> do
                 ctxt <- get
-                patType pType p
+                (pSubs',_) <- patType pType p
                 (_,t') <- w' b
-                subs' <- mgu bType t'
+                subs' <- mgu (substitute pSubs' bType) t'
                 put ctxt
                 return subs'
-              return (subs `M.union` foldl M.union M.empty subsList,bType)
+              return (pSubs,bType)
 
 buildFunction :: [Type] -> Type -> Type
 buildFunction argTys retTy = foldr FunType retTy argTys

@@ -197,7 +197,7 @@ declare decl = do
   symbolTable %= M.union exprs
 
 typeCheck :: (HasTypeTable s, HasContext s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m TypeScheme
-typeCheck = liftCompile w
+typeCheck = usingState . liftCompile w
 
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
