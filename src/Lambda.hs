@@ -105,31 +105,25 @@ conArgTypes ty@PolyType{} = Just (ty,[])
 conArgTypes _ = Nothing
 
 patType :: (HasContext s, HasFreshCount s, MonadError InferenceError m, MonadState s m)
-        => Type
-        -> Pattern
-        -> m (Substitutions, Type)
-patType ty (PatId name) = do
+        => Pattern
+        -> m Type
+patType (PatId name) = do
+  ty <- fresh
   context %= M.insert name (Base ty)
-  return (M.empty,ty)
-patType ty (PatCon conName args) = do
+  return ty
+patType (PatCon conName args) = do
   conTy <- instantiate =<< lookupId conName
   case conArgTypes conTy of
     Just (retTy,argTys) -> do
       let argsLen = length args
           argTysLen = length argTys
       when (length args /= length argTys) . throwError $ PatternArgMismatch argsLen argTysLen
-      argSubs <- for (zip args argTys) $ \(arg,argTy) -> do
-        ctxt <- use context
-        toInsert@(TypeVar v) <- fresh
-        context %= M.insert arg (Base toInsert)
-        return (v,argTy)
-      ctxt <- use context
-      subs <- mgu ty retTy
-      return (subs `M.union` M.fromList argSubs,ty)
+      for_ (zip args argTys) $ \(arg,argTy) -> context %= M.insert arg (Base argTy)
+      return retTy
     Nothing -> error "Cannot determine data constructor arguments"
-patType ty (PatLit (LitInt p)) = liftA2 (,) (mgu ty (PrimType Int)) (pure ty)
-patType ty (PatLit (LitString p)) = liftA2 (,) (mgu ty (PrimType String)) (pure ty)
-patType ty (PatLit (LitChar p)) = liftA2 (,) (mgu ty (PrimType Char)) (pure ty)
+patType (PatLit (LitInt p)) = return $ PrimType Int
+patType (PatLit (LitString p)) = return $ PrimType String
+patType (PatLit (LitChar p)) = return $ PrimType Char
 
 data ProdDecl = ProdDecl Identifier [Type]
 data FuncDecl = FuncDecl Identifier [Pattern] Expr
@@ -355,22 +349,20 @@ w e = do
           context .= ctxt
           return (s2 `M.union` s1, t2)
         (Case e bs) -> do
-          (s1,t1) <- w' e
-          case bs of
-            [] -> error "Case expression can't have zero branches"
-            ((p,b):bs) -> do
-              ctxt <- get
-              (pSubs,pType) <- patType t1 p -- Determine type of pattern
-              (_,bType) <- w' b -- infer right hand side
-              put ctxt
-              subsList <- for bs $ \(p,b) -> do
-                ctxt <- get
-                (pSubs',_) <- patType pType p
-                (_,t') <- w' b
-                subs' <- mgu (substitute pSubs' bType) t'
-                put ctxt
-                return subs'
-              return (pSubs,bType)
+          bs' <- for bs $ \(p,b) -> do
+            pt <- patType p
+            (_,bt) <- w' b
+            return (pt,bt)
+          let foldOver (pt,_) m = do
+                (subs,t) <- m
+                subs' <- mgu pt t
+                return (subs `M.union` subs', substitute subs' pt)
+          (subslhs,tlhs) <- foldr foldOver (return (M.empty, fst . head $ bs')) (tail bs')
+          trhs <- fresh
+          subsrhs <- foldr (\(_,bt) subs -> liftA2 M.union (mgu (substitute subslhs bt) trhs) subs) (return M.empty) bs'
+          let t'lhs = substitute subsrhs tlhs
+          (_,te) <- w' e
+          liftA2 (,) (mgu te t'lhs) (pure trhs)
 
 buildFunction :: [Type] -> Type -> Type
 buildFunction argTys retTy = foldr FunType retTy argTys
