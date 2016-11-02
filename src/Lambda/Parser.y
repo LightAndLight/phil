@@ -1,6 +1,8 @@
 {
 module Lambda.Parser (ParseError(..), parseProgram, parseExpression, parseExprOrData) where
 
+import Data.List.NonEmpty (NonEmpty(..), (<|))
+
 import Lambda
 import Lambda.Lexer
 }
@@ -98,8 +100,8 @@ Patterns : Arg { [$1] }
 
 Branch : Pattern '->' Expr { ($1,$3) }
 
-Branches : Branch eol { [$1] }
-         | Branch eol Branches { $1:$3 }
+Branches : Branch eol { $1 :| [] }
+         | Branch eol Branches { $1 <| $3 }
 
 Let : let ident '=' Expr in Expr { Let $2 $4 $6 }
 Case : case Expr of Branches { Case $2 $4 }

@@ -8,6 +8,7 @@ import Control.Monad.Free
 import Control.Monad.Trans
 import Control.Monad.State
 import Data.Functor
+import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
@@ -120,8 +121,7 @@ reduce (Let name expr rest) = do
   expr' <- reduce expr
   symbolTable %= M.insert name expr'
   reduce rest
-reduce (Case var []) = error "Malformed AST: Case statement can't have zero branches"
-reduce c@(Case var (b:bs)) = do
+reduce c@(Case var (b :| bs)) = do
   var' <- reduce var
   case var' of
     Id{} -> return c

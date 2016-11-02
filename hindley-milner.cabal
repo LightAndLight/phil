@@ -50,6 +50,7 @@ executable lambdai
                      , hindley-milner
                      , lens
                      , mtl
+                     , semigroups
   default-language:    Haskell2010
 
 test-suite hindley-milner-test

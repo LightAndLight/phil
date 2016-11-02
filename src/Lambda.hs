@@ -12,6 +12,8 @@ import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Monoid
+import Data.List.NonEmpty (NonEmpty(..))
+import qualified Data.List.NonEmpty as N
 import Data.Traversable
 import Data.Set (Set)
 import qualified Data.Set as S
@@ -146,7 +148,7 @@ data Expr
   | App Expr Expr
   | Abs Identifier Expr
   | Let Identifier Expr Expr
-  | Case Expr [(Pattern,Expr)]
+  | Case Expr (NonEmpty (Pattern,Expr))
   | Error String
   deriving (Eq, Show)
 
@@ -214,8 +216,8 @@ specialize scheme scheme'
 
 generalize :: Map Identifier TypeScheme -> Type -> TypeScheme
 generalize ctxt ty
-  = foldl
-      (flip Forall)
+  = foldr
+      Forall
       (Base ty)
       (freeInType ty `S.difference` free ctxt)
 
@@ -227,7 +229,7 @@ substitute subs ty = ty
 
 substituteScheme :: Substitutions -> TypeScheme -> TypeScheme
 substituteScheme subs (Base ty) = Base $ substitute subs ty
-substituteScheme subs (Forall name scheme) = substituteScheme (M.delete name subs) scheme
+substituteScheme subs (Forall name scheme) = Forall name $ substituteScheme (M.delete name subs) scheme
 
 substituteContext :: Substitutions -> Map Identifier TypeScheme -> Map Identifier TypeScheme
 substituteContext subs = fmap (substituteScheme subs)
@@ -256,31 +258,6 @@ occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
 occurs name ty
   | name `S.member` freeInType ty = throwError $ OccursError name ty
   | otherwise = return ()
-
-unify :: MonadError InferenceError m => Type -> Type -> m Type
-unify ty@TypeVar{} TypeVar{} = return ty
-unify (TypeVar name) ty = return ty
-unify ty (TypeVar name) = return ty
-unify (FunType from to) (FunType from' to')
-  = liftA2 FunType (unify from from') (unify to to')
-unify ty@(PolyType tyName tys) ty'@(PolyType tyName' tys')
-  | tyName == tyName' = PolyType tyName <$> traverse (uncurry unify) (zip tys tys')
-  | otherwise = throwError $ TypeError ty ty'
-unify ty ty'
-  | ty == ty' = return ty'
-  | otherwise = throwError $ TypeError ty ty'
-
-unionWithError :: (Ord k, MonadError InferenceError m)
-               => Map k Type
-               -> Map k Type
-               -> m (Map k Type)
-unionWithError m m'
-  = for (M.intersectionWith (,) m m') comparison
-  where
-    comparison (a,b)
-      | a == b = return a
-      | otherwise = throwError $ TypeError a b
-
 
 mgu :: MonadError InferenceError m => Type -> Type -> m Substitutions
 mgu (TypeVar name) ty@TypeVar{} = return (M.singleton name ty)
@@ -349,7 +326,7 @@ w e = do
           context .= ctxt
           return (s2 `M.union` s1, t2)
         (Case e bs) -> do
-          bs' <- for bs $ \(p,b) -> do
+          ((pt',bt') :| bs') <- for bs $ \(p,b) -> do
             pt <- patType p
             (_,bt) <- w' b
             return (pt,bt)
@@ -357,9 +334,9 @@ w e = do
                 (subs,t) <- m
                 subs' <- mgu pt t
                 return (subs `M.union` subs', substitute subs' pt)
-          (subslhs,tlhs) <- foldr foldOver (return (M.empty, fst . head $ bs')) (tail bs')
-          let trhs = substitute subslhs . snd . head $ bs'
-          subsrhs <- foldr (\(_,bt) subs -> liftA2 M.union (mgu (substitute subslhs bt) trhs) subs) (return M.empty) (tail bs')
+          (subslhs,tlhs) <- foldr foldOver (return (M.empty, pt')) bs'
+          let trhs = substitute subslhs bt'
+          subsrhs <- foldr (\(_,bt) subs -> liftA2 M.union (mgu (substitute subslhs bt) trhs) subs) (return M.empty) bs'
           let t'lhs = substitute subsrhs tlhs
           (_,te) <- w' e
           liftA2 (,) (mgu te t'lhs) (pure trhs)
