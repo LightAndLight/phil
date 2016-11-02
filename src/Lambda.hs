@@ -358,8 +358,8 @@ w e = do
                 subs' <- mgu pt t
                 return (subs `M.union` subs', substitute subs' pt)
           (subslhs,tlhs) <- foldr foldOver (return (M.empty, fst . head $ bs')) (tail bs')
-          trhs <- fresh
-          subsrhs <- foldr (\(_,bt) subs -> liftA2 M.union (mgu (substitute subslhs bt) trhs) subs) (return M.empty) bs'
+          let trhs = substitute subslhs . snd . head $ bs'
+          subsrhs <- foldr (\(_,bt) subs -> liftA2 M.union (mgu (substitute subslhs bt) trhs) subs) (return M.empty) (tail bs')
           let t'lhs = substitute subsrhs tlhs
           (_,te) <- w' e
           liftA2 (,) (mgu te t'lhs) (pure trhs)
