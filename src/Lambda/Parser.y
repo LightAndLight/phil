@@ -62,8 +62,8 @@ TypeArgs : { [] }
 
 Constructor : cons TypeArgs { ProdDecl $1 $2 }
 
-Constructors : Constructor { [$1] }
-             | Constructor '|' Constructors { $1:$3 }
+Constructors : Constructor { $1 :| [] }
+             | Constructor '|' Constructors { $1 <| $3 }
 
 DataDecl : data cons Args '=' Constructors { DataDecl $2 $3 $5 }
          | data cons '=' Constructors { DataDecl $2 [] $4 }

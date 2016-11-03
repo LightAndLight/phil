@@ -94,7 +94,7 @@ replace name (Case var branches) expr
       | otherwise = (p,replace name b expr)
     replaceBranch name expr (p,b) = (p,replace name b expr)
 replace name (Prod conName vals) expr = Prod conName $ fmap (flip (replace name) expr) vals
-replace name (Error _) _ = error "Error contains no identifier to replace"
+replace name e _ = e
 
 tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
