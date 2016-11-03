@@ -101,10 +101,9 @@ lookupId name = do
     Just ty -> return ty
     Nothing -> throwError $ NotInScope [name]
 
-conArgTypes :: Type -> Maybe (Type,[Type])
-conArgTypes (FunType from to) = fmap (from :) <$> conArgTypes to
-conArgTypes ty@PolyType{} = Just (ty,[])
-conArgTypes _ = Nothing
+conArgTypes :: Type -> (Type,[Type])
+conArgTypes (FunType from to) = (from :) <$> conArgTypes to
+conArgTypes ty = (ty,[])
 
 patType :: (HasContext s, HasFreshCount s, MonadError InferenceError m, MonadState s m)
         => Pattern
@@ -115,14 +114,12 @@ patType (PatId name) = do
   return ty
 patType (PatCon conName args) = do
   conTy <- instantiate =<< lookupId conName
-  case conArgTypes conTy of
-    Just (retTy,argTys) -> do
-      let argsLen = length args
-          argTysLen = length argTys
-      when (length args /= length argTys) . throwError $ PatternArgMismatch argsLen argTysLen
-      for_ (zip args argTys) $ \(arg,argTy) -> context %= M.insert arg (Base argTy)
-      return retTy
-    Nothing -> error "Cannot determine data constructor arguments"
+  let (retTy,argTys) = conArgTypes conTy
+      argsLen = length args
+      argTysLen = length argTys
+  when (argsLen /= argTysLen) . throwError $ PatternArgMismatch argsLen argTysLen
+  for_ (zip args argTys) $ \(arg,argTy) -> context %= M.insert arg (Base argTy)
+  return retTy
 patType (PatLit (LitInt p)) = return $ PrimType Int
 patType (PatLit (LitString p)) = return $ PrimType String
 patType (PatLit (LitChar p)) = return $ PrimType Char
@@ -134,7 +131,7 @@ data ReplInput
   = ReplExpr Expr
   | ReplData DataDecl
 
-data DataDecl = DataDecl Identifier [String] [ProdDecl]
+data DataDecl = DataDecl Identifier [String] (NonEmpty ProdDecl)
 
 data Decl
   = DeclData DataDecl
@@ -355,10 +352,9 @@ buildDataCon (ProdDecl dataCon argTys)
     go (var:vars) = bimap (Id var :) (Abs var <$>) $ go vars
 
 checkDecl :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m (Map Identifier Expr)
-checkDecl (DeclData (DataDecl _ _ [])) = error "Empty data declarations NIH"
 checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
   freshCount .= 0
-  M.fromList <$> traverse (checkDataDecl tyCon tyVars) decls
+  M.fromList <$> traverse (checkDataDecl tyCon tyVars) (N.toList decls)
   where
     tyVarsNotInScope tyVars argTys =
       foldr S.union S.empty (fmap freeInType argTys) `S.difference` S.fromList tyVars
