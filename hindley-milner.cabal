@@ -29,14 +29,6 @@ library
   build-tools:         alex
                      , happy
 
-executable hindley-milner-exe
-  hs-source-dirs:      app
-  main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  build-depends:       base
-                     , hindley-milner
-  default-language:    Haskell2010
-
 executable lambdai
   hs-source-dirs:      app/interpreter
   main-is:             Interpreter.hs
@@ -61,8 +53,11 @@ test-suite hindley-milner-test
                      , containers
                      , hindley-milner
                      , QuickCheck
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+                     , semigroups
   default-language:    Haskell2010
+  other-modules:       Lambda.Test.Arbitrary
+  build-tools:         alex
+                     , happy
 
 source-repository head
   type:     git

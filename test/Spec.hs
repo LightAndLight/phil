@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 import           Data.Either
+import           Data.List.NonEmpty    (NonEmpty (..))
 import qualified Data.Map              as M
 import           Lambda                hiding (Identifier)
 import           Lambda.Test.Arbitrary
@@ -66,38 +67,34 @@ prop_case_inference1 :: Bool
 prop_case_inference1 = left == right
   where
     left = Right $ Base (PrimType String)
-    right = runW (Case (Lit (LitInt 1)) [(PatLit (LitInt 0),Lit (LitString "hello"))])
+    right = runW (Case (Lit (LitInt 1)) ((PatLit (LitInt 0),Lit (LitString "hello")) :| []))
 
 prop_case_inference2 :: Bool
 prop_case_inference2 = left == right
   where
     left = Right $ Base (FunType (PrimType Int) (PrimType String))
-    right = runW (Abs "x" $ Case (Id "x") [(PatLit (LitInt 0),Lit (LitString "hello"))])
+    right = runW (Abs "x" $ Case (Id "x") ((PatLit (LitInt 0),Lit (LitString "hello")) :| []))
 
 prop_case_wrong_pattern_type1 :: Bool
 prop_case_wrong_pattern_type1 = isLeft res
   where
     res = runW (Case (Lit (LitInt 1))
-      [ (PatLit (LitInt 0),Lit (LitString "yes"))
-      , (PatLit (LitString "asdf"),Lit (LitString "no"))
-      ])
+      ((PatLit (LitInt 0),Lit (LitString "yes")) :|
+        [(PatLit (LitString "asdf"),Lit (LitString "no"))]))
 
 prop_case_wrong_pattern_type2 :: Bool
 prop_case_wrong_pattern_type2 = isLeft res
   where
     res = runW (Abs "x" $ Case (Id "x")
-      [ (PatLit (LitInt 0),Lit (LitString "yes"))
-      , (PatLit (LitString "asdf"),Lit (LitString "no"))
-      ])
+      ((PatLit (LitInt 0),Lit (LitString "yes")) :|
+        [(PatLit (LitString "asdf"),Lit (LitString "no"))]))
 
 prop_case_wrong_branch_type :: Bool
 prop_case_wrong_branch_type = isLeft res
   where
     res = runW (Case (Lit (LitInt 1))
-      [ (PatLit (LitInt 0),Lit (LitString "blah"))
-      , (PatLit (LitInt 1),Lit (LitInt 0))
-      ])
-
+      ((PatLit (LitInt 0),Lit (LitString "blah"))
+        :| [(PatLit (LitInt 1),Lit (LitInt 0))]))
 
 return []
 main = $quickCheckAll
