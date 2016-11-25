@@ -18,8 +18,6 @@ import System.Exit
 import System.FilePath
 import System.IO
 
-import Debug.Trace
-
 import Lambda
 import qualified Lambda.Lexer as L (tokenize)
 import Lambda.Lexer hiding (tokenize)
