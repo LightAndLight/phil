@@ -45,6 +45,13 @@ executable lambdai
                      , semigroups
   default-language:    Haskell2010
 
+executable lambdac
+  hs-source-dirs:      app/compiler
+  main-is:             Compiler.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+  default-language:    Haskell2010
+
 test-suite hindley-milner-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
