@@ -38,6 +38,9 @@ line input = do
   indentSeq <- use indentSequence
   output %= flip snoc (join (replicate level indentSeq) <> input <> "\n")
 
+lineWords :: [String] -> SourceM ()
+lineWords = line . unwords
+
 line' :: String -> SourceM ()
 line' input = do
   level <- use indentLevel
@@ -79,11 +82,11 @@ functionArgsToSource = intercalate ", " . fmap variable
 
 phpDeclToSource :: PHPDecl -> SourceM ()
 phpDeclToSource (PHPDeclFunc name args body) = do
-  line $ "function " <> unPHPId name <> "(" <> functionArgsToSource args <> ") {"
+  lineWords ["function", unPHPId name <> bracketed (functionArgsToSource args), "{"]
   indented $ traverse phpStatementToSource body
   line "}"
 phpDeclToSource (PHPDeclClass name members) = do
-  line $ "class " <> unPHPId name <> " {"
+  lineWords ["class", unPHPId name, "{"]
   indented $ traverse phpClassMemberToSource members
   line "}"
 phpDeclToSource (PHPDeclExpr expr) = semicolon line =<< phpExprToSource expr
@@ -117,7 +120,7 @@ phpExprToSource (PHPExprAssign name expr) = do
 phpExprToSource (PHPExprFunction args body) = do
   added <- linesAdded . indented $ traverse phpStatementToSource body
   bracket <- linesAdded $ line' "}"
-  return $ "function(" <> functionArgsToSource args <> ") {\n" <>
+  return $ "function" <> bracketed (functionArgsToSource args) <> " {\n" <>
     (unlines . toList $ added) <>
     (head . toList $ bracket)
 
@@ -132,7 +135,7 @@ classMemberPrefix False visibility = [visibilityToSource visibility]
 
 phpClassMemberToSource :: PHPClassMember -> SourceM ()
 phpClassMemberToSource (PHPClassFunc static visibility name args body) = do
-  line . unwords $ classMemberPrefix static visibility <> ["function", unPHPId name <> "(" <> functionArgsToSource args <> ") {"]
+  lineWords $ classMemberPrefix static visibility <> ["function", unPHPId name <> bracketed (functionArgsToSource args) <> "{"]
   indented $ traverse phpStatementToSource body
   line "}"
 phpClassMemberToSource (PHPClassVar static visibility name value) = do
@@ -161,10 +164,10 @@ phpDefaultCaseToSource (PHPDefaultCase body br) = do
 phpStatementToSource :: PHPStatement -> SourceM ()
 phpStatementToSource (PHPReturn expr) = do
   expr' <- phpExprToSource expr
-  semicolon line $ "return " <> expr'
+  semicolon line $ unwords ["return", expr']
 phpStatementToSource (PHPSwitch cond switches def) = do
   cond' <- phpExprToSource cond
-  line $ "switch (" <> cond' <> ") {"
+  lineWords ["switch", bracketed cond', "{"]
   indented $ do
     traverse phpSwitchCaseToSource switches
     phpDefaultCaseToSource def
@@ -177,7 +180,7 @@ phpLiteralToSource (PHPString str) = return $ "\"" <> str <> "\""
 phpLiteralToSource PHPNull = return "null"
 phpLiteralToSource (PHPArray vals) = do
   vals' <- traverse phpExprToSource vals
-  return $ "array(" <> intercalate ", " vals' <> ")"
+  return $ "array" <> bracketed (intercalate ", " vals')
 
 unOpToSource :: UnOp -> String
 unOpToSource Negate = "-"
