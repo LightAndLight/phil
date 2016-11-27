@@ -6,16 +6,17 @@ data PHPDecl
   = PHPDeclFunc PHPId [PHPId] [PHPStatement]
   | PHPDeclClass PHPId [PHPClassMember]
   | PHPDeclExpr PHPExpr
+  | PHPDeclStatement PHPStatement
 data PHPClassMember
-  = PHPClassFunc Bool Visibility PHPId [PHPStatement]
-  | PHPClassVar Bool Visibility PHPId PHPExpr
+  = PHPClassFunc Bool Visibility PHPId [PHPId] [PHPStatement]
+  | PHPClassVar Bool Visibility PHPId (Maybe PHPExpr)
 data Visibility = Public | Protected | Private
 data PHPExpr
   = PHPExprVar PHPId
   | PHPExprNew PHPId
   | PHPExprLiteral PHPLiteral
-  | PHPExprBinop BinOp PHPLiteral PHPLiteral
-  | PHPExprUnop UnOp PHPLiteral
+  | PHPExprBinop BinOp PHPExpr PHPExpr
+  | PHPExprUnop UnOp PHPExpr
   | PHPExprAssign PHPId PHPExpr
 data UnOp
   = Negate

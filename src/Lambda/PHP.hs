@@ -49,9 +49,12 @@ phpToSource (PHP decls) = do
   line ""
   line "?>"
 
+functionArgsToSource :: [PHPId] -> String
+functionArgsToSource = intercalate ", " . fmap unPHPId
+
 phpDeclToSource :: PHPDecl -> SourceM ()
 phpDeclToSource (PHPDeclFunc name args body) = do
-  line $ "function " <> unPHPId name <> " (" <> intercalate ", " (fmap unPHPId args) <> ") {"
+  line $ "function " <> unPHPId name <> " (" <> functionArgsToSource args <> ") {"
   indented $ traverse phpStatementToSource body
   line "}"
 phpDeclToSource (PHPDeclClass name members) = do
@@ -60,14 +63,58 @@ phpDeclToSource (PHPDeclClass name members) = do
   line "}"
 phpDeclToSource (PHPDeclExpr expr) = do
   line ""
-  phpExprToSource expr
+  line $ phpExprToSource expr
+  line ""
+phpDeclToSource (PHPDeclStatement st) = do
+  line ""
+  phpStatementToSource st
   line ""
 
-phpExprToSource :: PHPExpr -> SourceM ()
-phpExprToSource e = _
+bracketed :: String -> String
+bracketed input = "(" <> input <> ")"
+
+phpExprToSource :: PHPExpr -> String
+phpExprToSource (PHPExprVar name) = unPHPId name
+phpExprToSource (PHPExprNew className) = "new " <> unPHPId className
+phpExprToSource (PHPExprLiteral lit) = phpLiteralToSource lit
+phpExprToSource (PHPExprBinop op left right)
+  = unwords
+      [ bracketed $ phpExprToSource left
+      , binOpToSource op
+      , bracketed $ phpExprToSource right
+      ]
+phpExprToSource (PHPExprUnop op arg) = unOpToSource op <> bracketed (phpExprToSource arg)
+phpExprToSource (PHPExprAssign name expr)
+  = unwords
+      [ unPHPId name
+      , phpExprToSource expr
+      ]
+
+visibilityToSource :: Visibility -> String
+visibilityToSource Public = "public"
+visibilityToSource Private = "private"
+visibilityToSource Protected = "protected"
+
+classMemberPrefix :: Bool -> Visibility -> [String]
+classMemberPrefix True visibility = [visibilityToSource visibility, "static"]
+classMemberPrefix False visibility = [visibilityToSource visibility]
 
 phpClassMemberToSource :: PHPClassMember -> SourceM ()
-phpClassMemberToSource m = _
+phpClassMemberToSource (PHPClassFunc static visibility name args body) = do
+  line . unwords $ classMemberPrefix static visibility <> ["function", unPHPId name <> "(" <> functionArgsToSource args <> ") {"]
+  indented $ traverse phpStatementToSource body
+  line "}"
+phpClassMemberToSource (PHPClassVar static visibility name value)
+  = line . unwords $ classMemberPrefix static visibility <> [unPHPId name] <> maybe [] (\e -> ["=", phpExprToSource e]) value
 
 phpStatementToSource :: PHPStatement -> SourceM ()
 phpStatementToSource m = _
+
+phpLiteralToSource :: PHPLiteral -> String
+phpLiteralToSource l = _
+
+unOpToSource :: UnOp -> String
+unOpToSource u = _
+
+binOpToSource :: BinOp -> String
+binOpToSource b = _
