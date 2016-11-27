@@ -18,6 +18,7 @@ data PHPExpr
   | PHPExprBinop BinOp PHPExpr PHPExpr
   | PHPExprUnop UnOp PHPExpr
   | PHPExprAssign PHPId PHPExpr
+  | PHPExprFunction [PHPId] [PHPStatement]
 data UnOp
   = Negate
   | Not
@@ -36,13 +37,12 @@ data BinOp
   | GreaterEq
   | And
   | Or
-  | Xor
   | Concat
 data PHPStatement
   = PHPReturn PHPExpr
   | PHPSwitch PHPExpr [PHPSwitchCase] PHPDefaultCase
 data PHPSwitchCase = PHPSwitchCase PHPLiteral [PHPStatement] Bool
-data PHPDefaultCase = PHPDefaulCase [PHPStatement] Bool
+data PHPDefaultCase = PHPDefaultCase [PHPStatement] Bool
 data PHPLiteral
   = PHPBool Bool
   | PHPInt Int
