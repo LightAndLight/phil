@@ -99,6 +99,9 @@ phpExprToSource :: PHPExpr -> SourceM String
 phpExprToSource (PHPExprVar name) = return $ variable name
 phpExprToSource (PHPExprNew className) = return $ "new " <> unPHPId className
 phpExprToSource (PHPExprLiteral lit) = phpLiteralToSource lit
+phpExprToSource (PHPExprClassAccess className memberName args) = do
+  args' <- maybe (return "") (fmap (bracketed . intercalate ", ") . traverse phpExprToSource) args
+  return $ unPHPId className <> "->" <> unPHPId memberName <> args'
 phpExprToSource (PHPExprBinop op left right) = do
   left' <- phpExprToSource left
   right' <- phpExprToSource right

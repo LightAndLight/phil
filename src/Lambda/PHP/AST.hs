@@ -19,6 +19,7 @@ data PHPExpr
   | PHPExprUnop UnOp PHPExpr
   | PHPExprAssign PHPId PHPExpr
   | PHPExprFunction [PHPId] [PHPStatement]
+  | PHPExprClassAccess PHPId PHPId (Maybe [PHPExpr])
 data UnOp
   = Negate
   | Not
