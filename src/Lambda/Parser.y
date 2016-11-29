@@ -65,17 +65,19 @@ Constructor : cons TypeArgs { ProdDecl $1 $2 }
 Constructors : Constructor { $1 :| [] }
              | Constructor '|' Constructors { $1 <| $3 }
 
-DataDecl : data cons Args '=' Constructors { DataDecl $2 $3 $5 }
-         | data cons '=' Constructors { DataDecl $2 [] $4 }
+TypeParams : { [] }
+           | ident TypeParams { $1:$2 }
+
+DataDecl : data cons TypeParams '=' Constructors { DataDecl $2 $3 $5 }
 
 SingleExprOrDataDecl : DataDecl eof { ReplData $1 }
                      | Expr eof { ReplExpr $1 }
 
-Decl : DataDecl eol { DeclData $1 }
-     | ident Patterns '=' Expr eol { DeclFunc [FuncDecl $1 $2 $4] }
+Decl : DataDecl { DeclData $1 }
+     | ident Patterns '=' Expr { DeclFunc [FuncDecl $1 $2 $4] }
 
 Decls : Decl { [$1] }
-      | Decl Decls { $1:$2 }
+      | Decl eol Decls { $1:$3 }
 
 Literal : int { LitInt $ read $1 }
         | '"' string_lit '"' { LitString $2 }
