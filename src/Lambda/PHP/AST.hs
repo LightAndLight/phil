@@ -17,9 +17,9 @@ data PHPExpr
   | PHPExprLiteral PHPLiteral
   | PHPExprBinop BinOp PHPExpr PHPExpr
   | PHPExprUnop UnOp PHPExpr
-  | PHPExprAssign PHPId PHPExpr
+  | PHPExprAssign PHPExpr PHPExpr -- TODO: Use PHPLVal
   | PHPExprFunction [PHPId] [PHPStatement]
-  | PHPExprClassAccess PHPId PHPId (Maybe [PHPExpr])
+  | PHPExprClassAccess PHPExpr PHPId (Maybe [PHPExpr])
 data UnOp
   = Negate
   | Not
@@ -40,8 +40,9 @@ data BinOp
   | Or
   | Concat
 data PHPStatement
-  = PHPReturn PHPExpr
-  | PHPSwitch PHPExpr [PHPSwitchCase] PHPDefaultCase
+  = PHPStatementReturn PHPExpr
+  | PHPStatementSwitch PHPExpr [PHPSwitchCase] PHPDefaultCase
+  | PHPStatementExpr PHPExpr
 data PHPSwitchCase = PHPSwitchCase PHPLiteral [PHPStatement] Bool
 data PHPDefaultCase = PHPDefaultCase [PHPStatement] Bool
 data PHPLiteral

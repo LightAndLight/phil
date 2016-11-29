@@ -101,7 +101,8 @@ phpExprToSource (PHPExprNew className) = return $ "new " <> unPHPId className
 phpExprToSource (PHPExprLiteral lit) = phpLiteralToSource lit
 phpExprToSource (PHPExprClassAccess className memberName args) = do
   args' <- maybe (return "") (fmap (bracketed . intercalate ", ") . traverse phpExprToSource) args
-  return $ unPHPId className <> "->" <> unPHPId memberName <> args'
+  className' <- phpExprToSource className
+  return $ className' <> "->" <> unPHPId memberName <> args'
 phpExprToSource (PHPExprBinop op left right) = do
   left' <- phpExprToSource left
   right' <- phpExprToSource right
@@ -113,10 +114,11 @@ phpExprToSource (PHPExprBinop op left right) = do
 phpExprToSource (PHPExprUnop op arg) = do
   arg' <- phpExprToSource arg
   return $ unOpToSource op <> bracketed arg'
-phpExprToSource (PHPExprAssign name expr) = do
+phpExprToSource (PHPExprAssign lval expr) = do
+  lval' <- phpExprToSource lval
   expr' <- phpExprToSource expr
   return $ unwords
-    [ variable name
+    [ lval'
     , "="
     , expr'
     ]
@@ -165,16 +167,19 @@ phpDefaultCaseToSource (PHPDefaultCase body br) = do
     when br . semicolon line $ "break"
 
 phpStatementToSource :: PHPStatement -> SourceM ()
-phpStatementToSource (PHPReturn expr) = do
+phpStatementToSource (PHPStatementReturn expr) = do
   expr' <- phpExprToSource expr
   semicolon line $ unwords ["return", expr']
-phpStatementToSource (PHPSwitch cond switches def) = do
+phpStatementToSource (PHPStatementSwitch cond switches def) = do
   cond' <- phpExprToSource cond
   lineWords ["switch", bracketed cond', "{"]
   indented $ do
     traverse phpSwitchCaseToSource switches
     phpDefaultCaseToSource def
   line "}"
+phpStatementToSource (PHPStatementExpr expr) = do
+  expr' <- phpExprToSource expr
+  semicolon line expr'
 
 phpLiteralToSource :: PHPLiteral -> SourceM String
 phpLiteralToSource (PHPBool b) = return $ if b then "true" else "false"

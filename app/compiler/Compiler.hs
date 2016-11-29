@@ -14,4 +14,4 @@ main = do
   content <- readFile file
   let result = first CompilerParseError . parseProgram
            <=< first CompilerLexError . tokenize $ content
-  print result
+  return ()

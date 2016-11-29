@@ -18,8 +18,6 @@ import Data.Traversable
 import Data.Set (Set)
 import qualified Data.Set as S
 
-import Debug.Trace
-
 type Identifier = String
 
 -- Primitive types
@@ -125,7 +123,6 @@ patType (PatLit (LitString p)) = return $ PrimType String
 patType (PatLit (LitChar p)) = return $ PrimType Char
 
 data ProdDecl = ProdDecl Identifier [Type]
-data FuncDecl = FuncDecl Identifier [Pattern] Expr
 
 data ReplInput
   = ReplExpr Expr
@@ -133,9 +130,9 @@ data ReplInput
 
 data DataDecl = DataDecl Identifier [String] (NonEmpty ProdDecl)
 
-data Decl
-  = DeclData DataDecl
-  | DeclFunc [FuncDecl]
+data Definition
+  = Binding Identifier Expr
+  | Data DataDecl
 
 -- Syntax of expressions
 data Expr
@@ -351,8 +348,8 @@ buildDataCon (ProdDecl dataCon argTys)
     go [] = ([], id)
     go (var:vars) = bimap (Id var :) (Abs var <$>) $ go vars
 
-checkDecl :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m (Map Identifier Expr)
-checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
+checkDefinition :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Definition -> m (Map Identifier Expr)
+checkDefinition (Data (DataDecl tyCon tyVars decls)) = do
   freshCount .= 0
   M.fromList <$> traverse (checkDataDecl tyCon tyVars) (N.toList decls)
   where
@@ -383,4 +380,4 @@ checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
           context %= M.insert dataCon (generalize ctxt $ substitute subs conFun)
           return (dataCon, buildDataCon p)
 
-checkDecl (DeclFunc decls) = return M.empty
+checkDefinition (Binding name body) = return M.empty -- Check for same number of args, then do the abs stuff
