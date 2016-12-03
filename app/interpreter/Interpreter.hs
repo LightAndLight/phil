@@ -202,15 +202,19 @@ typeCheck expr = do
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
 
+nestedFunc :: Type -> String
+nestedFunc ty@FunType{} = "(" ++ showType ty ++ ")"
+nestedFunc ty = showType ty
+
 nested :: Type -> String
-nested ty@FunType{} = "(" ++ showType ty ++ ")"
 nested ty@PolyType{} = "(" ++ showType ty ++ ")"
-nested ty = showType ty
+nested ty = nestedFunc ty
 
 showType :: Type -> String
 showType (TypeVar name) = name
 showType (PrimType ty) = show ty
-showType (FunType from to) = nested from ++ " -> " ++ showType to
+showType (FunType from to) = nestedFunc from ++ " -> " ++ showType to
+showType (PolyType cons []) = cons
 showType (PolyType cons args) = cons ++ " " ++ unwords (fmap nested args)
 
 showTypeScheme :: TypeScheme -> String
