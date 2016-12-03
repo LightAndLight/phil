@@ -265,7 +265,9 @@ w e = do
           return (s2 `M.union` s1, t2)
         (Chain e1 e2) -> do
           (s1,t1) <- w' e1
-          (s2,t2) <- w' e2
+          (s2,t2) <- usingState $ do
+            context %= substituteContext s1
+            w' e2
           s3 <- mgu t1 t2
           return (s1 `M.union` s2, substitute s3 t1)
 
