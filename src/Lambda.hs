@@ -240,8 +240,9 @@ w e = do
         (Lit (LitChar e)) -> return (M.empty,PrimType Char)
         (App f x) -> do
           (s1,t1) <- w' f
-          context %= substituteContext s1
-          (s2,t2) <- w' x
+          (s2,t2) <- usingState $ do
+            context %= substituteContext s1
+            w' x
           b <- fresh
           s3 <- mgu (substitute s2 t1) (FunType t2 b)
           return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
@@ -257,11 +258,11 @@ w e = do
           return (s1,FunType (substitute s1 ty) t1)
         (Let x e e') -> do
           (s1,t1) <- w' e
-          ctxt <- use context
-          context %= substituteContext s1
-          context %= M.insert x (generalize (substituteContext s1 ctxt) t1)
-          (s2,t2) <- w' e'
-          context .= ctxt
+          (s2,t2) <- usingState $ do
+            context %= substituteContext s1
+            ctxt <- use context
+            context %= M.insert x (generalize (substituteContext s1 ctxt) t1)
+            w' e'
           return (s2 `M.union` s1, t2)
         (Chain e1 e2) -> do
           (s1,t1) <- w' e1

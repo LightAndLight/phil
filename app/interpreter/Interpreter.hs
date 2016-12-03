@@ -27,6 +27,8 @@ import qualified Lambda.Parser as P (parseExpression, parseExprOrData)
 import Lambda.Parser hiding (parseExpression, parseExprOrData)
 import Lambda.Translation
 
+import Debug.Trace
+
 type SymbolTable = Map Identifier Expr
 
 class HasSymbolTable s where
@@ -76,21 +78,21 @@ replace :: Identifier -> Expr -> Expr -> Expr
 replace name expr (Id name')
   | name == name' = expr
   | otherwise = Id name'
-replace name expr' (Abs name' expr)
-  | name == name' = Abs name' expr
-  | otherwise = Abs name' (replace name expr expr')
-replace name expr' (PatAbs pat expr)
+replace name expr (Abs name' body)
+  | name == name' = Abs name' body
+  | otherwise = Abs name' (replace name expr body)
+replace name expr (PatAbs pat body)
   = case pat of
       PatCon _ vars
-        | name `elem` vars -> PatAbs pat expr
-        | otherwise -> PatAbs pat (replace name expr expr')
-      PatLit _ -> PatAbs pat (replace name expr expr')
-replace name expr (Chain e1 e2) = Chain (replace name e1 expr) (replace name e2 expr)
-replace name expr (App f x) = App (replace name f expr) (replace name x expr)
-replace name expr' (Let name' expr rest)
-  | name == name' = Let name' expr rest
-  | otherwise = Let name' (replace name expr expr') (replace name rest expr')
-replace name expr (Prod conName vals) = Prod conName $ fmap (flip (replace name) expr) vals
+        | name `elem` vars -> PatAbs pat body
+        | otherwise -> PatAbs pat (replace name expr body)
+      PatLit _ -> PatAbs pat (replace name expr body)
+replace name expr (Chain e1 e2) = Chain (replace name expr e1) (replace name expr e2)
+replace name expr (App f x) = App (replace name expr f) (replace name expr x)
+replace name expr (Let name' value rest)
+  | name == name' = Let name' value rest
+  | otherwise = Let name' (replace name expr value) (replace name expr rest)
+replace name expr (Prod conName vals) = Prod conName $ fmap (replace name expr) vals
 replace name _ e = e
 
 tryAll :: MonadError e m => m a -> [m a] -> m a
@@ -104,26 +106,23 @@ reduce (Id name) = do
   case maybeExpr of
     Just expr -> return expr
     Nothing -> throwError $ NotBound name
-reduce expr@Lit{} = return expr
-reduce (App func input) = case func of
-  Abs name output -> do
-    input' <- reduce input
-    symbolTable %= M.insert name input
-    reduce $ replace name input' output
-  PatAbs pat output -> case pat of
-    PatCon conName vars -> case input of
-      Prod conName' vals
-        | conName == conName' -> return $ foldr (uncurry replace) output (zip vars vals)
-        | otherwise -> return Fail
-    PatLit lit -> return $ case input of
-      Lit lit'
-        | lit == lit' -> input
-        | otherwise -> Fail
-      _ -> Fail
-  _ -> App <$> reduce func <*> pure input >>= reduce
-reduce (Abs name expr) = do
-  symbolTable %= M.insert name (Id name)
-  Abs name <$> reduce expr
+reduce (App func input) = do
+  input' <- reduce input
+  case func of
+    Abs name output -> reduce $ replace name input' output
+    PatAbs pat output -> case pat of
+      PatCon conName vars -> case input' of
+        Prod conName' vals
+          | conName == conName' -> reduce $ let a = foldr (uncurry replace) output (zip vars vals) in seq (traceShowId a) a
+          | otherwise -> return Fail
+        _ -> return Fail
+      PatLit lit -> return $ case input' of
+        Lit lit'
+          | lit == lit' -> output
+          | otherwise -> Fail
+        _ -> Fail
+    _ -> App <$> reduce func <*> pure input'
+reduce (Abs name expr) = Abs name <$> reduce expr
 reduce (Let name expr rest) = do
   expr' <- reduce expr
   symbolTable %= M.insert name expr'
@@ -141,6 +140,7 @@ reduce (Chain e1 e2) = do
     Fail -> reduce e2
     _ -> return e1
 reduce (Prod name args) = Prod name <$> traverse reduce args
+reduce e = return e
 
 liftCompile :: (HasTypeTable s', HasFreshCount s', HasContext s', MonadError InterpreterError m', MonadState s' m')
             => (forall s m. (MonadError InferenceError m, MonadState InferenceState m) => a -> m b)

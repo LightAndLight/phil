@@ -30,7 +30,10 @@ translateExpr (A.Case cond branches) = do
   free <- ask
   var <- newVar
   branches' <- traverse (local (S.insert var) . uncurry toLambdaSingle) branches
-  return . C.Abs var $ foldr C.Chain (C.Error "Inexhaustive pattern match") branches'
+  C.App
+    (C.Abs var $ foldr (\b end -> C.Chain (C.App b $ C.Id var) end)
+    (C.Error "Inexhaustive pattern match") branches')
+    <$> translateExpr cond
 
 toLambdaWith :: MonadReader (Set C.Identifier) m => A.Pattern -> A.Expr -> (A.Expr -> m C.Expr) -> m C.Expr
 toLambdaWith (A.PatCon conName args) expr f
