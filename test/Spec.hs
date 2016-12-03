@@ -3,7 +3,8 @@
 import           Data.Either
 import           Data.List.NonEmpty    (NonEmpty (..))
 import qualified Data.Map              as M
-import           Lambda                hiding (Identifier)
+import           Lambda
+import           Lambda.Core           hiding (Identifier)
 import           Lambda.Test.Arbitrary
 import           Test.QuickCheck
 
@@ -67,34 +68,44 @@ prop_case_inference1 :: Bool
 prop_case_inference1 = left == right
   where
     left = Right $ Base (PrimType String)
-    right = runW (Case (Lit (LitInt 1)) ((PatLit (LitInt 0),Lit (LitString "hello")) :| []))
+    right = runW
+      (App
+        (PatAbs (PatLit $ LitInt 0) (Lit $ LitString "hello"))
+        (Lit $ LitInt 1))
 
 prop_case_inference2 :: Bool
 prop_case_inference2 = left == right
   where
     left = Right $ Base (FunType (PrimType Int) (PrimType String))
-    right = runW (Abs "x" $ Case (Id "x") ((PatLit (LitInt 0),Lit (LitString "hello")) :| []))
+    right = runW
+      (Abs "x"
+        (App
+          (PatAbs (PatLit $ LitInt 0) (Lit $ LitString "hello"))
+          (Id "x")))
 
 prop_case_wrong_pattern_type1 :: Bool
 prop_case_wrong_pattern_type1 = isLeft res
   where
-    res = runW (Case (Lit (LitInt 1))
-      ((PatLit (LitInt 0),Lit (LitString "yes")) :|
-        [(PatLit (LitString "asdf"),Lit (LitString "no"))]))
+    res = runW
+      (Chain
+        (App (PatAbs (PatLit $ LitInt 0) (Lit $ LitString "yes")) (Lit $ LitInt 1))
+        (App (PatAbs (PatLit $ LitString "asdf") (Lit $ LitString "no")) (Lit $ LitInt 1)))
 
 prop_case_wrong_pattern_type2 :: Bool
 prop_case_wrong_pattern_type2 = isLeft res
   where
-    res = runW (Abs "x" $ Case (Id "x")
-      ((PatLit (LitInt 0),Lit (LitString "yes")) :|
-        [(PatLit (LitString "asdf"),Lit (LitString "no"))]))
+    res = runW
+      (Abs "x" (Chain
+        (App (PatAbs (PatLit $ LitInt 0) (Lit $ LitString "yes")) (Id "x"))
+        (App (PatAbs (PatLit $ LitString "asdf") (Lit $ LitString "no")) (Id "x"))))
 
 prop_case_wrong_branch_type :: Bool
 prop_case_wrong_branch_type = isLeft res
   where
-    res = runW (Case (Lit (LitInt 1))
-      ((PatLit (LitInt 0),Lit (LitString "blah"))
-        :| [(PatLit (LitInt 1),Lit (LitInt 0))]))
+    res = runW
+      (Chain
+        (App (PatAbs (PatLit $ LitInt 0) (Lit $ LitString "yes")) (Lit $ LitString "blah"))
+        (App (PatAbs (PatLit $ LitInt 1) (Lit $ LitString "no")) (Lit $ LitInt 1)))
 
 return []
 main = $quickCheckAll

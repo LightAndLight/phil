@@ -19,10 +19,13 @@ import System.FilePath
 import System.IO
 
 import Lambda
+import Lambda.AST (ReplLine(..))
+import Lambda.Core
 import qualified Lambda.Lexer as L (tokenize)
 import Lambda.Lexer hiding (tokenize)
 import qualified Lambda.Parser as P (parseExpression, parseExprOrData)
 import Lambda.Parser hiding (parseExpression, parseExprOrData)
+import Lambda.Translation
 
 type SymbolTable = Map Identifier Expr
 
@@ -63,36 +66,32 @@ tokenize :: MonadError InterpreterError m => String -> m [Token]
 tokenize rest = either (throwError . InterpreterLexError) pure (L.tokenize rest)
 
 parseExpression :: MonadError InterpreterError m => [Token] -> m Expr
-parseExpression toks = either (throwError . InterpreterParseError) pure (P.parseExpression toks)
+parseExpression toks = either (throwError . InterpreterParseError) (pure . exprToCore) (P.parseExpression toks)
 
-parseExprOrData :: MonadError InterpreterError m => [Token] -> m ReplInput
+parseExprOrData :: MonadError InterpreterError m => [Token] -> m ReplLine
 parseExprOrData toks = either (throwError . InterpreterParseError) pure (P.parseExprOrData toks)
 
+-- replace occurances of an identifier with expr
 replace :: Identifier -> Expr -> Expr -> Expr
-replace name (Id name') expr
+replace name expr (Id name')
   | name == name' = expr
   | otherwise = Id name'
-replace name expr@Lit{} _ = expr
-replace name (Abs name' expr) expr'
+replace name expr' (Abs name' expr)
   | name == name' = Abs name' expr
   | otherwise = Abs name' (replace name expr expr')
-replace name (App f x) expr = App (replace name f expr) (replace name x expr)
-replace name (Let name' expr rest) expr'
+replace name expr' (PatAbs pat expr)
+  = case pat of
+      PatCon _ vars
+        | name `elem` vars -> PatAbs pat expr
+        | otherwise -> PatAbs pat (replace name expr expr')
+      PatLit _ -> PatAbs pat (replace name expr expr')
+replace name expr (Chain e1 e2) = Chain (replace name e1 expr) (replace name e2 expr)
+replace name expr (App f x) = App (replace name f expr) (replace name x expr)
+replace name expr' (Let name' expr rest)
   | name == name' = Let name' expr rest
   | otherwise = Let name' (replace name expr expr') (replace name rest expr')
-replace name (Case var branches) expr
-  = Case (replace name var expr) (fmap (replaceBranch name expr) branches)
-  where
-    replaceBranch :: Identifier -> Expr -> (Pattern,Expr) -> (Pattern,Expr)
-    replaceBranch name expr (p@(PatId name'),b)
-      | name == name' = (p,b)
-      | otherwise = (p,replace name b expr)
-    replaceBranch name expr (p@(PatCon conName args),b)
-      | name `elem` args = (p,b)
-      | otherwise = (p,replace name b expr)
-    replaceBranch name expr (p,b) = (p,replace name b expr)
-replace name (Prod conName vals) expr = Prod conName $ fmap (flip (replace name) expr) vals
-replace name e _ = e
+replace name expr (Prod conName vals) = Prod conName $ fmap (flip (replace name) expr) vals
+replace name _ e = e
 
 tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
@@ -110,7 +109,17 @@ reduce (App func input) = case func of
   Abs name output -> do
     input' <- reduce input
     symbolTable %= M.insert name input
-    reduce $ replace name output input'
+    reduce $ replace name input' output
+  PatAbs pat output -> case pat of
+    PatCon conName vars -> case input of
+      Prod conName' vals
+        | conName == conName' -> return $ foldr (uncurry replace) output (zip vars vals)
+        | otherwise -> return Fail
+    PatLit lit -> return $ case input of
+      Lit lit'
+        | lit == lit' -> input
+        | otherwise -> Fail
+      _ -> Fail
   _ -> App <$> reduce func <*> pure input >>= reduce
 reduce (Abs name expr) = do
   symbolTable %= M.insert name (Id name)
@@ -119,34 +128,18 @@ reduce (Let name expr rest) = do
   expr' <- reduce expr
   symbolTable %= M.insert name expr'
   reduce rest
-reduce c@(Case var (b :| bs)) = do
-  var' <- reduce var
-  case var' of
-    Id{} -> return c
-    _ -> tryBranch var' b bs
-  where
-    inexhaustiveCase = Error "Inexhaustive case expression"
-    tryBranch expr (PatId name,b) [] = reduce $ replace name b expr
-    tryBranch expr (PatCon con args,b) [] = do
-      expr' <- reduce expr
-      case expr' of
-        Prod name vals
-          | con == name -> reduce . foldr (\(a,v) e -> replace a e v) b $ zip args vals
-          | otherwise  -> return inexhaustiveCase
-        _ -> error "Structure pattern in branch but matching on non-structured value"
-    tryBranch expr br@(p,b) [] = do
-      expr' <- reduce expr
-      return $ case expr' of
-        Id a -> b
-        Lit a
-          | p == PatLit a -> b
-          | otherwise -> inexhaustiveCase
-        _ -> error "Pattern match on invalid expression"
-    tryBranch expr br (b:bs) = do
-      res <- tryBranch expr br []
-      case res of
-        Error _ -> tryBranch expr b bs
-        _ -> reduce res
+reduce (PatAbs pat expr)
+  = case pat of
+      PatCon conName vars -> do
+        defined <- uses symbolTable (M.member conName)
+        unless defined . throwError $ NotBound conName
+        PatAbs pat <$> reduce expr
+      PatLit _ -> PatAbs pat <$> reduce expr
+reduce (Chain e1 e2) = do
+  e1 <- reduce e1
+  case e1 of
+    Fail -> reduce e2
+    _ -> return e1
 reduce (Prod name args) = Prod name <$> traverse reduce args
 
 liftCompile :: (HasTypeTable s', HasFreshCount s', HasContext s', MonadError InterpreterError m', MonadState s' m')
@@ -189,7 +182,14 @@ evaluate expr = do
   usingState (typeCheck expr)
   reduce expr
 
-declare :: (HasTypeTable s, HasSymbolTable s, HasFreshCount s, HasContext s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Decl -> m ()
+declare :: ( HasTypeTable s
+           , HasSymbolTable s
+           , HasFreshCount s
+           , HasContext s
+           , MonadFree ReplF m
+           , MonadError InterpreterError m
+           , MonadState s m
+           ) => Definition -> m ()
 declare decl = do
   exprs <- liftCompile checkDecl decl
   symbolTable %= M.union exprs
@@ -226,7 +226,6 @@ showLiteral (LitString a) = show a
 showLiteral (LitChar a) = show a
 
 showPattern :: Pattern -> String
-showPattern (PatId a) = a
 showPattern (PatCon name args) = name ++ unwords args
 showPattern (PatLit lit) = showLiteral lit
 
@@ -251,8 +250,8 @@ repl = flip catchError handleError $ do
       toks <- tokenize rest
       input <- parseExprOrData toks
       case input of
-        ReplExpr expr -> fromJust . showValue <$> evaluate expr
-        ReplData dat -> declare (DeclData dat) $> ""
+        ReplExpr expr -> fromJust . showValue <$> evaluate (exprToCore expr)
+        ReplData name args prods -> declare (Data name args prods) $> ""
   printLine output
   repl
   where

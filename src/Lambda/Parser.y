@@ -3,7 +3,7 @@ module Lambda.Parser (ParseError(..), parseProgram, parseExpression, parseExprOr
 
 import Data.List.NonEmpty (NonEmpty(..), (<|))
 
-import Lambda
+import Lambda.AST
 import Lambda.Lexer
 }
 
@@ -60,7 +60,7 @@ A : cons { PolyType $1 [] }
 TypeArgs : { [] }
          | A TypeArgs { $1:$2 }
 
-Constructor : cons TypeArgs { ProdDecl $1 $2 }
+Constructor : cons TypeArgs { Product $1 $2 }
 
 Constructors : Constructor { $1 :| [] }
              | Constructor '|' Constructors { $1 <| $3 }
@@ -68,13 +68,12 @@ Constructors : Constructor { $1 :| [] }
 TypeParams : { [] }
            | ident TypeParams { $1:$2 }
 
-DataDecl : data cons TypeParams '=' Constructors { DataDecl $2 $3 $5 }
 
-SingleExprOrDataDecl : DataDecl eof { ReplData $1 }
+SingleExprOrDataDecl : data cons TypeParams '=' Constructors eof { ReplData $2 $3 $5 }
                      | Expr eof { ReplExpr $1 }
 
-Decl : DataDecl { DeclData $1 }
-     | ident Patterns '=' Expr { DeclFunc [FuncDecl $1 $2 $4] }
+Decl : data cons TypeParams '=' Constructors { Data $2 $3 $5 }
+     | ident Patterns '=' Expr { Function $1 $2 $4 }
 
 Decls : Decl { [$1] }
       | Decl eol Decls { $1:$3 }
@@ -89,12 +88,10 @@ MultiArgCon : cons Args { PatCon $1 $2 }
 
 Pattern : NoArgCon { $1 }
         | MultiArgCon { $1 }
-        | ident { PatId $1 }
         | Literal { PatLit $1 }
 
 Arg : NoArgCon { $1 }
     | '(' MultiArgCon ')' { $2 }
-    | ident { PatId $1 }
     | Literal { PatLit $1 }
 
 Patterns : Arg { [$1] }

@@ -11,38 +11,16 @@ import Data.Foldable
 import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Monoid
+import Data.Monoid ((<>), All(..))
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as N
 import Data.Traversable
 import Data.Set (Set)
 import qualified Data.Set as S
 
+import Lambda.Core
+
 import Debug.Trace
-
-type Identifier = String
-
--- Primitive types
-data Prim
-  = Int
-  | String
-  | Char
-  | Bool
-  deriving (Eq, Show, Ord)
-
--- Syntax of types
-data Type
-  = TypeVar String
-  | PrimType Prim
-  | FunType Type Type
-  | PolyType String [Type]
-  deriving (Eq, Show, Ord)
-
--- Syntax of type schemes
-data TypeScheme
-  = Base Type
-  | Forall String TypeScheme
-  deriving (Eq, Show, Ord)
 
 data InferenceState
   = InferenceState
@@ -71,16 +49,6 @@ instance HasTypeTable InferenceState where
 instance HasFreshCount InferenceState where
   freshCount = lens _freshCount (\s c -> s { _freshCount = c })
 
-data Literal = LitInt Int
-             | LitString String
-             | LitChar Char
-             deriving (Eq, Show)
-
-data Pattern = PatId Identifier
-             | PatCon Identifier [Identifier]
-             | PatLit Literal
-             deriving (Eq, Show)
-
 data InferenceError
   = NotInScope [String]
   | TypeError Type Type
@@ -108,10 +76,6 @@ conArgTypes ty = (ty,[])
 patType :: (HasContext s, HasFreshCount s, MonadError InferenceError m, MonadState s m)
         => Pattern
         -> m Type
-patType (PatId name) = do
-  ty <- fresh
-  context %= M.insert name (Base ty)
-  return ty
 patType (PatCon conName args) = do
   conTy <- instantiate =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
@@ -123,31 +87,6 @@ patType (PatCon conName args) = do
 patType (PatLit (LitInt p)) = return $ PrimType Int
 patType (PatLit (LitString p)) = return $ PrimType String
 patType (PatLit (LitChar p)) = return $ PrimType Char
-
-data ProdDecl = ProdDecl Identifier [Type]
-data FuncDecl = FuncDecl Identifier [Pattern] Expr
-
-data ReplInput
-  = ReplExpr Expr
-  | ReplData DataDecl
-
-data DataDecl = DataDecl Identifier [String] (NonEmpty ProdDecl)
-
-data Decl
-  = DeclData DataDecl
-  | DeclFunc [FuncDecl]
-
--- Syntax of expressions
-data Expr
-  = Id Identifier
-  | Lit Literal
-  | Prod Identifier [Expr]
-  | App Expr Expr
-  | Abs Identifier Expr
-  | Let Identifier Expr Expr
-  | Case Expr (NonEmpty (Pattern,Expr))
-  | Error String
-  deriving (Eq, Show)
 
 freeInType :: Type -> Set Identifier
 freeInType (TypeVar name) = S.singleton name
@@ -250,7 +189,6 @@ instantiate scheme = do
     createSubs exclude
       = foldl (\acc name -> M.insert name <$> fresh <*> acc) (return M.empty)
 
-
 occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
 occurs name ty
   | name `S.member` freeInType ty = throwError $ OccursError name ty
@@ -308,12 +246,15 @@ w e = do
           s3 <- mgu (substitute s2 t1) (FunType t2 b)
           return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
         (Abs x expr) -> do
-          ctxt <- get
           b <- fresh
           (s1,t1) <- usingState $ do
             context %= M.insert x (Base b)
             w' expr
           return (s1,FunType (substitute s1 b) t1)
+        (PatAbs pat expr) -> do
+          ty <- patType pat
+          (s1,t1) <- w' expr
+          return (s1,FunType (substitute s1 ty) t1)
         (Let x e e') -> do
           (s1,t1) <- w' e
           ctxt <- use context
@@ -322,37 +263,27 @@ w e = do
           (s2,t2) <- w' e'
           context .= ctxt
           return (s2 `M.union` s1, t2)
-        (Case e bs) -> do
-          ((pt',bt') :| bs') <- for bs $ \(p,b) -> do
-            pt <- patType p
-            (_,bt) <- w' b
-            return (pt,bt)
-          let foldOver (pt,_) m = do
-                (subs,t) <- m
-                subs' <- mgu pt t
-                return (subs `M.union` subs', substitute subs' pt)
-          (subslhs,tlhs) <- foldr foldOver (return (M.empty, pt')) bs'
-          let trhs = substitute subslhs bt'
-          subsrhs <- foldr (\(_,bt) subs -> liftA2 M.union (mgu (substitute subslhs bt) trhs) subs) (return M.empty) bs'
-          let t'lhs = substitute subsrhs tlhs
-          (_,te) <- w' e
-          liftA2 (,) (mgu te t'lhs) (pure trhs)
+        (Chain e1 e2) -> do
+          (s1,t1) <- w' e1
+          (s2,t2) <- w' e2
+          s3 <- mgu t1 t2
+          return (s1 `M.union` s2, substitute s3 t1)
 
 buildFunction :: [Type] -> Type -> Type
 buildFunction argTys retTy = foldr FunType retTy argTys
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
-buildDataCon :: ProdDecl -> Expr
-buildDataCon (ProdDecl dataCon argTys)
+buildDataCon :: Product -> Expr
+buildDataCon (Product dataCon argTys)
   = let (args, expr) = go (take (length argTys) (mappend "a" . show <$> [1..]))
     in expr $ Prod dataCon args
   where
     go [] = ([], id)
     go (var:vars) = bimap (Id var :) (Abs var <$>) $ go vars
 
-checkDecl :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m (Map Identifier Expr)
-checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
+checkDecl :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Definition -> m (Map Identifier Expr)
+checkDecl (Data tyCon tyVars decls) = do
   freshCount .= 0
   M.fromList <$> traverse (checkDataDecl tyCon tyVars) (N.toList decls)
   where
@@ -367,7 +298,7 @@ checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
     arity 0 _ = return True
     arity _ _ = return False
 
-    checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
+    checkDataDecl tyCon tyVars p@(Product dataCon argTys) = do
       maybeCon <- use (context . at dataCon)
       case maybeCon of
         Just _ -> throwError $ AlreadyDefined dataCon
@@ -383,4 +314,4 @@ checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
           context %= M.insert dataCon (generalize ctxt $ substitute subs conFun)
           return (dataCon, buildDataCon p)
 
-checkDecl (DeclFunc decls) = return M.empty
+checkDecl _ = return M.empty

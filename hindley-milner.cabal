@@ -16,10 +16,13 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lambda
+                     , Lambda.AST
+                     , Lambda.Core
                      , Lambda.Lexer
                      , Lambda.Parser
                      , Lambda.PHP
                      , Lambda.PHP.AST
+                     , Lambda.Translation
   build-depends:       base >= 4.7 && < 5
                      , bifunctors
                      , array
