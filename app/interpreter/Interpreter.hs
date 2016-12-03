@@ -7,6 +7,7 @@ import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.Trans
 import Control.Monad.State
+import Data.Foldable
 import Data.Functor
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map)
@@ -26,8 +27,6 @@ import Lambda.Lexer hiding (tokenize)
 import qualified Lambda.Parser as P (parseExpression, parseExprOrData)
 import Lambda.Parser hiding (parseExpression, parseExprOrData)
 import Lambda.Translation
-
-import Debug.Trace
 
 type SymbolTable = Map Identifier Expr
 
@@ -73,28 +72,6 @@ parseExpression toks = either (throwError . InterpreterParseError) (pure . exprT
 parseExprOrData :: MonadError InterpreterError m => [Token] -> m ReplLine
 parseExprOrData toks = either (throwError . InterpreterParseError) pure (P.parseExprOrData toks)
 
--- replace occurances of an identifier with expr
-replace :: Identifier -> Expr -> Expr -> Expr
-replace name expr (Id name')
-  | name == name' = expr
-  | otherwise = Id name'
-replace name expr (Abs name' body)
-  | name == name' = Abs name' body
-  | otherwise = Abs name' (replace name expr body)
-replace name expr (PatAbs pat body)
-  = case pat of
-      PatCon _ vars
-        | name `elem` vars -> PatAbs pat body
-        | otherwise -> PatAbs pat (replace name expr body)
-      PatLit _ -> PatAbs pat (replace name expr body)
-replace name expr (Chain e1 e2) = Chain (replace name expr e1) (replace name expr e2)
-replace name expr (App f x) = App (replace name expr f) (replace name expr x)
-replace name expr (Let name' value rest)
-  | name == name' = Let name' value rest
-  | otherwise = Let name' (replace name expr value) (replace name expr rest)
-replace name expr (Prod conName vals) = Prod conName $ fmap (replace name expr) vals
-replace name _ e = e
-
 tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
@@ -109,20 +86,26 @@ reduce (Id name) = do
 reduce (App func input) = do
   input' <- reduce input
   case func of
-    Abs name output -> reduce $ replace name input' output
+    Abs name output -> do
+      symbolTable %= M.insert name input'
+      reduce output
     PatAbs pat output -> case pat of
       PatCon conName vars -> case input' of
         Prod conName' vals
-          | conName == conName' -> reduce $ let a = foldr (uncurry replace) output (zip vars vals) in seq (traceShowId a) a
+          | conName == conName' -> do
+              for_ (zip vars vals) $ \(var,val) -> symbolTable %= M.insert var val
+              reduce output
           | otherwise -> return Fail
         _ -> return Fail
-      PatLit lit -> return $ case input' of
+      PatLit lit -> case input' of
         Lit lit'
-          | lit == lit' -> output
-          | otherwise -> Fail
-        _ -> Fail
-    _ -> App <$> reduce func <*> pure input'
-reduce (Abs name expr) = Abs name <$> reduce expr
+          | lit == lit' -> reduce output
+          | otherwise -> return Fail
+        _ -> return Fail
+    _ -> App <$> reduce func <*> pure input' >>= reduce
+reduce (Abs name expr) = do
+  symbolTable %= M.insert name (Id name)
+  Abs name <$> reduce expr
 reduce (Let name expr rest) = do
   expr' <- reduce expr
   symbolTable %= M.insert name expr'
@@ -239,7 +222,7 @@ showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
 showValue (Error message) = Just $ "Runtime Error: " ++ message
 showValue (Prod name args) = unwords . (:) name <$> traverse showValue args
-showValue _ = Nothing
+showValue e = error $ "Cannot show " ++ show e
 
 repl :: (HasTypeTable s, HasContext s, HasSymbolTable s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => m ()
 repl = flip catchError handleError $ do

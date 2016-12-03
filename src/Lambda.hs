@@ -20,8 +20,6 @@ import qualified Data.Set as S
 
 import Lambda.Core
 
-import Debug.Trace
-
 data InferenceState
   = InferenceState
     { _context :: Map Identifier TypeScheme

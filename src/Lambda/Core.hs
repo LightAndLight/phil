@@ -4,11 +4,12 @@ import           Data.List.NonEmpty (NonEmpty)
 
 type Identifier = String
 
-data Product = Product Identifier [Type]
+data Product = Product Identifier [Type] deriving (Eq, Show)
 
 data Definition
   = Data Identifier [String] (NonEmpty Product)
   | Binding Identifier Expr
+  deriving (Eq, Show)
 
 data Prim
   = Int

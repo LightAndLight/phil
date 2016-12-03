@@ -17,10 +17,12 @@ import           Lambda.Core        (Identifier (..), Literal (..),
 data ReplLine
   = ReplData Identifier [String] (NonEmpty Product)
   | ReplExpr Expr
+  deriving (Eq, Show)
 
 data Definition
   = Data Identifier [String] (NonEmpty Product)
   | Function Identifier [Pattern] Expr
+  deriving (Eq, Show)
 
 data Pattern
   = PatCon Identifier [Identifier]
