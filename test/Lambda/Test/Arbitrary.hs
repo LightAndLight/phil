@@ -1,5 +1,6 @@
 module Lambda.Test.Arbitrary where
 
+import           Data.Char
 import           Lambda.Core     hiding (Identifier)
 import           Test.QuickCheck
 
@@ -23,3 +24,9 @@ newtype Identifier = Identifier String
 
 instance Arbitrary Identifier where
   arbitrary = Identifier . getNonEmpty <$> arbitrary
+
+newtype Constructor = Constructor String
+  deriving (Eq, Show)
+
+instance Arbitrary Constructor where
+  arbitrary = Constructor . getNonEmpty <$> arbitrary `suchThat` (isAsciiUpper . head . getNonEmpty)

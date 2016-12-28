@@ -89,6 +89,7 @@ MultiArgCon : cons Args { PatCon $1 $2 }
 Pattern : NoArgCon { $1 }
         | MultiArgCon { $1 }
         | Literal { PatLit $1 }
+        | ident { PatId $1 }
 
 Arg : NoArgCon { $1 }
     | '(' MultiArgCon ')' { $2 }

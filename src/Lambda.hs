@@ -20,6 +20,8 @@ import qualified Data.Set as S
 
 import Lambda.Core
 
+import Debug.Trace
+
 data InferenceState
   = InferenceState
     { _context :: Map Identifier TypeScheme
@@ -73,18 +75,17 @@ conArgTypes ty = (ty,[])
 
 patType :: (HasContext s, HasFreshCount s, MonadError InferenceError m, MonadState s m)
         => Pattern
-        -> m Type
+        -> m (Type,[(String,Type)])
 patType (PatCon conName args) = do
   conTy <- instantiate =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
       argsLen = length args
       argTysLen = length argTys
   when (argsLen /= argTysLen) . throwError $ PatternArgMismatch argsLen argTysLen
-  for_ (zip args argTys) $ \(arg,argTy) -> context %= M.insert arg (Base argTy)
-  return retTy
-patType (PatLit (LitInt p)) = return $ PrimType Int
-patType (PatLit (LitString p)) = return $ PrimType String
-patType (PatLit (LitChar p)) = return $ PrimType Char
+  return (retTy,zip args argTys)
+patType (PatLit (LitInt p)) = return (PrimType Int, [])
+patType (PatLit (LitString p)) = return (PrimType String, [])
+patType (PatLit (LitChar p)) = return (PrimType Char, [])
 
 freeInType :: Type -> Set Identifier
 freeInType (TypeVar name) = S.singleton name
@@ -193,7 +194,6 @@ occurs name ty
   | otherwise = return ()
 
 mgu :: MonadError InferenceError m => Type -> Type -> m Substitutions
-mgu (TypeVar name) ty@TypeVar{} = return (M.singleton name ty)
 mgu (TypeVar name) ty = occurs name ty >> return (M.singleton name ty)
 mgu ty (TypeVar name) = return $ M.singleton name ty
 mgu (FunType from to) (FunType from' to') = do
@@ -213,9 +213,6 @@ usingState ma = do
   a <- ma
   put original
   return a
-
-runW :: Expr -> Either InferenceError TypeScheme
-runW = runExcept . flip evalStateT (InferenceState M.empty M.empty 0) . w
 
 w :: (HasFreshCount s, HasContext s, MonadError InferenceError m, MonadState s m) => Expr -> m TypeScheme
 w e = do
@@ -250,8 +247,10 @@ w e = do
             w' expr
           return (s1,FunType (substitute s1 b) t1)
         (PatAbs pat expr) -> do
-          ty <- patType pat
-          (s1,t1) <- w' expr
+          (ty,args) <- patType pat
+          (s1,t1) <- usingState $ do
+            for_ args $ \(arg,argTy) -> context %= M.insert arg (Base argTy)
+            w' expr
           return (s1,FunType (substitute s1 ty) t1)
         (Let x e e') -> do
           (s1,t1) <- w' e
@@ -263,11 +262,9 @@ w e = do
           return (s2 `M.union` s1, t2)
         (Chain e1 e2) -> do
           (s1,t1) <- w' e1
-          (s2,t2) <- usingState $ do
-            context %= substituteContext s1
-            w' e2
-          s3 <- mgu t1 t2
-          return (s1 `M.union` s2, substitute s3 t1)
+          context %= substituteContext s1
+          (s2,t2) <- w' e2
+          return (s1 `M.union` s2,substitute s2 t1)
 
 buildFunction :: [Type] -> Type -> Type
 buildFunction argTys retTy = foldr FunType retTy argTys

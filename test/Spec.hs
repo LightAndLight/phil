@@ -1,12 +1,28 @@
 {-# LANGUAGE TemplateHaskell #-}
 
+import           Control.Monad.Except
+import           Control.Monad.State
 import           Data.Either
-import           Data.List.NonEmpty    (NonEmpty (..))
-import qualified Data.Map              as M
+import           Data.List.NonEmpty       (NonEmpty (..))
+import           Data.Map                 (Map)
+import qualified Data.Map                 as M
+import qualified Data.Set                 as S
 import           Lambda
-import           Lambda.Core           hiding (Identifier)
+import           Lambda.Core              hiding (Identifier)
 import           Lambda.Test.Arbitrary
 import           Test.QuickCheck
+import qualified Test.QuickCheck.Property as P
+
+import           Debug.Trace
+
+runW :: Expr -> Either InferenceError TypeScheme
+runW = runExcept . flip evalStateT (InferenceState M.empty M.empty 0) . w
+
+runWith :: Map String TypeScheme -> Map String Int -> Expr -> Either InferenceError TypeScheme
+runWith ctxt tys = runExcept . flip evalStateT (InferenceState ctxt tys 0) . w
+
+runWith' :: Map String TypeScheme -> Map String Int -> Expr -> Either InferenceError (TypeScheme, Map String TypeScheme)
+runWith' ctxt tys = fmap (fmap _context) . runExcept . flip runStateT (InferenceState ctxt tys 0) . w
 
 constType :: Identifier -> Identifier -> TypeScheme
 constType (Identifier a) (Identifier b)
@@ -106,6 +122,86 @@ prop_case_wrong_branch_type = isLeft res
       (Chain
         (App (PatAbs (PatLit $ LitInt 0) (Lit $ LitString "yes")) (Lit $ LitString "blah"))
         (App (PatAbs (PatLit $ LitInt 1) (Lit $ LitString "no")) (Lit $ LitInt 1)))
+
+prop_pat_abs_inference :: P.Result
+prop_pat_abs_inference
+  = correct $ runWith context tys $ PatAbs (PatCon "U" ["a","b"]) $ Id "b"
+  where
+    tys = M.fromList [("T", 4)]
+    u =
+      Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+        FunType (TypeVar "a") $
+        FunType (TypeVar "b") $
+        PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    v =
+      Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+        FunType (TypeVar "c") $
+        FunType (TypeVar "d") $
+        PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    context = M.fromList
+      [ ("U", u)
+      , ("V", v)
+      ]
+    correct (Right (Forall a (Forall b (Forall c (Forall d (Base (FunType (PolyType t args) v)))))))
+      = P.liftBool $ length args == 4 &&
+          args !! 1 == v &&
+          S.fromList args == S.fromList (fmap TypeVar [a,b,c,d])
+    correct (Right ty) = P.failed { P.reason = "Incorrect type inferred: " ++ showTypeScheme ty }
+    correct (Left e) = P.failed { P.reason = "Type inference failed: " ++ show e }
+
+prop_pat_abs_abs_inference :: P.Result
+prop_pat_abs_abs_inference
+  = correct $ runWith context tys $ Abs "x" $ App (PatAbs (PatCon "U" ["a","b"]) $ Id "b") $ Id "x"
+  where
+    tys = M.fromList [("T", 4)]
+    u =
+      Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+        FunType (TypeVar "a") $
+        FunType (TypeVar "b") $
+        PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    v =
+      Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+        FunType (TypeVar "c") $
+        FunType (TypeVar "d") $
+        PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    context = M.fromList
+      [ ("U", u)
+      , ("V", v)
+      ]
+    correct (Right (Forall a (Forall b (Forall c (Forall d (Base (FunType (PolyType t args) v)))))))
+      = P.liftBool $ length args == 4 &&
+          args !! 1 == v &&
+          S.fromList args == S.fromList (fmap TypeVar [a,b,c,d])
+    correct (Right ty) = P.failed { P.reason = "Incorrect type inferred: " ++ showTypeScheme ty }
+    correct (Left e) = P.failed { P.reason = "Type inference failed: " ++ show e }
+
+prop_pat_abs_app_arg_inference :: P.Result
+prop_pat_abs_app_arg_inference
+  = correct $ (runExcept . flip runStateT (InferenceState context tys 1) . w) $ App (PatAbs (PatCon "U" ["a","b"]) $ Id "b") $ Id "x"
+  where
+    tys = M.fromList [("T", 4)]
+    u =
+      Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+        FunType (TypeVar "a") $
+        FunType (TypeVar "b") $
+        PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    v =
+      Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+        FunType (TypeVar "c") $
+        FunType (TypeVar "d") $
+        PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    context = M.fromList
+      [ ("U", u)
+      , ("V", v)
+      , ("x", Base $ TypeVar "t0")
+      ]
+    correct (Right (Forall a (Forall b (Forall c (Forall d (Base (FunType (PolyType t args) v))))), st))
+      = P.liftBool $ length args == 4 &&
+          args !! 1 == v &&
+          S.fromList args == S.fromList (fmap TypeVar [a,b,c,d]) &&
+          M.member "x" (seq (traceShowId $ M.lookup "x" $ _context st) $ _context st)
+    correct (Right (ty, _)) = P.failed { P.reason = "Incorrect type inferred: " ++ showTypeScheme ty }
+    correct (Left e) = P.failed { P.reason = "Type inference failed: " ++ show e }
 
 return []
 main = $quickCheckAll

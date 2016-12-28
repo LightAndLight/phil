@@ -185,45 +185,6 @@ typeCheck expr = do
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
 
-nestedFunc :: Type -> String
-nestedFunc ty@FunType{} = "(" ++ showType ty ++ ")"
-nestedFunc ty = showType ty
-
-nested :: Type -> String
-nested ty@PolyType{} = "(" ++ showType ty ++ ")"
-nested ty = nestedFunc ty
-
-showType :: Type -> String
-showType (TypeVar name) = name
-showType (PrimType ty) = show ty
-showType (FunType from to) = nestedFunc from ++ " -> " ++ showType to
-showType (PolyType cons []) = cons
-showType (PolyType cons args) = cons ++ " " ++ unwords (fmap nested args)
-
-showTypeScheme :: TypeScheme -> String
-showTypeScheme (Base ty) = showType ty
-showTypeScheme (Forall name scheme) = "forall " ++ name ++ showTypeScheme' scheme
-  where
-    showTypeScheme' (Base ty) = ". " ++ showType ty
-    showTypeScheme' (Forall name scheme) = " " ++ name ++ showTypeScheme' scheme
-
-showLiteral :: Literal -> String
-showLiteral (LitInt a) = show a
-showLiteral (LitString a) = show a
-showLiteral (LitChar a) = show a
-
-showPattern :: Pattern -> String
-showPattern (PatCon name args) = name ++ unwords args
-showPattern (PatLit lit) = showLiteral lit
-
-showValue :: Expr -> Maybe String
-showValue (Id expr) = Just expr
-showValue (Lit lit) = Just $ showLiteral lit
-showValue (Abs name expr) = Just "<Function>"
-showValue (Error message) = Just $ "Runtime Error: " ++ message
-showValue (Prod name args) = unwords . (:) name <$> traverse showValue args
-showValue e = error $ "Cannot show " ++ show e
-
 repl :: (HasTypeTable s, HasContext s, HasSymbolTable s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => m ()
 repl = flip catchError handleError $ do
   input <- readLine
