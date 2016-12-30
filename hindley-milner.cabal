@@ -16,6 +16,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lambda
+                     , Lambda.Core
                      , Lambda.Lexer
                      , Lambda.Parser
                      , Lambda.PHP

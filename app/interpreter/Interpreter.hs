@@ -24,11 +24,6 @@ import Lambda.Lexer hiding (tokenize)
 import qualified Lambda.Parser as P (parseExpression, parseExprOrData)
 import Lambda.Parser hiding (parseExpression, parseExprOrData)
 
-type SymbolTable = Map Identifier Expr
-
-class HasSymbolTable s where
-  symbolTable :: Lens' s (Map Identifier Expr)
-
 data InterpreterState
   = InterpreterState
     { _interpSymbolTable :: Map Identifier Expr
