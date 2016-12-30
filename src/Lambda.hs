@@ -125,7 +125,7 @@ patType (PatLit (LitString p)) = return $ PrimType String
 patType (PatLit (LitChar p)) = return $ PrimType Char
 
 data ProdDecl = ProdDecl Identifier [Type]
-data FuncDecl = FuncDecl Identifier [Pattern] Expr
+data FuncDecl = FuncDecl Identifier [Identifier] Expr
 
 data ReplInput
   = ReplExpr Expr
