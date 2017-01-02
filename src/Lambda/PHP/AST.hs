@@ -5,7 +5,6 @@ newtype PHPId = PHPId { unPHPId :: String }
 data PHPDecl
   = PHPDeclFunc PHPId [PHPId] [PHPStatement]
   | PHPDeclClass PHPId [PHPClassMember]
-  | PHPDeclExpr PHPExpr
   | PHPDeclStatement PHPStatement
 data PHPClassMember
   = PHPClassFunc Bool Visibility PHPId [PHPId] [PHPStatement]
@@ -20,6 +19,7 @@ data PHPExpr
   | PHPExprAssign PHPId PHPExpr
   | PHPExprFunction [PHPId] [PHPStatement]
   | PHPExprClassAccess PHPId PHPId (Maybe [PHPExpr])
+  | PHPExprFunctionCall PHPExpr [PHPExpr]
 data UnOp
   = Negate
   | Not
@@ -40,8 +40,10 @@ data BinOp
   | Or
   | Concat
 data PHPStatement
-  = PHPReturn PHPExpr
-  | PHPSwitch PHPExpr [PHPSwitchCase] PHPDefaultCase
+  = PHPStatementReturn PHPExpr
+  | PHPStatementSwitch PHPExpr [PHPSwitchCase] PHPDefaultCase
+  | PHPStatementThrow PHPExpr
+  | PHPStatementExpr PHPExpr
 data PHPSwitchCase = PHPSwitchCase PHPLiteral [PHPStatement] Bool
 data PHPDefaultCase = PHPDefaultCase [PHPStatement] Bool
 data PHPLiteral

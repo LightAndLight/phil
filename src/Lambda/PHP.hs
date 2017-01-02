@@ -72,7 +72,7 @@ phpToSource :: PHP -> SourceM ()
 phpToSource (PHP decls) = do
   line "<?php"
   traverse phpDeclToSource decls
-  line "?>"
+  line' "?>"
 
 variable :: PHPId -> String
 variable name = "$" <> unPHPId name
@@ -89,7 +89,6 @@ phpDeclToSource (PHPDeclClass name members) = do
   lineWords ["class", unPHPId name, "{"]
   indented $ traverse phpClassMemberToSource members
   line "}"
-phpDeclToSource (PHPDeclExpr expr) = semicolon line =<< phpExprToSource expr
 phpDeclToSource (PHPDeclStatement st) = phpStatementToSource st
 
 bracketed :: String -> String
@@ -126,6 +125,12 @@ phpExprToSource (PHPExprFunction args body) = do
   return $ "function" <> bracketed (functionArgsToSource args) <> " {\n" <>
     (unlines . toList $ added) <>
     (head . toList $ bracket)
+phpExprToSource (PHPExprFunctionCall func args) = do
+  functionPart <- case func of
+    PHPExprVar name -> pure $ unPHPId name
+    _ -> bracketed <$> phpExprToSource func
+  args' <- traverse phpExprToSource args
+  pure $ functionPart <> bracketed (intercalate "," args')
 
 visibilityToSource :: Visibility -> String
 visibilityToSource Public = "public"
@@ -165,16 +170,20 @@ phpDefaultCaseToSource (PHPDefaultCase body br) = do
     when br . semicolon line $ "break"
 
 phpStatementToSource :: PHPStatement -> SourceM ()
-phpStatementToSource (PHPReturn expr) = do
+phpStatementToSource (PHPStatementReturn expr) = do
   expr' <- phpExprToSource expr
   semicolon line $ unwords ["return", expr']
-phpStatementToSource (PHPSwitch cond switches def) = do
+phpStatementToSource (PHPStatementSwitch cond switches def) = do
   cond' <- phpExprToSource cond
   lineWords ["switch", bracketed cond', "{"]
   indented $ do
     traverse phpSwitchCaseToSource switches
     phpDefaultCaseToSource def
   line "}"
+phpStatementToSource (PHPStatementThrow expr) = do
+  expr' <- phpExprToSource expr
+  semicolon line $ unwords ["throw", expr']
+phpStatementToSource (PHPStatementExpr expr) = semicolon line =<< phpExprToSource expr
 
 phpLiteralToSource :: PHPLiteral -> SourceM String
 phpLiteralToSource (PHPBool b) = return $ if b then "true" else "false"
