@@ -4,15 +4,17 @@ import           Options.Applicative
 import           System.Environment
 
 import           Lambda.Core.Codegen
-import           Lambda.Lexer        (tokenize)
-import           Lambda.Parser       (parseProgram)
-import qualified Lambda.Parser       as P (ParseError)
+import           Lambda.Core.Typecheck
+import           Lambda.Lexer          (tokenize)
+import           Lambda.Parser         (parseProgram)
+import qualified Lambda.Parser         as P (ParseError)
 import           Lambda.PHP
 import           Lambda.Sugar
 
 data CompilerError
   = CompilerParseError P.ParseError
   | CompilerLexError String
+  | CompilerTypeError InferenceError
   deriving Show
 
 data CompileOpts
@@ -33,8 +35,9 @@ compile opts = do
   content <- readFile $ filepath opts
   let genAst = first CompilerLexError . tokenize
         >=> first CompilerParseError . parseProgram
+        >=> first CompilerTypeError . checkDefinitions . fmap desugar
   let ast = genAst content
-  case toSource "    " . genPHP . fmap desugar <$> ast of
+  case toSource "    " . genPHP <$> ast of
     Left err -> print err
     Right res
       | useStdout opts -> print res

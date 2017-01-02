@@ -26,6 +26,8 @@ data InferenceState
     , _freshCount :: Int
     }
 
+initialInferenceState = InferenceState M.empty M.empty 0
+
 class HasContext s where
   context :: Lens' s (Map Identifier TypeScheme)
 
@@ -323,4 +325,17 @@ checkDefinition (Data tyCon tyVars decls) = do
           context %= M.insert dataCon (generalize ctxt $ substitute subs conFun)
           return (dataCon, buildDataCon p)
 
-checkDecl (Binding name expr) = return M.empty
+checkDefinition (Binding name expr) = do
+  freshCount .= 0
+  maybeVar <- uses typeTable (M.lookup name)
+  case maybeVar of
+    Nothing -> do
+      ty <- w expr
+      context %= M.insert name ty
+      return $ M.singleton name expr
+    _ -> throwError $ AlreadyDefined name
+
+checkDefinitions :: [Definition] -> Either InferenceError [Definition]
+checkDefinitions defs = runExcept $ do
+  res <- evalStateT (traverse_ checkDefinition defs) initialInferenceState
+  return defs
