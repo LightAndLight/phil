@@ -34,7 +34,7 @@ genPHPDecl (Binding name value)
         let (assign,decls) = runState (genPHPAssignment name value) empty
         modify $ flip append (fmap PHPDeclStatement $ decls `snoc` assign)
       Just (body,args) ->
-        modify . flip snoc $ PHPDeclFunc (PHPId name) (fmap PHPId args) (genFunctionBody body)
+        modify . flip snoc $ PHPDeclFunc (phpId name) (fmap phpId args) (genFunctionBody body)
 
 genPHPLiteral :: Literal -> PHPLiteral
 genPHPLiteral (LitInt i) = PHPInt i
@@ -42,19 +42,19 @@ genPHPLiteral (LitString s) = PHPString s
 genPHPLiteral (LitChar c) = PHPString [c]
 
 genPHPExpr :: MonadState (DList PHPStatement) m => Expr -> m PHPExpr
-genPHPExpr (Id name) = pure . PHPExprVar $ PHPId name
+genPHPExpr (Id name) = pure . PHPExprVar $ phpId name
 genPHPExpr (Lit lit) = pure . PHPExprLiteral $ genPHPLiteral lit
 genPHPExpr (Prod name args) = undefined
 genPHPExpr (App f x) = PHPExprFunctionCall <$> genPHPExpr f <*> (pure <$> genPHPExpr x)
 genPHPExpr f@(Abs name _)
   = let (body,args) = fromJust $ toFunction f
-    in PHPExprFunction (fmap PHPId args) <$> (pure . PHPStatementReturn <$> genPHPExpr body)
+    in PHPExprFunction (fmap phpId args) <$> (pure . PHPStatementReturn <$> genPHPExpr body)
 genPHPExpr (Let var value rest) = do
   assign <- genPHPAssignment var value
   modify $ flip snoc assign
   genPHPExpr rest
 genPHPExpr (Case val branches) = undefined
-genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] [PHPStatementThrow $ PHPExprNew $ PHPId "Exception"]) []
+genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] [PHPStatementThrow $ PHPExprNew $ phpId "Exception"]) []
 
 genPHPAssignment :: MonadState (DList PHPStatement) m => Identifier -> Expr -> m PHPStatement
-genPHPAssignment name value = PHPStatementExpr . PHPExprAssign (PHPId name) <$> genPHPExpr value
+genPHPAssignment name value = PHPStatementExpr . PHPExprAssign (phpId name) <$> genPHPExpr value

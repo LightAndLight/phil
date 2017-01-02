@@ -1,7 +1,36 @@
-module Lambda.PHP.AST where
+module Lambda.PHP.AST
+  ( PHP(..)
+  , PHPId
+  , phpId
+  , unPHPId
+  , PHPDecl(..)
+  , PHPClassMember(..)
+  , Visibility(..)
+  , PHPExpr(..)
+  , UnOp(..)
+  , BinOp(..)
+  , PHPStatement(..)
+  , PHPSwitchCase (..)
+  , PHPDefaultCase (..)
+  , PHPLiteral(..)
+  )
+  where
+
+import           Data.String
 
 data PHP = PHP [PHPDecl]
 newtype PHPId = PHPId { unPHPId :: String }
+
+phpId :: String -> PHPId
+phpId input = PHPId $ go input
+  where
+    go "" = ""
+    go ('\'':rest) = "Prime" ++ go rest
+    go (c:rest) = c : go rest
+
+instance IsString PHPId where
+  fromString = phpId
+
 data PHPDecl
   = PHPDeclFunc PHPId [PHPId] [PHPStatement]
   | PHPDeclClass PHPId [PHPClassMember]
