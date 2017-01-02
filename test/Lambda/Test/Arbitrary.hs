@@ -1,10 +1,10 @@
 module Lambda.Test.Arbitrary where
 
-import Test.QuickCheck
-import Lambda hiding (Identifier)
+import           Lambda.Core.AST hiding (Identifier)
+import           Test.QuickCheck
 
 instance Arbitrary Prim where
-  arbitrary = elements [Int,String,Char,Bool]
+  arbitrary = elements [Int,String,Char]
 
 instance Arbitrary Type where
   arbitrary = resize 5 $ sized sizedType
@@ -14,7 +14,7 @@ sizedType n
   | n < 0 = error "No tree of size zero"
   | n == 0 = PrimType <$> arbitrary
   | otherwise
-      = oneof 
+      = oneof
           [ FunType <$> sizedType (n - 1) <*> sizedType (n - 1)
           ]
 
@@ -23,4 +23,3 @@ newtype Identifier = Identifier String
 
 instance Arbitrary Identifier where
   arbitrary = Identifier . getNonEmpty <$> arbitrary
-

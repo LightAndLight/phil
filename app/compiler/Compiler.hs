@@ -14,7 +14,7 @@ import           Lambda.Sugar
 data CompilerError
   = CompilerParseError P.ParseError
   | CompilerLexError String
-  | CompilerTypeError InferenceError
+  | CompilerTypeError TypeError
   deriving Show
 
 data CompileOpts

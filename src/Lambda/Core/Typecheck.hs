@@ -1,4 +1,5 @@
 {-# language FlexibleContexts #-}
+{-# language TemplateHaskell #-}
 
 module Lambda.Core.Typecheck where
 
@@ -14,6 +15,7 @@ import Control.Monad.Except
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as N
 import Control.Monad.State
+import Control.Monad.Reader
 import Data.Foldable
 import Data.Traversable
 
@@ -48,9 +50,9 @@ instance HasTypeTable InferenceState where
 instance HasFreshCount InferenceState where
   freshCount = lens _freshCount (\s c -> s { _freshCount = c })
 
-data InferenceError
+data TypeError
   = NotInScope [String]
-  | TypeError Type Type
+  | TypeMismatch Type Type
   | PatternArgMismatch Int Int
   | OccursError Identifier Type
   | AlreadyDefined Identifier
@@ -59,37 +61,50 @@ data InferenceError
   | NotDefined Identifier
   deriving (Eq, Show)
 
-lookupId :: (HasContext s, MonadError InferenceError m, MonadState s m)
-         => Identifier
-         -> m TypeScheme
+makeClassyPrisms ''TypeError
+
+lookupId ::
+  ( HasContext r
+  , MonadReader r m
+  , AsTypeError e
+  , MonadError e m
+  )
+  => Identifier
+  -> m TypeScheme
 lookupId name = do
-  maybeTy <- use (context . at name)
+  maybeTy <- view (context . at name)
   case maybeTy of
     Just ty -> return ty
-    Nothing -> throwError $ NotInScope [name]
+    Nothing -> throwError $ _NotInScope # [name]
 
 conArgTypes :: Type -> (Type,[Type])
 conArgTypes (FunType from to) = (from :) <$> conArgTypes to
 conArgTypes ty = (ty,[])
 
-patType :: (HasContext s, HasFreshCount s, MonadError InferenceError m, MonadState s m)
-        => Pattern
-        -> m Type
+patType ::
+  ( HasFreshCount s
+  , MonadState s m
+  , HasContext r
+  , MonadReader r m
+  , AsTypeError e
+  , MonadError e m
+  )
+  => Pattern
+  -> m (Map Identifier TypeScheme,Type)
 patType (PatId name) = do
   ty <- fresh
-  context %= M.insert name (Base ty)
-  return ty
+  return (M.singleton name $ Base ty,ty)
 patType (PatCon conName args) = do
   conTy <- instantiate =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
       argsLen = length args
       argTysLen = length argTys
-  when (argsLen /= argTysLen) . throwError $ PatternArgMismatch argsLen argTysLen
-  for_ (zip args argTys) $ \(arg,argTy) -> context %= M.insert arg (Base argTy)
-  return retTy
-patType (PatLit (LitInt p)) = return $ PrimType Int
-patType (PatLit (LitString p)) = return $ PrimType String
-patType (PatLit (LitChar p)) = return $ PrimType Char
+  when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
+  let boundVars = foldr (\(arg,argTy) -> M.insert arg (Base argTy)) M.empty $ zip args argTys
+  return (boundVars,retTy)
+patType (PatLit (LitInt p)) = return (M.empty,PrimType Int)
+patType (PatLit (LitString p)) = return (M.empty,PrimType String)
+patType (PatLit (LitChar p)) = return (M.empty,PrimType Char)
 
 freeInType :: Type -> Set Identifier
 freeInType (TypeVar name) = S.singleton name
@@ -179,12 +194,19 @@ fresh = do
   freshCount += 1
   return . TypeVar $ "t" ++ show n
 
-instantiate :: (HasContext s, HasFreshCount s, MonadState s m) => TypeScheme -> m Type
+instantiate ::
+  ( HasFreshCount s
+  , MonadState s m
+  , HasContext r
+  , MonadReader r m
+  )
+  => TypeScheme
+  -> m Type
 instantiate (Base ty) = return ty
 instantiate scheme = do
-  ctxt <- use context
+  ctxt <- view context
   let (ty,tyVars) = bound scheme
-  subs <-  createSubs
+  subs <- createSubs
     (free ctxt `S.union` boundInContext ctxt `S.union` freeInScheme scheme)
     tyVars
   return $ substitute subs ty
@@ -193,12 +215,12 @@ instantiate scheme = do
       = foldl (\acc name -> M.insert name <$> fresh <*> acc) (return M.empty)
 
 
-occurs :: MonadError InferenceError m => Identifier -> Type -> m ()
+occurs :: (AsTypeError e, MonadError e m) => Identifier -> Type -> m ()
 occurs name ty
-  | name `S.member` freeInType ty = throwError $ OccursError name ty
+  | name `S.member` freeInType ty = throwError $ _OccursError # (name,ty)
   | otherwise = return ()
 
-mgu :: MonadError InferenceError m => Type -> Type -> m Substitutions
+mgu :: (AsTypeError e, MonadError e m) => Type -> Type -> m Substitutions
 mgu (TypeVar name) ty@TypeVar{} = return (M.singleton name ty)
 mgu (TypeVar name) ty = occurs name ty >> return (M.singleton name ty)
 mgu ty (TypeVar name) = return $ M.singleton name ty
@@ -208,67 +230,80 @@ mgu (FunType from to) (FunType from' to') = do
   return $ M.union fromSubs toSubs
 mgu ty@(PolyType tyName tys) ty'@(PolyType tyName' tys')
   | tyName == tyName' = fold <$> traverse (uncurry mgu) (zip tys tys')
-  | otherwise = throwError $ TypeError ty ty'
+  | otherwise = throwError $ _TypeMismatch # (ty,ty')
 mgu ty ty'
   | ty == ty' = return M.empty
-  | otherwise = throwError $ TypeError ty ty'
+  | otherwise = throwError $ _TypeMismatch # (ty,ty')
 
-usingState :: MonadState s m => m a -> m a
-usingState ma = do
-  original <- get
-  a <- ma
-  put original
-  return a
+runW :: Expr -> Either TypeError TypeScheme
+runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
 
-runW :: Expr -> Either InferenceError TypeScheme
-runW = runExcept . flip evalStateT (InferenceState M.empty M.empty 0) . w
+runWithContext :: (AsTypeError e, MonadError e m) => Map Identifier TypeScheme -> Expr -> m TypeScheme
+runWithContext ctxt
+  = flip evalStateT initialInferenceState .
+    flip runReaderT initialInferenceState { _context = ctxt } . w
 
-w :: (HasFreshCount s, HasContext s, MonadError InferenceError m, MonadState s m) => Expr -> m TypeScheme
+w ::
+  ( HasFreshCount s
+  , MonadState s m
+  , HasContext r
+  , MonadReader r m
+  , AsTypeError e
+  , MonadError e m
+  )
+  => Expr
+  -> m TypeScheme
 w e = do
   res <- w' e
-  ctxt <- use context
+  ctxt <- view context
   return . generalize ctxt $ uncurry substitute res
   where
-    w' :: (HasContext s, HasFreshCount s, MonadError InferenceError m, MonadState s m)
-       => Expr
-       -> m (Substitutions, Type)
+    w' ::
+      ( HasFreshCount s
+      , MonadState s m
+      , HasContext r
+      , MonadReader r m
+      , AsTypeError e
+      , MonadError e m
+      )
+      => Expr
+      -> m (Substitutions, Type)
     w' e = case e of
         (Error _) -> (,) M.empty <$> fresh
         (Id name) -> do
-          res <- use (context . at name)
+          res <- view (context . at name)
           case res of
-            Nothing -> throwError $ NotInScope [name]
+            Nothing -> throwError $ _NotInScope # [name]
             Just scheme -> (,) M.empty <$> instantiate scheme
         (Lit (LitInt e)) -> return (M.empty,PrimType Int)
         (Lit (LitString e)) -> return (M.empty,PrimType String)
         (Lit (LitChar e)) -> return (M.empty,PrimType Char)
         (App f x) -> do
           (s1,t1) <- w' f
-          context %= substituteContext s1
-          (s2,t2) <- w' x
-          b <- fresh
-          s3 <- mgu (substitute s2 t1) (FunType t2 b)
-          return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
+          local (over context $ substituteContext s1) $ do
+            (s2,t2) <- w' x
+            b <- fresh
+            s3 <- mgu (substitute s2 t1) (FunType t2 b)
+            return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
-          (s1,t1) <- usingState $ do
-            context %= M.insert x (Base b)
-            w' expr
-          return (s1,FunType (substitute s1 b) t1)
+          local (over context $ M.insert x (Base b)) $ do
+            (s1,t1) <- w' expr
+            return (s1,FunType (substitute s1 b) t1)
         (Let x e e') -> do
           (s1,t1) <- w' e
-          ctxt <- use context
-          context %= substituteContext s1
-          context %= M.insert x (generalize (substituteContext s1 ctxt) t1)
-          (s2,t2) <- w' e'
-          context .= ctxt
-          return (s2 `M.union` s1, t2)
+          ctxt <- view context
+          let addVar = M.insert x (generalize (substituteContext s1 ctxt) t1) . substituteContext s1
+          local (over context addVar) $ do
+            (s2,t2) <- w' e'
+            return (s2 `M.union` s1, t2)
         (Case e bs) -> do
           ((pt',bt') :| bs') <- for bs $ \(p,b) -> do
-            pt <- patType p
-            (_,bt) <- w' b
-            return (pt,bt)
+            (boundVars,pt) <- patType p
+            local (over context $ M.union boundVars) $ do
+              (_,bt) <- w' b
+              return (pt,bt)
           let foldOver (pt,_) m = do
                 (subs,t) <- m
                 subs' <- mgu pt t
@@ -293,7 +328,16 @@ buildDataCon (ProdDecl dataCon argTys)
     go [] = ([], id)
     go (var:vars) = bimap (Id var :) (Abs var <$>) $ go vars
 
-checkDefinition :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Definition -> m (Map Identifier Expr)
+checkDefinition ::
+  ( HasFreshCount s
+  , HasTypeTable s
+  , HasContext s
+  , MonadState s m
+  , AsTypeError e
+  , MonadError e m
+  )
+  => Definition
+  -> m (Map Identifier Expr)
 checkDefinition (Data tyCon tyVars decls) = do
   freshCount .= 0
   M.fromList <$> traverse (checkDataDecl tyCon tyVars) (N.toList decls)
@@ -304,7 +348,7 @@ checkDefinition (Data tyCon tyVars decls) = do
     arity n (PolyType name as) = do
       maybeArity <- use (typeTable . at name)
       case maybeArity of
-        Nothing -> throwError $ NotDefined name
+        Nothing -> throwError $ _NotDefined # name
         Just maxArity -> return $ maxArity - length as == n
     arity 0 _ = return True
     arity _ _ = return False
@@ -312,13 +356,13 @@ checkDefinition (Data tyCon tyVars decls) = do
     checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
       maybeCon <- use (context . at dataCon)
       case maybeCon of
-        Just _ -> throwError $ AlreadyDefined dataCon
+        Just _ -> throwError $ _AlreadyDefined # dataCon
         Nothing -> do
           let notInScope = tyVarsNotInScope tyVars argTys
-          when (notInScope /= S.empty) . throwError . NotInScope $ S.toList notInScope
+          when (notInScope /= S.empty) . throwError $ _NotInScope # S.toList notInScope
           typeTable %= M.insert tyCon (length tyVars)
           wrongArities <- filterM (fmap not . arity 0) argTys
-          when (wrongArities /= []) . throwError $ WrongArity wrongArities
+          when (wrongArities /= []) . throwError $ _WrongArity # wrongArities
           let conFun = buildFunction argTys $ PolyType tyCon (fmap TypeVar tyVars)
           subs <- M.fromList . zip tyVars <$> replicateM (length tyVars) fresh
           ctxt <- use context
@@ -330,12 +374,13 @@ checkDefinition (Binding name expr) = do
   maybeVar <- uses typeTable (M.lookup name)
   case maybeVar of
     Nothing -> do
-      ty <- w expr
+      ctxt <- use context
+      ty <- runWithContext ctxt expr
       context %= M.insert name ty
       return $ M.singleton name expr
-    _ -> throwError $ AlreadyDefined name
+    _ -> throwError $ _AlreadyDefined # name
 
-checkDefinitions :: [Definition] -> Either InferenceError [Definition]
+checkDefinitions :: [Definition] -> Either TypeError [Definition]
 checkDefinitions defs = runExcept $ do
   res <- evalStateT (traverse_ checkDefinition defs) initialInferenceState
   return defs

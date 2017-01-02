@@ -3,7 +3,8 @@
 import           Data.Either
 import           Data.List.NonEmpty    (NonEmpty (..))
 import qualified Data.Map              as M
-import           Lambda                hiding (Identifier)
+import           Lambda.Core.AST       hiding (Identifier)
+import           Lambda.Core.Typecheck
 import           Lambda.Test.Arbitrary
 import           Test.QuickCheck
 
