@@ -58,6 +58,7 @@ executable lambdac
   build-depends:       base
                      , bifunctors
                      , hindley-milner
+                     , optparse-applicative
   default-language:    Haskell2010
 
 test-suite hindley-milner-test
