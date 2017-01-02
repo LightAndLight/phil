@@ -1,48 +1,23 @@
 {-# language FlexibleContexts #-}
 
-module Lambda where
+module Lambda.Core.Typecheck where
 
-import Control.Applicative
 import Control.Lens
-import Control.Monad.Except
-import Control.Monad.State
-import Data.Bifunctor
-import Data.Foldable
-import Data.Maybe
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Monoid
-import Data.List.NonEmpty (NonEmpty(..))
-import qualified Data.List.NonEmpty as N
-import Data.Traversable
 import Data.Set (Set)
 import qualified Data.Set as S
+import Control.Applicative
+import Data.Monoid
+import Data.Maybe
+import Control.Monad.Except
+import Data.List.NonEmpty (NonEmpty(..))
+import qualified Data.List.NonEmpty as N
+import Control.Monad.State
+import Data.Foldable
+import Data.Traversable
 
-import Debug.Trace
-
-type Identifier = String
-
--- Primitive types
-data Prim
-  = Int
-  | String
-  | Char
-  | Bool
-  deriving (Eq, Show, Ord)
-
--- Syntax of types
-data Type
-  = TypeVar String
-  | PrimType Prim
-  | FunType Type Type
-  | PolyType String [Type]
-  deriving (Eq, Show, Ord)
-
--- Syntax of type schemes
-data TypeScheme
-  = Base Type
-  | Forall String TypeScheme
-  deriving (Eq, Show, Ord)
+import Lambda.Core.AST
 
 data InferenceState
   = InferenceState
@@ -70,16 +45,6 @@ instance HasTypeTable InferenceState where
 
 instance HasFreshCount InferenceState where
   freshCount = lens _freshCount (\s c -> s { _freshCount = c })
-
-data Literal = LitInt Int
-             | LitString String
-             | LitChar Char
-             deriving (Eq, Show)
-
-data Pattern = PatId Identifier
-             | PatCon Identifier [Identifier]
-             | PatLit Literal
-             deriving (Eq, Show)
 
 data InferenceError
   = NotInScope [String]
@@ -123,31 +88,6 @@ patType (PatCon conName args) = do
 patType (PatLit (LitInt p)) = return $ PrimType Int
 patType (PatLit (LitString p)) = return $ PrimType String
 patType (PatLit (LitChar p)) = return $ PrimType Char
-
-data ProdDecl = ProdDecl Identifier [Type]
-data FuncDecl = FuncDecl Identifier [Identifier] Expr
-
-data ReplInput
-  = ReplExpr Expr
-  | ReplData DataDecl
-
-data DataDecl = DataDecl Identifier [String] (NonEmpty ProdDecl)
-
-data Decl
-  = DeclData DataDecl
-  | DeclFunc [FuncDecl]
-
--- Syntax of expressions
-data Expr
-  = Id Identifier
-  | Lit Literal
-  | Prod Identifier [Expr]
-  | App Expr Expr
-  | Abs Identifier Expr
-  | Let Identifier Expr Expr
-  | Case Expr (NonEmpty (Pattern,Expr))
-  | Error String
-  deriving (Eq, Show)
 
 freeInType :: Type -> Set Identifier
 freeInType (TypeVar name) = S.singleton name
@@ -351,8 +291,8 @@ buildDataCon (ProdDecl dataCon argTys)
     go [] = ([], id)
     go (var:vars) = bimap (Id var :) (Abs var <$>) $ go vars
 
-checkDecl :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Decl -> m (Map Identifier Expr)
-checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
+checkDefinition :: (HasFreshCount s, HasTypeTable s, HasContext s, MonadState s m, MonadError InferenceError m) => Definition -> m (Map Identifier Expr)
+checkDefinition (Data tyCon tyVars decls) = do
   freshCount .= 0
   M.fromList <$> traverse (checkDataDecl tyCon tyVars) (N.toList decls)
   where
@@ -383,4 +323,4 @@ checkDecl (DeclData (DataDecl tyCon tyVars decls)) = do
           context %= M.insert dataCon (generalize ctxt $ substitute subs conFun)
           return (dataCon, buildDataCon p)
 
-checkDecl (DeclFunc decls) = return M.empty
+checkDecl (Binding name expr) = return M.empty

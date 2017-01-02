@@ -1,15 +1,17 @@
 {
-module Lambda.Parser (ParseError(..), parseProgram, parseExpression, parseExprOrData) where
+module Lambda.Parser (ParseError(..), ReplInput(..), parseProgram, parseExpression, parseExprOrDef) where
 
 import Data.List.NonEmpty (NonEmpty(..), (<|))
 
-import Lambda
 import Lambda.Lexer
+import Lambda.Core.AST hiding (Expr(..), Definition(..))
+import Lambda.Sugar
+
 }
 
 %name parseProgram Start
 %name parseExpression SingleExpr
-%name parseExprOrData SingleExprOrDataDecl
+%name parseExprOrDef ExprOrDef
 %monad { Either ParseError }
 %tokentype { Token }
 %error { parseError }
@@ -42,7 +44,7 @@ import Lambda.Lexer
 
 %%
 
-Start : Decls eof { $1 }
+Start : Definitions eof { $1 }
 
 Args : ident { [$1] }
      | ident Args { $1:$2 }
@@ -65,20 +67,22 @@ Constructor : cons TypeArgs { ProdDecl $1 $2 }
 Constructors : Constructor { $1 :| [] }
              | Constructor '|' Constructors { $1 <| $3 }
 
-DataDecl : data cons Args '=' Constructors { DataDecl $2 $3 $5 }
-         | data cons '=' Constructors { DataDecl $2 [] $4 }
+DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
+               | data cons '=' Constructors { Data $2 [] $4 }
 
-SingleExprOrDataDecl : DataDecl eof { ReplData $1 }
-                     | Expr eof { ReplExpr $1 }
+FunctionDefinition : ident FunctionArgs '=' Expr { FunctionDefinition $1 $2 $4 }
+
+ExprOrDef : DataDefinition eof { ReplDef $1 }
+          | Expr eof { ReplExpr $1 }
 
 FunctionArgs : { [] }
              | ident FunctionArgs { $1:$2 }
 
-Decl : DataDecl eol { DeclData $1 }
-     | ident FunctionArgs '=' Expr eol { DeclFunc [FuncDecl $1 $2 $4] }
+Definition : DataDefinition eol { $1 }
+           | FunctionDefinition eol { Function $1 }
 
-Decls : Decl { [$1] }
-      | Decl Decls { $1:$2 }
+Definitions : Definition { [$1] }
+            | Definition Definitions { $1:$2 }
 
 Literal : int { LitInt $ read $1 }
         | '"' string_lit '"' { LitString $2 }
@@ -106,7 +110,7 @@ Branch : Pattern '->' Expr { ($1,$3) }
 Branches : Branch eol { $1 :| [] }
          | Branch eol Branches { $1 <| $3 }
 
-Let : let ident '=' Expr in Expr { Let $2 $4 $6 }
+Let : let FunctionDefinition in Expr { Let $2 $4 }
 Case : case Expr of Branches { Case $2 $4 }
 Lam : lam ident '.' Expr { Abs $2 $4 }
 
@@ -131,6 +135,9 @@ data ParseError
     | Unexpected Token
     deriving Show
 
+data ReplInput
+  = ReplDef Definition
+  | ReplExpr Expr
 
 parseError [] = Left NoMoreTokens
 parseError (t:ts) = Left $ Unexpected t

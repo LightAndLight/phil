@@ -18,20 +18,23 @@ import System.Exit
 import System.FilePath
 import System.IO
 
-import Lambda
+import Lambda.Core.AST hiding (Definition, Expr)
+import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
+import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
+import Lambda.Core.Typecheck
 import qualified Lambda.Lexer as L (tokenize)
 import Lambda.Lexer hiding (tokenize)
-import qualified Lambda.Parser as P (parseExpression, parseExprOrData)
-import Lambda.Parser hiding (parseExpression, parseExprOrData)
+import qualified Lambda.Parser as P (parseExpression, parseExprOrDef)
+import Lambda.Parser hiding (parseExpression, parseExprOrDef)
 
-type SymbolTable = Map Identifier Expr
+type SymbolTable = Map Identifier C.Expr
 
 class HasSymbolTable s where
-  symbolTable :: Lens' s (Map Identifier Expr)
+  symbolTable :: Lens' s (Map Identifier C.Expr)
 
 data InterpreterState
   = InterpreterState
-    { _interpSymbolTable :: Map Identifier Expr
+    { _interpSymbolTable :: Map Identifier C.Expr
     , _interpTypeTable :: Map Identifier Int
     , _interpContext :: Map Identifier TypeScheme
     , _interpFreshCount :: Int
@@ -62,13 +65,13 @@ data InterpreterError
 tokenize :: MonadError InterpreterError m => String -> m [Token]
 tokenize rest = either (throwError . InterpreterLexError) pure (L.tokenize rest)
 
-parseExpression :: MonadError InterpreterError m => [Token] -> m Expr
+parseExpression :: MonadError InterpreterError m => [Token] -> m S.Expr
 parseExpression toks = either (throwError . InterpreterParseError) pure (P.parseExpression toks)
 
 parseExprOrData :: MonadError InterpreterError m => [Token] -> m ReplInput
-parseExprOrData toks = either (throwError . InterpreterParseError) pure (P.parseExprOrData toks)
+parseExprOrData toks = either (throwError . InterpreterParseError) pure (P.parseExprOrDef toks)
 
-replace :: Identifier -> Expr -> Expr -> Expr
+replace :: Identifier -> C.Expr -> C.Expr -> C.Expr
 replace name (Id name') expr
   | name == name' = expr
   | otherwise = Id name'
@@ -83,7 +86,7 @@ replace name (Let name' expr rest) expr'
 replace name (Case var branches) expr
   = Case (replace name var expr) (fmap (replaceBranch name expr) branches)
   where
-    replaceBranch :: Identifier -> Expr -> (Pattern,Expr) -> (Pattern,Expr)
+    replaceBranch :: Identifier -> C.Expr -> (Pattern,C.Expr) -> (Pattern,C.Expr)
     replaceBranch name expr (p@(PatId name'),b)
       | name == name' = (p,b)
       | otherwise = (p,replace name b expr)
@@ -98,7 +101,7 @@ tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
 
-reduce :: (HasSymbolTable s, MonadState s m, MonadError InterpreterError m) => Expr -> m Expr
+reduce :: (HasSymbolTable s, MonadState s m, MonadError InterpreterError m) => C.Expr -> m C.Expr
 reduce (Error message) = throwError $ RuntimeError message
 reduce (Id name) = do
   maybeExpr <- use (symbolTable . at name)
@@ -184,17 +187,17 @@ printLine str = liftF $ PrintLine str ()
 printString :: MonadFree ReplF m => String -> m ()
 printString str = liftF $ PrintString str ()
 
-evaluate :: (HasTypeTable s, HasContext s, HasFreshCount s, HasSymbolTable s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m Expr
+evaluate :: (HasTypeTable s, HasContext s, HasFreshCount s, HasSymbolTable s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => C.Expr -> m C.Expr
 evaluate expr = do
   usingState (typeCheck expr)
   reduce expr
 
-declare :: (HasTypeTable s, HasSymbolTable s, HasFreshCount s, HasContext s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Decl -> m ()
-declare decl = do
-  exprs <- liftCompile checkDecl decl
+define :: (HasTypeTable s, HasSymbolTable s, HasFreshCount s, HasContext s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => S.Definition -> m ()
+define def = do
+  exprs <- liftCompile checkDefinition $ S.desugar def
   symbolTable %= M.union exprs
 
-typeCheck :: (HasTypeTable s, HasContext s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => Expr -> m TypeScheme
+typeCheck :: (HasTypeTable s, HasContext s, HasFreshCount s, MonadFree ReplF m, MonadError InterpreterError m, MonadState s m) => C.Expr -> m TypeScheme
 typeCheck expr = do
   freshCount .= 0
   usingState $ liftCompile w expr
@@ -230,7 +233,7 @@ showPattern (PatId a) = a
 showPattern (PatCon name args) = name ++ unwords args
 showPattern (PatLit lit) = showLiteral lit
 
-showValue :: Expr -> Maybe String
+showValue :: C.Expr -> Maybe String
 showValue (Id expr) = Just expr
 showValue (Lit lit) = Just $ showLiteral lit
 showValue (Abs name expr) = Just "<Function>"
@@ -246,13 +249,13 @@ repl = flip catchError handleError $ do
     ':':'t':rest -> do
       toks <- tokenize rest
       expr <- parseExpression toks
-      showTypeScheme <$> typeCheck expr
+      showTypeScheme <$> typeCheck (S.desugarExpr expr)
     rest -> do
       toks <- tokenize rest
       input <- parseExprOrData toks
       case input of
-        ReplExpr expr -> fromJust . showValue <$> evaluate expr
-        ReplData dat -> declare (DeclData dat) $> ""
+        ReplExpr expr -> fromJust . showValue <$> evaluate (S.desugarExpr expr)
+        ReplDef dat -> define dat $> ""
   printLine output
   repl
   where
