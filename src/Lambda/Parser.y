@@ -38,6 +38,8 @@ import Lambda.Sugar
     ':' { Token _ TokType }
     '(' { Token _ TokLParen }
     ')' { Token _ TokRParen }
+    '{' { Token _ TokLBrace }
+    '}' { Token _ TokRBrace }
     '"' { Token _ TokDQuote }
     '\'' { Token _ TokSQuote }
     '|' { Token _ TokPipe }
@@ -78,11 +80,11 @@ ExprOrDef : DataDefinition eof { ReplDef $1 }
 FunctionArgs : { [] }
              | ident FunctionArgs { $1:$2 }
 
-Definition : DataDefinition eol { $1 }
-           | FunctionDefinition eol { Function $1 }
+Definition : DataDefinition { $1 }
+           | FunctionDefinition { Function $1 }
 
-Definitions : Definition { [$1] }
-            | Definition Definitions { $1:$2 }
+Definitions : { [] }
+            | Definition eol Definitions { $1:$3 }
 
 Literal : int { LitInt $ read $1 }
         | '"' string_lit '"' { LitString $2 }
@@ -107,11 +109,11 @@ Patterns : Arg { [$1] }
 
 Branch : Pattern '->' Expr { ($1,$3) }
 
-Branches : Branch eol { $1 :| [] }
+Branches : Branch { $1 :| [] }
          | Branch eol Branches { $1 <| $3 }
 
 Let : let FunctionDefinition in Expr { Let $2 $4 }
-Case : case Expr of Branches { Case $2 $4 }
+Case : case Expr of '{' Branches '}' { Case $2 $5 }
 Lam : lam ident '.' Expr { Abs $2 $4 }
 
 ArgExpr : Literal { Lit $1 }

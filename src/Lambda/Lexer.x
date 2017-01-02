@@ -29,6 +29,8 @@ tokens :-
     <0> "->" { \(p,_,_,_) _ -> return $ Token p TokArr }
     <0> "(" { \(p,_,_,_) _ -> return $ Token p TokLParen }
     <0> ")" { \(p,_,_,_) _ -> return $ Token p TokRParen }
+    <0> "{" { \(p,_,_,_) _ -> return $ Token p TokLBrace }
+    <0> "}" { \(p,_,_,_) _ -> return $ Token p TokRBrace }
     <0> \" { beginString }
     <stringSC> (\\.|[^\"])* { \(p,_,_,s) n -> return $ Token p $ TokString (take n s) }
     <stringSC> \" { endString }
@@ -39,7 +41,7 @@ tokens :-
     <0> $lower [$alpha $digit \_ \']* { \(p,_,_,s) n -> return $ Token p $ TokId (take n s) }
     <0> $sym+ { \(p,_,_,s) n -> return $ Token p $ TokOp (take n s) }
     <0> $digit+ { \(p,_,_,s) n -> return $ Token p $ TokNum (take n s) }
-   
+
 {
 
 beginString (p,_,_,_) _ = alexSetStartCode stringSC >> return (Token p $ TokDQuote)
@@ -68,6 +70,8 @@ data TokenType
     | TokEOL
     | TokLParen
     | TokRParen
+    | TokLBrace
+    | TokRBrace
     | TokCons String
     | TokId String
     | TokOp String
