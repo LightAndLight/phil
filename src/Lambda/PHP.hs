@@ -32,17 +32,11 @@ dedent = do
   level <- use indentLevel
   when (level > 0) (indentLevel -= 1)
 
-line :: String -> SourceM ()
-line input = do
-  level <- use indentLevel
-  indentSeq <- use indentSequence
-  output %= flip snoc (join (replicate level indentSeq) <> input <> "\n")
-
 lineWords :: [String] -> SourceM ()
 lineWords = line . unwords
 
-line' :: String -> SourceM ()
-line' input = do
+line :: String -> SourceM ()
+line input = do
   level <- use indentLevel
   indentSeq <- use indentSequence
   output %= flip snoc (join (replicate level indentSeq) <> input)
@@ -71,8 +65,10 @@ indented body = do
 phpToSource :: PHP -> SourceM ()
 phpToSource (PHP decls) = do
   line "<?php"
+  line ""
   traverse phpDeclToSource decls
-  line' "?>"
+  line ""
+  line "?>"
 
 variable :: PHPId -> String
 variable name = "$" <> unPHPId name
@@ -121,7 +117,7 @@ phpExprToSource (PHPExprAssign name expr) = do
     ]
 phpExprToSource (PHPExprFunction args body) = do
   added <- linesAdded . indented $ traverse phpStatementToSource body
-  bracket <- linesAdded $ line' "}"
+  bracket <- linesAdded $ line "}"
   return $ "function" <> bracketed (functionArgsToSource args) <> " {\n" <>
     (unlines . toList $ added) <>
     (head . toList $ bracket)
