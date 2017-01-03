@@ -101,9 +101,13 @@ phpExprToSource (PHPExprBinop op left right) = do
   left' <- phpExprToSource left
   right' <- phpExprToSource right
   return $ unwords
-    [ bracketed left'
+    [ case left of
+        PHPExprBinop{} -> bracketed left'
+        _ -> left'
     , binOpToSource op
-    , bracketed right'
+    , case right of
+        PHPExprBinop{} -> bracketed right'
+        _ -> right'
     ]
 phpExprToSource (PHPExprUnop op arg) = do
   arg' <- phpExprToSource arg
@@ -115,10 +119,13 @@ phpExprToSource (PHPExprAssign name expr) = do
     , "="
     , expr'
     ]
-phpExprToSource (PHPExprFunction args body) = do
+phpExprToSource (PHPExprFunction args use body) = do
   added <- linesAdded . indented $ traverse phpStatementToSource body
   bracket <- linesAdded $ line "}"
-  return $ "function" <> bracketed (functionArgsToSource args) <> " {\n" <>
+  let useVars = case use of
+        Nothing -> ""
+        Just vars -> " use " <> bracketed (functionArgsToSource vars)
+  return $ "function" <> bracketed (functionArgsToSource args) <> useVars <> " {\n" <>
     (unlines . toList $ added) <>
     (head . toList $ bracket)
 phpExprToSource (PHPExprFunctionCall func args) = do
@@ -175,6 +182,16 @@ phpStatementToSource (PHPStatementSwitch cond switches def) = do
   indented $ do
     traverse phpSwitchCaseToSource switches
     phpDefaultCaseToSource def
+  line "}"
+phpStatementToSource (PHPStatementIfThenElse cond ifTrue ifFalse) = do
+  cond' <- phpExprToSource cond
+  lineWords ["if", bracketed cond', "{"]
+  indented $ traverse phpStatementToSource ifTrue
+  case ifFalse of
+    Nothing -> pure ()
+    Just falseStatements -> do
+      line "else {"
+      indented $ traverse phpStatementToSource falseStatements
   line "}"
 phpStatementToSource (PHPStatementThrow expr) = do
   expr' <- phpExprToSource expr

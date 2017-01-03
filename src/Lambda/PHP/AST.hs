@@ -46,7 +46,7 @@ data PHPExpr
   | PHPExprBinop BinOp PHPExpr PHPExpr
   | PHPExprUnop UnOp PHPExpr
   | PHPExprAssign PHPId PHPExpr
-  | PHPExprFunction [PHPId] [PHPStatement]
+  | PHPExprFunction [PHPId] (Maybe [PHPId]) [PHPStatement]
   | PHPExprClassAccess PHPId PHPId (Maybe [PHPExpr])
   | PHPExprFunctionCall PHPExpr [PHPExpr]
 data UnOp
@@ -73,6 +73,7 @@ data PHPStatement
   | PHPStatementSwitch PHPExpr [PHPSwitchCase] PHPDefaultCase
   | PHPStatementThrow PHPExpr
   | PHPStatementExpr PHPExpr
+  | PHPStatementIfThenElse PHPExpr [PHPStatement] (Maybe [PHPStatement])
 data PHPSwitchCase = PHPSwitchCase PHPLiteral [PHPStatement] Bool
 data PHPDefaultCase = PHPDefaultCase [PHPStatement] Bool
 data PHPLiteral
