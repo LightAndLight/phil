@@ -1,21 +1,38 @@
+{-# language TemplateHaskell #-}
+
+import Control.Lens
 import           Control.Monad
-import           Data.Bifunctor
+import Control.Monad.State
+import Control.Monad.Except
+import Control.Monad.Trans
 import           Options.Applicative
 import           System.Environment
 
 import           Lambda.Core.Codegen
 import           Lambda.Core.Typecheck
-import           Lambda.Lexer          (tokenize)
+import           Lambda.Lexer
 import           Lambda.Parser         (parseProgram)
 import qualified Lambda.Parser         as P (ParseError)
+import Lambda.Parser         hiding (ParseError)
 import           Lambda.PHP
 import           Lambda.Sugar
 
 data CompilerError
   = CompilerParseError P.ParseError
-  | CompilerLexError String
+  | CompilerLexError LexError
   | CompilerTypeError TypeError
   deriving Show
+
+makeClassyPrisms ''CompilerError
+
+instance AsTypeError CompilerError where
+  _TypeError = _CompilerTypeError . _TypeError
+
+instance AsParseError CompilerError where
+  _ParseError = _CompilerParseError . _ParseError
+
+instance AsLexError CompilerError where
+  _LexError = _CompilerLexError . _LexError
 
 data CompileOpts
   = CompileOpts
@@ -30,21 +47,31 @@ parseCompileOpts = CompileOpts <$>
   switch
     (long "stdout" <> help "Print source to stdout")
 
-compile :: CompileOpts -> IO ()
-compile opts = do
-  content <- readFile $ filepath opts
-  let genAst = first CompilerLexError . tokenize
-        >=> first CompilerParseError . parseProgram
-        >=> first CompilerTypeError . checkDefinitions . fmap desugar
-  let ast = genAst content
-  case toSource "    " . genPHP <$> ast of
-    Left err -> print err
-    Right res
-      | useStdout opts -> print res
-      | otherwise -> writeFile (filepath opts <> ".php") res
+compile ::
+  ( Show e
+  , AsLexError e
+  , AsParseError e
+  , AsTypeError e
+  , AsCompilerError e
+  , MonadError e m
+  , MonadIO m
+  )
+  => CompileOpts
+  -> m ()
+compile opts = flip catchError (liftIO . print) $ do
+  content <- liftIO . readFile $ filepath opts
+  tokens <- tokenize content
+  initialAST <- parseProgram tokens
+  let desugaredAST = fmap desugar initialAST
+  typecheckedAST <- evalStateT (checkDefinitions desugaredAST) initialInferenceState
+  let phpAST = genPHP typecheckedAST
+  let phpSource = toSource "    " phpAST
+  liftIO $ if useStdout opts
+    then print phpSource
+    else writeFile (filepath opts <> ".php") phpSource
 
-main :: IO ()
-main = execParser opts >>= compile
+main :: IO (Either CompilerError ())
+main = execParser opts >>= runExceptT . compile
   where
     opts = info (helper <*> parseCompileOpts)
       (fullDesc <> progDesc "Compile a Lambda source file" <> header "lambdac - Compiler for the Lambda language")

@@ -58,6 +58,8 @@ executable lambdac
   build-depends:       base
                      , bifunctors
                      , hindley-milner
+                     , lens
+                     , mtl
                      , optparse-applicative
   default-language:    Haskell2010
 

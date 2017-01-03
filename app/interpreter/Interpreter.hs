@@ -1,6 +1,5 @@
 {-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
-{-# language Rank2Types #-}
 {-# language TemplateHaskell #-}
 
 import Control.Lens
@@ -24,10 +23,8 @@ import Lambda.Core.AST hiding (Definition, Expr)
 import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
 import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
 import Lambda.Core.Typecheck
-import qualified Lambda.Lexer as L (tokenize)
-import Lambda.Lexer hiding (tokenize)
-import qualified Lambda.Parser as P (parseExpression, parseExprOrDef)
-import Lambda.Parser hiding (parseExpression, parseExprOrDef)
+import Lambda.Lexer
+import Lambda.Parser
 
 type SymbolTable = Map Identifier C.Expr
 
@@ -60,9 +57,9 @@ instance HasTypeTable InterpreterState where
 
 data InterpreterError
   = NotBound String
-  | InterpreterTypeError TypeError
   | RuntimeError String
-  | InterpreterLexError String
+  | InterpreterTypeError TypeError
+  | InterpreterLexError LexError
   | InterpreterParseError ParseError
   deriving Show
 
@@ -71,14 +68,11 @@ makeClassyPrisms ''InterpreterError
 instance AsTypeError InterpreterError where
   _TypeError = _InterpreterTypeError . _TypeError
 
-tokenize :: (AsInterpreterError e, MonadError e m) => String -> m [Token]
-tokenize rest = either (throwError . review _InterpreterLexError) pure (L.tokenize rest)
+instance AsParseError InterpreterError where
+  _ParseError = _InterpreterParseError . _ParseError
 
-parseExpression :: (AsInterpreterError e, MonadError e m) => [Token] -> m S.Expr
-parseExpression toks = either (throwError . review _InterpreterParseError) pure (P.parseExpression toks)
-
-parseExprOrData :: (AsInterpreterError e, MonadError e m) => [Token] -> m ReplInput
-parseExprOrData toks = either (throwError . review _InterpreterParseError) pure (P.parseExprOrDef toks)
+instance AsLexError InterpreterError where
+  _LexError = _InterpreterLexError . _LexError
 
 replace :: Identifier -> C.Expr -> C.Expr -> C.Expr
 replace name (Id name') expr
@@ -282,6 +276,8 @@ repl ::
   , HasFreshCount s
   , MonadFree ReplF m
   , Show e
+  , AsLexError e
+  , AsParseError e
   , AsTypeError e
   , AsInterpreterError e
   , MonadError e m

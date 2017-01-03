@@ -1,6 +1,18 @@
 {
-module Lambda.Parser (ParseError(..), ReplInput(..), parseProgram, parseExpression, parseExprOrDef) where
+{-# language TemplateHaskell #-}
 
+module Lambda.Parser
+  ( AsParseError(..)
+  , ParseError(..)
+  , ReplInput(..)
+  , parseProgram
+  , parseExpression
+  , parseExprOrData
+  )
+  where
+
+import Control.Lens (Prism', prism', review)
+import Control.Monad.Except
 import Data.List.NonEmpty (NonEmpty(..), (<|))
 
 import Lambda.Lexer
@@ -9,9 +21,9 @@ import Lambda.Sugar
 
 }
 
-%name parseProgram Start
-%name parseExpression SingleExpr
-%name parseExprOrDef ExprOrDef
+%name parseProgramI Start
+%name parseExpressionI SingleExpr
+%name parseExprOrDataI ExprOrDef
 %monad { Either ParseError }
 %tokentype { Token }
 %error { parseError }
@@ -132,10 +144,28 @@ Expr : FunExpr { $1 }
      | Case { $1 }
 
 {
+
 data ParseError
     = NoMoreTokens
     | Unexpected Token
     deriving Show
+
+class AsParseError e where
+  _ParseError :: Prism' e ParseError
+  _NoMoreTokens :: Prism' e ()
+  _Unexpected :: Prism' e Token
+
+  _NoMoreTokens = _ParseError . _NoMoreTokens
+  _Unexpected = _ParseError . _Unexpected
+
+instance AsParseError ParseError where
+  _ParseError = prism' id Just
+  _NoMoreTokens = prism' (const NoMoreTokens) $ \x -> case x of
+    NoMoreTokens -> Just ()
+    _ -> Nothing
+  _Unexpected = prism' Unexpected $ \x -> case x of
+    Unexpected tok -> Just tok
+    _ -> Nothing
 
 data ReplInput
   = ReplDef Definition
@@ -143,4 +173,13 @@ data ReplInput
 
 parseError [] = Left NoMoreTokens
 parseError (t:ts) = Left $ Unexpected t
+
+parseExpression :: (AsParseError e, MonadError e m) => [Token] -> m Expr
+parseExpression = either (throwError . review _ParseError) pure . parseExpressionI
+
+parseExprOrData :: (AsParseError e, MonadError e m) => [Token] -> m ReplInput
+parseExprOrData = either (throwError . review _ParseError) pure . parseExprOrDataI
+
+parseProgram :: (AsParseError e, MonadError e m) => [Token] -> m [Definition]
+parseProgram = either (throwError . review _ParseError) pure . parseProgramI
 }

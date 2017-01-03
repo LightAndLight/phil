@@ -1,30 +1,29 @@
-{-# language FlexibleContexts #-}
-{-# language TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell       #-}
 
 module Lambda.Core.Typecheck where
 
-import Control.Lens
-import Data.Map (Map)
-import qualified Data.Map as M
-import Data.Set (Set)
-import qualified Data.Set as S
-import Control.Applicative
-import Data.Monoid
-import Data.Maybe
-import Control.Monad.Except
-import Data.List.NonEmpty (NonEmpty(..))
-import qualified Data.List.NonEmpty as N
-import Control.Monad.State
-import Control.Monad.Reader
-import Data.Foldable
-import Data.Traversable
+import           Control.Applicative
+import           Control.Lens
+import           Control.Monad.Except
+import           Control.Monad.Reader
+import           Control.Monad.State
+import           Data.Foldable
+import           Data.List.NonEmpty   (NonEmpty (..))
+import qualified Data.List.NonEmpty   as N
+import           Data.Map             (Map)
+import qualified Data.Map             as M
+import           Data.Maybe
+import           Data.Monoid
+import           Data.Set             (Set)
+import qualified Data.Set             as S
+import           Data.Traversable
 
-import Lambda.Core.AST
+import           Lambda.Core.AST
 
 data InferenceState
   = InferenceState
-    { _context :: Map Identifier TypeScheme
-    , _typeTable :: Map Identifier Int
+    { _context    :: Map Identifier TypeScheme
+    , _typeTable  :: Map Identifier Int
     , _freshCount :: Int
     }
 
@@ -380,7 +379,14 @@ checkDefinition (Binding name expr) = do
       return $ M.singleton name expr
     _ -> throwError $ _AlreadyDefined # name
 
-checkDefinitions :: [Definition] -> Either TypeError [Definition]
-checkDefinitions defs = runExcept $ do
-  res <- evalStateT (traverse_ checkDefinition defs) initialInferenceState
-  return defs
+checkDefinitions ::
+  ( HasFreshCount s
+  , HasTypeTable s
+  , HasContext s
+  , MonadState s m
+  , AsTypeError e
+  , MonadError e m
+  )
+  => [Definition]
+  -> m [Definition]
+checkDefinitions defs = traverse_ checkDefinition defs *> pure defs

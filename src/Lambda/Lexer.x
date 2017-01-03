@@ -1,5 +1,8 @@
 {
-module Lambda.Lexer (Token(..), TokenType(..), tokenize) where
+module Lambda.Lexer (AsLexError(..), LexError(..), Token(..), TokenType(..), tokenize) where
+
+import Control.Lens
+import Control.Monad.Except
 }
 
 %wrapper "monad"
@@ -82,11 +85,22 @@ data TokenType
     | TokChar String
     deriving Show
 
-data LexerError = LexerError AlexPosn deriving Show
+newtype LexError = MkLexError { getLexError :: String } deriving Show
+
+class AsLexError e where
+  _LexError :: Prism' e LexError
+  _MkLexError :: Prism' e String
+
+  _MkLexError = _LexError . _MkLexError
+
+instance AsLexError LexError where
+  _LexError = prism' id Just
+  _MkLexError = prism' MkLexError (Just . getLexError)
 
 alexEOF = return TokEOF
 
-tokenize str = runAlex str loop
+tokenize :: (AsLexError e, MonadError e m) => String -> m [Token]
+tokenize str = either (throwError . review _MkLexError) pure $ runAlex str loop
   where
     loop = do
         res <- alexMonadScan
