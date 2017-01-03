@@ -138,8 +138,8 @@ phpExprToSource (PHPExprFunction args use body) = do
   added <- linesAdded . indented $ traverse phpStatementToSource body
   bracket <- linesAdded $ line "}"
   let useVars = case use of
-        Nothing -> ""
-        Just vars -> " use " <> bracketed (functionArgsToSource vars)
+        [] -> ""
+        use -> " use " <> bracketed (functionArgsToSource use)
   return $ "function" <> bracketed (functionArgsToSource args) <> useVars <> " {\n" <>
     (unlines . toList $ added) <>
     (head . toList $ bracket)

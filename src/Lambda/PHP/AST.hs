@@ -1,3 +1,5 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 module Lambda.PHP.AST
   ( PHP(..)
   , PHPId
@@ -20,6 +22,7 @@ import           Data.String
 
 data PHP = PHP [PHPDecl]
 newtype PHPId = PHPId { unPHPId :: String }
+  deriving (Eq, Show, Ord)
 
 phpId :: String -> PHPId
 phpId input = PHPId $ go input
@@ -46,7 +49,7 @@ data PHPExpr
   | PHPExprBinop BinOp PHPExpr PHPExpr
   | PHPExprUnop UnOp PHPExpr
   | PHPExprAssign PHPExpr PHPExpr
-  | PHPExprFunction [PHPId] (Maybe [PHPId]) [PHPStatement]
+  | PHPExprFunction [PHPId] [PHPId] [PHPStatement]
   | PHPExprClassAccess PHPExpr PHPId (Maybe [PHPExpr])
   | PHPExprArrayAccess PHPExpr PHPExpr
   | PHPExprFunctionCall PHPExpr [PHPExpr]

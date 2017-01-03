@@ -65,7 +65,7 @@ compile opts = flip catchError (liftIO . print) $ do
   initialAST <- parseProgram tokens
   let desugaredAST = fmap desugar initialAST
   (typecheckedAST,inferenceState) <- runStateT (checkDefinitions desugaredAST) initialInferenceState
-  let phpAST = genPHP (inferenceState ^. context) typecheckedAST
+  let phpAST = genPHP typecheckedAST
   let phpSource = toSource "    " phpAST
   liftIO $ if useStdout opts
     then print phpSource
