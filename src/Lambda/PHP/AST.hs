@@ -41,14 +41,16 @@ data PHPClassMember
 data Visibility = Public | Protected | Private
 data PHPExpr
   = PHPExprVar PHPId
-  | PHPExprNew PHPId
+  | PHPExprNew PHPId [PHPExpr]
   | PHPExprLiteral PHPLiteral
   | PHPExprBinop BinOp PHPExpr PHPExpr
   | PHPExprUnop UnOp PHPExpr
-  | PHPExprAssign PHPId PHPExpr
+  | PHPExprAssign PHPExpr PHPExpr
   | PHPExprFunction [PHPId] (Maybe [PHPId]) [PHPStatement]
-  | PHPExprClassAccess PHPId PHPId (Maybe [PHPExpr])
+  | PHPExprClassAccess PHPExpr PHPId (Maybe [PHPExpr])
+  | PHPExprArrayAccess PHPExpr PHPExpr
   | PHPExprFunctionCall PHPExpr [PHPExpr]
+  | PHPExprName PHPId
 data UnOp
   = Negate
   | Not
@@ -68,6 +70,7 @@ data BinOp
   | And
   | Or
   | Concat
+  | InstanceOf
 data PHPStatement
   = PHPStatementReturn PHPExpr
   | PHPStatementSwitch PHPExpr [PHPSwitchCase] PHPDefaultCase

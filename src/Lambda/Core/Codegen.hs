@@ -19,8 +19,31 @@ toFunction :: Expr -> Maybe (Expr, Identifier)
 toFunction (Abs varName expr) = Just (expr,varName)
 toFunction _ = Nothing
 
+genConstructor :: ProdDecl -> [PHPDecl]
+genConstructor (ProdDecl name args) = [classDecl, funcDecl]
+  where
+    className = phpId name
+    argNames = take (length args) $ fmap (phpId . (++) "a" . show) [1..]
+    classDecl
+      = PHPDeclClass className
+        [ PHPClassFunc False Public (phpId "__construct") argNames
+          [ PHPStatementExpr $ PHPExprAssign (PHPExprClassAccess (PHPExprVar $ phpId "this") (phpId "values") Nothing) (PHPExprLiteral . PHPArray $ fmap PHPExprVar argNames)]
+        ]
+    funcDecl = case argNames of
+      [] -> PHPDeclFunc className [] [PHPStatementReturn $ PHPExprNew className []]
+      arg:rest -> PHPDeclFunc className [arg] [PHPStatementReturn $ runReader (go rest) [arg]]
+      where
+        go :: MonadReader [PHPId] m => [PHPId] -> m PHPExpr
+        go [] = pure . PHPExprNew className $ fmap PHPExprVar argNames
+        go (arg:rest) = do
+          res <- local (arg :) $ go rest
+          scope <- ask
+          pure $ PHPExprFunction [arg] (Just scope) [PHPStatementReturn res]
+
 genPHPDecl :: MonadState (DList PHPDecl) m => Definition -> m ()
-genPHPDecl (Data name _ constructors) = undefined
+genPHPDecl (Data _ _ constructors) = do
+  let decls = genConstructor =<< N.toList constructors
+  modify $ flip append (fromList decls)
 genPHPDecl (Binding name value)
   = let functionDetails = toFunction value
     in case functionDetails of
@@ -62,12 +85,23 @@ genPHPExpr (Case val branches) = do
     genBranch val (PatId name,res) = do
       let name' = phpId name
       res' <- local (name' :) $ genPHPExpr res
-      pure [PHPStatementExpr $ PHPExprAssign name' val, PHPStatementReturn res']
-    genBranch val (PatCon a1 a2,res) = undefined
+      pure [PHPStatementExpr $ PHPExprAssign (PHPExprVar name') val, PHPStatementReturn res']
     genBranch val (PatLit lit,res) = do
       res' <- genPHPExpr res
       pure [PHPStatementIfThenElse (PHPExprBinop Equal val (PHPExprLiteral $ genPHPLiteral lit)) [PHPStatementReturn res'] Nothing]
-genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] Nothing [PHPStatementThrow $ PHPExprNew $ phpId "Exception"]) []
+    genBranch val (PatCon name args,res) = do
+      let assignments = genBinding <$> zip [0..] args
+      res' <- local (fmap phpId args ++) $ genPHPExpr res
+      pure [PHPStatementIfThenElse (PHPExprBinop InstanceOf val (PHPExprName $ phpId name)) (assignments ++ [PHPStatementReturn res']) Nothing]
+      where
+        genBinding (ix,arg)
+          = PHPStatementExpr $
+              PHPExprAssign
+                (PHPExprVar $ phpId arg)
+                (PHPExprArrayAccess
+                  (PHPExprClassAccess val (phpId "values") Nothing)
+                  (PHPExprLiteral $ PHPInt ix))
+genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] Nothing [PHPStatementThrow $ PHPExprNew (phpId "Exception") []]) []
 
 genPHPAssignment :: MonadReader [PHPId] m => Identifier -> Expr -> m PHPStatement
-genPHPAssignment name value = PHPStatementExpr . PHPExprAssign (phpId name) <$> genPHPExpr value
+genPHPAssignment name value = PHPStatementExpr . PHPExprAssign (PHPExprVar $ phpId name) <$> genPHPExpr value

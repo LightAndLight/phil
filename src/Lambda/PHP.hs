@@ -93,13 +93,24 @@ phpDeclToSource (PHPDeclStatement st) = do
 bracketed :: String -> String
 bracketed input = "(" <> input <> ")"
 
+functionValuesToSource :: [PHPExpr] -> SourceM String
+functionValuesToSource = fmap (bracketed . intercalate ", ") . traverse phpExprToSource
+
 phpExprToSource :: PHPExpr -> SourceM String
 phpExprToSource (PHPExprVar name) = return $ variable name
-phpExprToSource (PHPExprNew className) = return $ "new " <> unPHPId className
+phpExprToSource (PHPExprName name) = return $ unPHPId name
+phpExprToSource (PHPExprNew className args) = do
+  args' <- functionValuesToSource args
+  return $ "new " <> unPHPId className <> args'
 phpExprToSource (PHPExprLiteral lit) = phpLiteralToSource lit
-phpExprToSource (PHPExprClassAccess className memberName args) = do
-  args' <- maybe (return "") (fmap (bracketed . intercalate ", ") . traverse phpExprToSource) args
-  return $ unPHPId className <> "->" <> unPHPId memberName <> args'
+phpExprToSource (PHPExprClassAccess var memberName args) = do
+  var' <- phpExprToSource var
+  args' <- maybe (return "") functionValuesToSource args
+  return $ var' <> "->" <> unPHPId memberName <> args'
+phpExprToSource (PHPExprArrayAccess array index) = do
+  array' <- phpExprToSource array
+  index' <- phpExprToSource index
+  return $ array' <> "[" <> index' <> "]"
 phpExprToSource (PHPExprBinop op left right) = do
   left' <- phpExprToSource left
   right' <- phpExprToSource right
@@ -115,10 +126,11 @@ phpExprToSource (PHPExprBinop op left right) = do
 phpExprToSource (PHPExprUnop op arg) = do
   arg' <- phpExprToSource arg
   return $ unOpToSource op <> bracketed arg'
-phpExprToSource (PHPExprAssign name expr) = do
+phpExprToSource (PHPExprAssign left expr) = do
+  left' <- phpExprToSource left
   expr' <- phpExprToSource expr
   return $ unwords
-    [ variable name
+    [ left'
     , "="
     , expr'
     ]
@@ -149,7 +161,7 @@ classMemberPrefix False visibility = [visibilityToSource visibility]
 
 phpClassMemberToSource :: PHPClassMember -> SourceM ()
 phpClassMemberToSource (PHPClassFunc static visibility name args body) = do
-  lineWords $ classMemberPrefix static visibility <> ["function", unPHPId name <> bracketed (functionArgsToSource args) <> "{"]
+  lineWords $ classMemberPrefix static visibility <> ["function", unPHPId name <> bracketed (functionArgsToSource args) <> " {"]
   indented $ traverse phpStatementToSource body
   line "}"
 phpClassMemberToSource (PHPClassVar static visibility name value) = do
@@ -230,3 +242,4 @@ binOpToSource GreaterEq = ">="
 binOpToSource And = "&&"
 binOpToSource Or = "||"
 binOpToSource Concat = "."
+binOpToSource InstanceOf = "instanceof"
