@@ -67,7 +67,6 @@ phpToSource (PHP decls) = do
   line "<?php"
   line ""
   traverse phpDeclToSource decls
-  line ""
   line "?>"
 
 variable :: PHPId -> String
@@ -81,11 +80,15 @@ phpDeclToSource (PHPDeclFunc name args body) = do
   lineWords ["function", unPHPId name <> bracketed (functionArgsToSource args), "{"]
   indented $ traverse phpStatementToSource body
   line "}"
+  line ""
 phpDeclToSource (PHPDeclClass name members) = do
   lineWords ["class", unPHPId name, "{"]
   indented $ traverse phpClassMemberToSource members
   line "}"
-phpDeclToSource (PHPDeclStatement st) = phpStatementToSource st
+  line ""
+phpDeclToSource (PHPDeclStatement st) = do
+  phpStatementToSource st
+  line ""
 
 bracketed :: String -> String
 bracketed input = "(" <> input <> ")"
