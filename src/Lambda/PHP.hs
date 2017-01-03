@@ -144,9 +144,12 @@ phpExprToSource (PHPExprFunction args use body) = do
     (unlines . toList $ added) <>
     (head . toList $ bracket)
 phpExprToSource (PHPExprFunctionCall func args) = do
-  functionPart <- case func of
-    PHPExprVar name -> pure $ unPHPId name
-    _ -> bracketed <$> phpExprToSource func
+  func' <- phpExprToSource func
+  let functionPart = case func of
+        PHPExprVar{} -> func'
+        PHPExprFunctionCall{} -> func'
+        PHPExprName{} -> func'
+        _ -> bracketed func'
   args' <- traverse phpExprToSource args
   pure $ functionPart <> bracketed (intercalate "," args')
 

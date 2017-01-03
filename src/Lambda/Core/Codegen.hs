@@ -1,19 +1,42 @@
 {-# language FlexibleContexts #-}
+{-# language TemplateHaskell #-}
 
 module Lambda.Core.Codegen (genPHP) where
 
+import Control.Lens
 import Control.Monad.Reader
 import           Control.Monad.State
 import Data.Foldable (traverse_)
 import qualified Data.List.NonEmpty as N
+import Data.Map (Map)
+import qualified Data.Map as M
 import Data.Maybe
-import           Data.DList
+import Data.DList (DList)
+import           qualified Data.DList as D
 
 import           Lambda.Core.AST
+import Lambda.Core.Typecheck
 import           Lambda.PHP.AST
 
-genPHP :: [Definition] -> PHP
-genPHP defs = PHP . toList $ execState (traverse_ genPHPDecl defs) empty
+data CodegenEnv
+  = CodegenEnv
+  { _codegenContext :: Map Identifier TypeScheme
+  , _codegenScope :: [PHPId]
+}
+
+makeClassy ''CodegenEnv
+
+class HasScope s where
+  scope :: Lens' s [PHPId]
+
+instance HasScope CodegenEnv where
+  scope = codegenEnv . codegenScope
+
+instance HasContext CodegenEnv where
+  context = codegenEnv . codegenContext
+
+genPHP :: Map Identifier TypeScheme -> [Definition] -> PHP
+genPHP ctxt defs = PHP . D.toList $ runReader (execStateT (traverse_ genPHPDecl defs) D.empty) (CodegenEnv ctxt [])
 
 toFunction :: Expr -> Maybe (Expr, Identifier)
 toFunction (Abs varName expr) = Just (expr,varName)
@@ -40,58 +63,72 @@ genConstructor (ProdDecl name args) = [classDecl, funcDecl]
           scope <- ask
           pure $ PHPExprFunction [arg] (Just scope) [PHPStatementReturn res]
 
-genPHPDecl :: MonadState (DList PHPDecl) m => Definition -> m ()
+genPHPDecl :: (HasContext r, MonadReader r m, MonadState (DList PHPDecl) m) => Definition -> m ()
 genPHPDecl (Data _ _ constructors) = do
   let decls = genConstructor =<< N.toList constructors
-  modify $ flip append (fromList decls)
+  modify $ flip D.append (D.fromList decls)
 genPHPDecl (Binding name value)
   = let functionDetails = toFunction value
-    in case functionDetails of
-      Nothing -> modify . flip snoc . PHPDeclStatement $ runReader (genPHPAssignment name value) []
-      Just (body,arg) -> do
-        let arg' = phpId arg
-        modify . flip snoc $ PHPDeclFunc (phpId name) [arg'] [PHPStatementReturn $ runReader (genPHPExpr body) [arg']]
+    in do
+      ctxt <- view context
+      case functionDetails of
+        Nothing -> modify . flip D.snoc . PHPDeclStatement $ runReader (genPHPAssignment name value) (CodegenEnv ctxt [])
+        Just (body,arg) -> do
+          let arg' = phpId arg
+          modify . flip D.snoc $ PHPDeclFunc (phpId name) [arg'] [PHPStatementReturn $ runReader (genPHPExpr body) (CodegenEnv ctxt [arg'])]
 
 genPHPLiteral :: Literal -> PHPLiteral
 genPHPLiteral (LitInt i) = PHPInt i
 genPHPLiteral (LitString s) = PHPString s
 genPHPLiteral (LitChar c) = PHPString [c]
 
-genPHPExpr :: MonadReader [PHPId] m => Expr -> m PHPExpr
-genPHPExpr (Id name) = pure . PHPExprVar $ phpId name
+genPHPExpr :: (HasContext r, HasScope r, MonadReader r m) => Expr -> m PHPExpr
+genPHPExpr (Id name) = do
+  maybeTy <- views context (M.lookup name)
+  pure $ case maybeTy of
+    Just ty -> case baseType ty of
+      FunType{} -> PHPExprName $ phpId name
+      _ -> PHPExprVar $ phpId name
+    Nothing -> PHPExprVar $ phpId name
+  where
+    baseType (Base ty) = ty
+    baseType (Forall _ ty) = baseType ty
 genPHPExpr (Lit lit) = pure . PHPExprLiteral $ genPHPLiteral lit
-genPHPExpr (Prod name args) = undefined
+genPHPExpr (Prod name args)
+  = foldr f (pure $ PHPExprFunctionCall (PHPExprName $ phpId name) []) args
+  where
+    f arg call = PHPExprFunctionCall <$> call <*> (pure <$> genPHPExpr arg)
 genPHPExpr (App f x) = do
   f' <- genPHPExpr f
   x' <- genPHPExpr x
   pure $ PHPExprFunctionCall f' [x']
 genPHPExpr (Abs name body) = do
-  scope <- ask
+  sc <- view scope
   let name' = phpId name
-  body' <- local (name' :) $ genPHPExpr body
-  pure $ PHPExprFunction [name'] (Just scope) [PHPStatementReturn body']
+  body' <- local (over scope (name' :)) $ genPHPExpr body
+  pure $ PHPExprFunction [name'] (Just sc) [PHPStatementReturn body']
 genPHPExpr (Let var value rest) = do
   assignment <- genPHPAssignment var value
-  rest' <- local (phpId var :) $ genPHPExpr rest
-  scope <- ask
-  pure $ PHPExprFunctionCall (PHPExprFunction [] (Just scope) [assignment, PHPStatementReturn rest']) []
+  rest' <- local (over scope (phpId var :)) $ genPHPExpr rest
+  sc <- view scope
+  pure $ PHPExprFunctionCall (PHPExprFunction [] (Just sc) [assignment, PHPStatementReturn rest']) []
 genPHPExpr (Case val branches) = do
   val' <- genPHPExpr val
   branches' <- join . N.toList <$> traverse (genBranch val') branches
-  scope <- ask
-  pure $ PHPExprFunctionCall (PHPExprFunction [] (Just scope) branches') []
+  sc <- view scope
+  pure $ PHPExprFunctionCall (PHPExprFunction [] (Just sc) branches') []
   where
-    genBranch :: MonadReader [PHPId] m => PHPExpr -> (Pattern,Expr) -> m [PHPStatement]
+    genBranch :: (HasScope r, HasContext r, MonadReader r m) => PHPExpr -> (Pattern,Expr) -> m [PHPStatement]
     genBranch val (PatId name,res) = do
       let name' = phpId name
-      res' <- local (name' :) $ genPHPExpr res
+      res' <- local (over scope (name' :)) $ genPHPExpr res
       pure [PHPStatementExpr $ PHPExprAssign (PHPExprVar name') val, PHPStatementReturn res']
     genBranch val (PatLit lit,res) = do
       res' <- genPHPExpr res
       pure [PHPStatementIfThenElse (PHPExprBinop Equal val (PHPExprLiteral $ genPHPLiteral lit)) [PHPStatementReturn res'] Nothing]
     genBranch val (PatCon name args,res) = do
       let assignments = genBinding <$> zip [0..] args
-      res' <- local (fmap phpId args ++) $ genPHPExpr res
+      res' <- local (over scope (fmap phpId args ++)) $ genPHPExpr res
       pure [PHPStatementIfThenElse (PHPExprBinop InstanceOf val (PHPExprName $ phpId name)) (assignments ++ [PHPStatementReturn res']) Nothing]
       where
         genBinding (ix,arg)
@@ -103,5 +140,5 @@ genPHPExpr (Case val branches) = do
                   (PHPExprLiteral $ PHPInt ix))
 genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] Nothing [PHPStatementThrow $ PHPExprNew (phpId "Exception") []]) []
 
-genPHPAssignment :: MonadReader [PHPId] m => Identifier -> Expr -> m PHPStatement
+genPHPAssignment :: (HasScope r, HasContext r, MonadReader r m) => Identifier -> Expr -> m PHPStatement
 genPHPAssignment name value = PHPStatementExpr . PHPExprAssign (PHPExprVar $ phpId name) <$> genPHPExpr value
