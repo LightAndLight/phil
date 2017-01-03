@@ -15,11 +15,8 @@ import           Lambda.PHP.AST
 genPHP :: [Definition] -> PHP
 genPHP defs = PHP . toList $ execState (traverse_ genPHPDecl defs) empty
 
-toFunction :: Expr -> Maybe (Expr, [Identifier])
-toFunction (Abs varName expr) = Just $ (varName :) <$> go expr
-  where
-    go (Abs varName' expr') = (varName' :) <$> go expr'
-    go expr' = (expr',[])
+toFunction :: Expr -> Maybe (Expr, Identifier)
+toFunction (Abs varName expr) = Just (expr,varName)
 toFunction _ = Nothing
 
 genPHPDecl :: MonadState (DList PHPDecl) m => Definition -> m ()
@@ -28,9 +25,9 @@ genPHPDecl (Binding name value)
   = let functionDetails = toFunction value
     in case functionDetails of
       Nothing -> modify . flip snoc . PHPDeclStatement $ runReader (genPHPAssignment name value) []
-      Just (body,args) -> do
-        let args' = fmap phpId args
-        modify . flip snoc $ PHPDeclFunc (phpId name) args' [PHPStatementReturn $ runReader (genPHPExpr body) args']
+      Just (body,arg) -> do
+        let arg' = phpId arg
+        modify . flip snoc $ PHPDeclFunc (phpId name) [arg'] [PHPStatementReturn $ runReader (genPHPExpr body) [arg']]
 
 genPHPLiteral :: Literal -> PHPLiteral
 genPHPLiteral (LitInt i) = PHPInt i
