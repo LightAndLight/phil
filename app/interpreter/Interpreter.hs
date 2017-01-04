@@ -118,16 +118,14 @@ reduce (Id name) = do
   case maybeExpr of
     Just expr -> return expr
     Nothing -> throwError $ _NotBound # name
-reduce expr@Lit{} = return expr
-reduce (App func input) = case func of
-  Abs name output -> do
-    input' <- reduce input
-    symbolTable %= M.insert name input
-    reduce $ replace name output input'
-  _ -> App <$> reduce func <*> pure input >>= reduce
-reduce (Abs name expr) = do
-  symbolTable %= M.insert name (Id name)
-  Abs name <$> reduce expr
+reduce (App func input) = do
+  func' <- reduce func
+  input' <- reduce input
+  case func' of
+    Abs name output -> do
+      symbolTable %= M.insert name input'
+      reduce output
+    _ -> error "Tried to apply a value to a non-function expression"
 reduce (Let name expr rest) = do
   expr' <- reduce expr
   symbolTable %= M.insert name expr'
@@ -140,6 +138,7 @@ reduce c@(Case var (b :| bs)) = do
   where
     inexhaustiveCase = Error "Inexhaustive case expression"
     tryBranch expr (PatId name,b) [] = reduce $ replace name b expr
+    tryBranch expr (PatWildcard,b) [] = reduce b
     tryBranch expr (PatCon con args,b) [] = do
       expr' <- reduce expr
       case expr' of
@@ -161,6 +160,7 @@ reduce c@(Case var (b :| bs)) = do
         Error _ -> tryBranch expr b bs
         _ -> reduce res
 reduce (Prod name args) = Prod name <$> traverse reduce args
+reduce expr = pure expr
 
 data ReplF a
   = Read (String -> a)
