@@ -52,8 +52,8 @@ toFunction _ = Nothing
 genConstructor :: ProdDecl -> [PHPDecl]
 genConstructor (ProdDecl name args) = [classDecl, funcDecl]
   where
-    className = phpId name
     argNames = take (length args) $ fmap (phpId . (++) "a" . show) [1..]
+    className = phpId $ name ++ "Con"
     classDecl
       = PHPDeclClass className
         [ PHPClassFunc False Public (phpId "__construct") argNames
@@ -69,7 +69,7 @@ genConstructor (ProdDecl name args) = [classDecl, funcDecl]
           res <- local (arg :) $ go rest
           scope <- ask
           pure $ PHPExprFunction [arg] scope [PHPStatementReturn res]
-    funcDecl = PHPDeclStatement . PHPStatementExpr $ PHPExprAssign (PHPExprVar className) func
+    funcDecl = PHPDeclStatement . PHPStatementExpr $ PHPExprAssign (PHPExprVar $ phpId name) func
 
 genPHPDecl :: (HasCode s, HasScope s, MonadState s m) => Definition -> m ()
 genPHPDecl (Data _ _ constructors) = do
@@ -134,7 +134,7 @@ genPHPExpr (Case val branches) = do
       let assignments = genBinding <$> zip [0..] args'
       res' <- genPHPExpr res
       scope %= flip (foldr S.delete) localArgs
-      pure [PHPStatementIfThenElse (PHPExprBinop InstanceOf val (PHPExprName $ phpId name)) (assignments ++ [PHPStatementReturn res']) Nothing]
+      pure [PHPStatementIfThenElse (PHPExprBinop InstanceOf val (PHPExprName . phpId $ name ++ "Con")) (assignments ++ [PHPStatementReturn res']) Nothing]
       where
         genBinding (ix,arg)
           = PHPStatementExpr $
