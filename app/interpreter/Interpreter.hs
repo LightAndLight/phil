@@ -3,6 +3,7 @@
 {-# language TemplateHaskell #-}
 
 import Control.Lens
+import Data.Foldable
 import Data.Bifunctor
 import Control.Monad.Except
 import Control.Monad.Free
@@ -74,32 +75,6 @@ instance AsParseError InterpreterError where
 instance AsLexError InterpreterError where
   _LexError = _InterpreterLexError . _LexError
 
-replace :: Identifier -> C.Expr -> C.Expr -> C.Expr
-replace name (Id name') expr
-  | name == name' = expr
-  | otherwise = Id name'
-replace name expr@Lit{} _ = expr
-replace name (Abs name' expr) expr'
-  | name == name' = Abs name' expr
-  | otherwise = Abs name' (replace name expr expr')
-replace name (App f x) expr = App (replace name f expr) (replace name x expr)
-replace name (Let name' expr rest) expr'
-  | name == name' = Let name' expr rest
-  | otherwise = Let name' (replace name expr expr') (replace name rest expr')
-replace name (Case var branches) expr
-  = Case (replace name var expr) (fmap (replaceBranch name expr) branches)
-  where
-    replaceBranch :: Identifier -> C.Expr -> (Pattern,C.Expr) -> (Pattern,C.Expr)
-    replaceBranch name expr (p@(PatId name'),b)
-      | name == name' = (p,b)
-      | otherwise = (p,replace name b expr)
-    replaceBranch name expr (p@(PatCon conName args),b)
-      | name `elem` args = (p,b)
-      | otherwise = (p,replace name b expr)
-    replaceBranch name expr (p,b) = (p,replace name b expr)
-replace name (Prod conName vals) expr = Prod conName $ fmap (flip (replace name) expr) vals
-replace name e _ = e
-
 tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
@@ -137,23 +112,26 @@ reduce c@(Case var (b :| bs)) = do
     _ -> tryBranch var' b bs
   where
     inexhaustiveCase = Error "Inexhaustive case expression"
-    tryBranch expr (PatId name,b) [] = reduce $ replace name b expr
+    tryBranch expr (PatId name,b) [] = do
+      symbolTable %= M.insert name expr
+      reduce b
     tryBranch expr (PatWildcard,b) [] = reduce b
     tryBranch expr (PatCon con args,b) [] = do
       expr' <- reduce expr
       case expr' of
         Prod name vals
-          | con == name -> reduce . foldr (\(a,v) e -> replace a e v) b $ zip args vals
+          | con == name -> do
+              for_ (zip args vals) $ \(a,v) -> symbolTable %= M.insert a v
+              reduce b
           | otherwise  -> return inexhaustiveCase
         _ -> error "Structure pattern in branch but matching on non-structured value"
-    tryBranch expr br@(p,b) [] = do
+    tryBranch expr (PatLit l,b) [] = do
       expr' <- reduce expr
       return $ case expr' of
-        Id a -> b
-        Lit a
-          | p == PatLit a -> b
+        Lit l'
+          | l == l' -> b
           | otherwise -> inexhaustiveCase
-        _ -> error "Pattern match on invalid expression"
+        _ -> error "Literal in branch but matching on non-literal value"
     tryBranch expr br (b:bs) = do
       res <- tryBranch expr br []
       case res of
