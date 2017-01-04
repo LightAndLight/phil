@@ -157,7 +157,6 @@ evaluate ::
   , HasContext s
   , HasFreshCount s
   , HasSymbolTable s
-  , MonadFree ReplF m
   , AsTypeError e
   , AsInterpreterError e
   , MonadError e m
@@ -175,7 +174,6 @@ define ::
   , HasSymbolTable s
   , HasFreshCount s
   , HasContext s
-  , MonadFree ReplF m
   , AsTypeError e
   , MonadError e m
   , MonadState s m
@@ -190,7 +188,6 @@ typeCheck ::
   ( HasTypeTable s
   , HasContext s
   , HasFreshCount s
-  , MonadFree ReplF m
   , AsTypeError e
   , MonadError e m
   , MonadState s m
