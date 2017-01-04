@@ -24,6 +24,8 @@ tokens :-
     <0> let { \(p,_,_,_) _ -> return $ Token p TokLet }
     <0> in { \(p,_,_,_) _ -> return $ Token p TokIn }
     <0> forall { \(p,_,_,_) _ -> return $ Token p TokForall }
+    <0> true { \(p,_,_,_) _ -> return $ Token p TokTrue }
+    <0> false { \(p,_,_,_) _ -> return $ Token p TokFalse }
     <0> "=" { \(p,_,_,_) _ -> return $ Token p TokEq }
     <0> \\ { \(p,_,_,_) _ -> return $ Token p TokLam }
     <0> "." { \(p,_,_,_) _ -> return $ Token p TokDot }
@@ -83,6 +85,8 @@ data TokenType
     | TokSQuote
     | TokString String
     | TokChar String
+    | TokTrue
+    | TokFalse
     deriving Show
 
 newtype LexError = MkLexError { getLexError :: String } deriving Show

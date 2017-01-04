@@ -76,6 +76,7 @@ genPHPDecl (Data _ _ constructors) = do
   let decls = genConstructor =<< N.toList constructors
   code %= flip D.append (D.fromList decls)
 genPHPDecl (Binding name value) = do
+  scope .= S.empty
   assignment <- genPHPAssignment name value
   code %= flip D.snoc (PHPDeclStatement assignment)
 
@@ -83,6 +84,7 @@ genPHPLiteral :: Literal -> PHPLiteral
 genPHPLiteral (LitInt i) = PHPInt i
 genPHPLiteral (LitString s) = PHPString s
 genPHPLiteral (LitChar c) = PHPString [c]
+genPHPLiteral (LitBool b) = PHPBool b
 
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
 genPHPExpr (Id name) = do

@@ -104,6 +104,7 @@ patType (PatCon conName args) = do
 patType (PatLit (LitInt p)) = return (M.empty,PrimType Int)
 patType (PatLit (LitString p)) = return (M.empty,PrimType String)
 patType (PatLit (LitChar p)) = return (M.empty,PrimType Char)
+patType (PatLit (LitBool p)) = return (M.empty,PrimType Bool)
 
 freeInType :: Type -> Set Identifier
 freeInType (TypeVar name) = S.singleton name

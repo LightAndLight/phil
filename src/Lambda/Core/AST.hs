@@ -6,6 +6,7 @@ data Prim
   = Int
   | String
   | Char
+  | Bool
   deriving (Eq, Show, Ord)
 
 data Type
@@ -25,6 +26,7 @@ type Identifier = String
 data Literal = LitInt Int
              | LitString String
              | LitChar Char
+             | LitBool Bool
              deriving (Eq, Show)
 
 data Pattern = PatId Identifier

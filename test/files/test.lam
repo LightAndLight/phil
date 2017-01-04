@@ -9,3 +9,5 @@ data Maybe a = Just a | Nothing
 maybe nothing just m = case m of { Nothing -> nothing; Just a -> just a }
 
 test = maybe 0 f (Just 2)
+
+ifThenElse trueCase falseCase cond = case cond of { true -> trueCase; false -> falseCase }

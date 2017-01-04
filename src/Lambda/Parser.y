@@ -36,6 +36,8 @@ import Lambda.Sugar
     let { Token _ TokLet }
     in { Token _ TokIn }
     forall { Token _ TokForall }
+    true { Token _ TokTrue }
+    false { Token _ TokFalse }
     cons { Token _ (TokCons $$) }
     ident { Token _ (TokId $$) }
     op { Token _ (TokOp $$) }
@@ -101,6 +103,8 @@ Definitions : { [] }
 Literal : int { LitInt $ read $1 }
         | '"' string_lit '"' { LitString $2 }
         | '\'' char_lit '\'' { LitChar $ head $2 }
+        | true { LitBool True }
+        | false { LitBool False }
 
 NoArgCon : cons { PatCon $1 [] }
 
