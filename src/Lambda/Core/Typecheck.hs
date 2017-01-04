@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE FlexibleContexts       #-}
 
 module Lambda.Core.Typecheck where
 
@@ -8,6 +9,7 @@ import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Foldable
+import Data.List
 import           Data.List.NonEmpty   (NonEmpty (..))
 import qualified Data.List.NonEmpty   as N
 import           Data.Map             (Map)
@@ -20,17 +22,23 @@ import           Data.Traversable
 
 import           Lambda.Core.AST
 
+import Debug.Trace
+
 data InferenceState
   = InferenceState
     { _context    :: Map Identifier TypeScheme
+    , _typesignatures :: Map Identifier TypeScheme
     , _typeTable  :: Map Identifier Int
     , _freshCount :: Int
     }
 
-initialInferenceState = InferenceState M.empty M.empty 0
+initialInferenceState = InferenceState M.empty M.empty M.empty 0
 
 class HasContext s where
   context :: Lens' s (Map Identifier TypeScheme)
+
+class HasTypesignatures s where
+  typesignatures :: Lens' s (Map Identifier TypeScheme)
 
 -- Currently the only information stored in this table is the arity of a type
 -- contructor
@@ -42,6 +50,9 @@ class HasFreshCount s where
 
 instance HasContext InferenceState where
   context = lens _context (\s c -> s { _context = c })
+
+instance HasTypesignatures InferenceState where
+  typesignatures = lens _typesignatures (\s c -> s { _typesignatures = c })
 
 instance HasTypeTable InferenceState where
   typeTable = lens _typeTable (\s t -> s { _typeTable = t })
@@ -58,6 +69,8 @@ data TypeError
   | TooManyArguments TypeScheme
   | WrongArity [Type]
   | NotDefined Identifier
+  | DuplicateTypeSignatures Identifier
+  | FreeTypeVar Identifier
   deriving (Eq, Show)
 
 makeClassyPrisms ''TypeError
@@ -237,6 +250,49 @@ mgu ty ty'
   | ty == ty' = return M.empty
   | otherwise = throwError $ _TypeMismatch # (ty,ty')
 
+unify :: (AsTypeError e, MonadError e m) => TypeScheme -> TypeScheme -> m ()
+unify ty ty' = runReaderT (unify' ty ty') (S.empty,S.empty)
+  where
+    unify' (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
+    unify' (Forall a ty) ty' = local (over _1 $ S.insert a) $ unify' ty ty'
+    unify' ty (Forall a ty') = local (over _2 $ S.insert a) $ unify' ty ty'
+
+    unifyBase ty@(TypeVar name) ty'@(TypeVar name') = do
+      free <- views _1 (not . S.member name)
+      when free . throwError $ _FreeTypeVar # name
+      free <- views _2 (not . S.member name')
+      when free . throwError $ _FreeTypeVar # name'
+      maybeTy <- gets $ M.lookup name
+      case maybeTy of
+        Nothing -> modify $ M.insert name ty'
+        Just ty -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
+      maybeTy <- gets $ M.lookup name'
+      case maybeTy of
+        Nothing -> modify $ M.insert name' ty
+        Just ty' -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
+    unifyBase (TypeVar name) ty' = do
+      free <- views _1 (not . S.member name)
+      when free . throwError $ _FreeTypeVar # name
+      maybeTy <- gets $ M.lookup name
+      case maybeTy of
+        Nothing -> modify $ M.insert name ty'
+        Just ty -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
+    unifyBase ty (TypeVar name) = do
+      free <- views _2 (not . S.member name)
+      when free . throwError $ _FreeTypeVar # name
+      maybeTy <- gets $ M.lookup name
+      case maybeTy of
+        Nothing -> modify $ M.insert name ty
+        Just ty' -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
+    unifyBase (FunType from to) (FunType from' to') = do
+      unifyBase from from'
+      unifyBase to to'
+    unifyBase ty@(PolyType tyName tys) ty'@(PolyType tyName' tys')
+      | tyName == tyName' = fold <$> traverse (uncurry unifyBase) (zip tys tys')
+      | otherwise = throwError $ _TypeMismatch # (ty,ty')
+    unifyBase ty ty' = when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
+
+
 runW :: Expr -> Either TypeError TypeScheme
 runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
 
@@ -344,6 +400,7 @@ checkDefinition ::
   ( HasFreshCount s
   , HasTypeTable s
   , HasContext s
+  , HasTypesignatures s
   , MonadState s m
   , AsTypeError e
   , MonadError e m
@@ -388,18 +445,37 @@ checkDefinition (Binding name expr) = do
     Nothing -> do
       ctxt <- use context
       ty <- runWithContext ctxt expr
+      maybeSig <- use (typesignatures . at name)
+      case maybeSig of
+        Nothing -> pure ()
+        Just expected -> unify ty expected
       context %= M.insert name ty
       return $ M.singleton name expr
     _ -> throwError $ _AlreadyDefined # name
+
+checkDefinition (TypeSignature name ty) = do
+  maybeSig <- use (typesignatures . at name)
+  case maybeSig of
+    Nothing -> typesignatures %= M.insert name ty
+    _ -> throwError $ _DuplicateTypeSignatures # name
+  pure M.empty
 
 checkDefinitions ::
   ( HasFreshCount s
   , HasTypeTable s
   , HasContext s
+  , HasTypesignatures s
   , MonadState s m
   , AsTypeError e
   , MonadError e m
   )
   => [Definition]
   -> m [Definition]
-checkDefinitions defs = traverse_ checkDefinition defs *> pure defs
+checkDefinitions defs
+  = let (typeSigs,rest) = partition isTypeSignature defs
+    in do
+      traverse_ checkDefinition typeSigs
+      traverse_ checkDefinition rest *> pure rest
+  where
+    isTypeSignature TypeSignature{} = True
+    isTypeSignature _ = False

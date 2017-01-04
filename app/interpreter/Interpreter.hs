@@ -37,19 +37,23 @@ data InterpreterState
   = InterpreterState
     { _interpSymbolTable :: Map Identifier C.Expr
     , _interpTypeTable :: Map Identifier Int
+    , _interpTypesignatures :: Map Identifier TypeScheme
     , _interpContext :: Map Identifier TypeScheme
     , _interpFreshCount :: Int
     }
 
 makeClassy ''InterpreterState
 
-initialInterpreterState = InterpreterState M.empty M.empty M.empty 0
+initialInterpreterState = InterpreterState M.empty M.empty M.empty M.empty 0
 
 instance HasSymbolTable InterpreterState where
   symbolTable = interpreterState . interpSymbolTable
 
 instance HasContext InterpreterState where
   context = interpreterState . interpContext
+
+instance HasTypesignatures InterpreterState where
+  typesignatures = interpreterState . interpTypesignatures
 
 instance HasFreshCount InterpreterState where
   freshCount = interpreterState . interpFreshCount
@@ -174,6 +178,7 @@ define ::
   , HasSymbolTable s
   , HasFreshCount s
   , HasContext s
+  , HasTypesignatures s
   , AsTypeError e
   , MonadError e m
   , MonadState s m
@@ -242,6 +247,7 @@ showValue _ = Nothing
 repl ::
   ( HasTypeTable s
   , HasContext s
+  , HasTypesignatures s
   , HasSymbolTable s
   , HasFreshCount s
   , MonadFree ReplF m

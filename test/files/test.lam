@@ -1,5 +1,7 @@
+f : forall a. a -> a
 f x = x
 
+g : forall b. b -> b
 g x = f x
 
 h x = let f = 2 in f
