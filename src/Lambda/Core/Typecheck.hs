@@ -251,17 +251,9 @@ mgu ty ty'
   | otherwise = throwError $ _TypeMismatch # (ty,ty')
 
 unify :: (AsTypeError e, MonadError e m) => TypeScheme -> TypeScheme -> m ()
-unify ty ty' = runReaderT (unify' ty ty') (S.empty,S.empty)
+unify (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
   where
-    unify' (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
-    unify' (Forall a ty) ty' = local (over _1 $ S.insert a) $ unify' ty ty'
-    unify' ty (Forall a ty') = local (over _2 $ S.insert a) $ unify' ty ty'
-
     unifyBase ty@(TypeVar name) ty'@(TypeVar name') = do
-      free <- views _1 (not . S.member name)
-      when free . throwError $ _FreeTypeVar # name
-      free <- views _2 (not . S.member name')
-      when free . throwError $ _FreeTypeVar # name'
       maybeTy <- gets $ M.lookup name
       case maybeTy of
         Nothing -> modify $ M.insert name ty'
@@ -271,15 +263,11 @@ unify ty ty' = runReaderT (unify' ty ty') (S.empty,S.empty)
         Nothing -> modify $ M.insert name' ty
         Just ty' -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
     unifyBase (TypeVar name) ty' = do
-      free <- views _1 (not . S.member name)
-      when free . throwError $ _FreeTypeVar # name
       maybeTy <- gets $ M.lookup name
       case maybeTy of
         Nothing -> modify $ M.insert name ty'
         Just ty -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
     unifyBase ty (TypeVar name) = do
-      free <- views _2 (not . S.member name)
-      when free . throwError $ _FreeTypeVar # name
       maybeTy <- gets $ M.lookup name
       case maybeTy of
         Nothing -> modify $ M.insert name ty
@@ -291,7 +279,8 @@ unify ty ty' = runReaderT (unify' ty ty') (S.empty,S.empty)
       | tyName == tyName' = fold <$> traverse (uncurry unifyBase) (zip tys tys')
       | otherwise = throwError $ _TypeMismatch # (ty,ty')
     unifyBase ty ty' = when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-
+unify (Forall a ty) ty' = unify ty ty'
+unify ty (Forall a ty') = unify ty ty'
 
 runW :: Expr -> Either TypeError TypeScheme
 runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
@@ -456,9 +445,24 @@ checkDefinition (Binding name expr) = do
 checkDefinition (TypeSignature name ty) = do
   maybeSig <- use (typesignatures . at name)
   case maybeSig of
-    Nothing -> typesignatures %= M.insert name ty
+    Nothing -> do
+      runReaderT (validateSig ty) S.empty
+      typesignatures %= M.insert name ty
     _ -> throwError $ _DuplicateTypeSignatures # name
   pure M.empty
+  where
+    validateSig (Forall name ty) = local (S.insert name) $ validateSig ty
+    validateSig (Base ty) = validateType ty
+
+    validateType (TypeVar ty) = do
+      bound <- ask
+      unless (ty `S.member` bound) . throwError $ _FreeTypeVar # ty
+    validateType (PrimType ty) = pure ()
+    validateType (FunType from to) = validateType from >> validateType to
+    validateType (PolyType name args) = do
+      declared <- uses typeTable (M.member name)
+      unless declared . throwError $ _NotDefined # name
+      traverse_ validateType args
 
 checkDefinitions ::
   ( HasFreshCount s
@@ -472,10 +476,15 @@ checkDefinitions ::
   => [Definition]
   -> m [Definition]
 checkDefinitions defs
-  = let (typeSigs,rest) = partition isTypeSignature defs
+  = let (dataDefs,rest) = partition isDataDef defs
+        (typeSigs,bindings) = partition isTypeSignature rest
     in do
+      traverse_ checkDefinition dataDefs
       traverse_ checkDefinition typeSigs
-      traverse_ checkDefinition rest *> pure rest
+      traverse_ checkDefinition bindings *> pure (dataDefs ++ bindings)
   where
     isTypeSignature TypeSignature{} = True
     isTypeSignature _ = False
+
+    isDataDef Data{} = True
+    isDataDef _ = False

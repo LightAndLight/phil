@@ -46,6 +46,10 @@ import Lambda.Sugar
     char_lit { Token _ (TokChar $$) }
     eof { TokEOF }
     lam { Token _ TokLam }
+    intType { Token _ TokIntType }
+    stringType { Token _ TokStringType }
+    charType { Token _ TokCharType }
+    boolType { Token _ TokBoolType }
     '=' { Token _ TokEq }
     '_' { Token _ TokWildcard }
     '.' { Token _ TokDot }
@@ -66,15 +70,21 @@ Start : Definitions eof { $1 }
 Args : ident { [$1] }
      | ident Args { $1:$2 }
 
-PolyType : cons A TypeArgs { PolyType $1 ($2:$3) }
+Ty : B { $1 }
+   | B '->' Ty { FunType $1 $3 }
 
-B : A { $1 }
-  | A '->' B { FunType $1 $3 }
-  | PolyType { $1 }
+B : cons TypeArgs { PolyType $1 $2 }
+  | A { $1 }
 
-A : cons { PolyType $1 [] }
-  | ident { TypeVar $1 }
-  | '(' B ')' { $2 }
+A : ident { TypeVar $1 }
+  | PrimType { PrimType $1 }
+  | '(' Ty ')' { $2 }
+
+PrimType : intType { Int }
+         | stringType { String }
+         | charType { Char }
+         | boolType { Bool }
+
 
 TypeArgs : { [] }
          | A TypeArgs { $1:$2 }
@@ -87,8 +97,8 @@ Constructors : Constructor { $1 :| [] }
 DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
                | data cons '=' Constructors { Data $2 [] $4 }
 
-QuantifiedType : B { Base $1 }
-               | forall Args '.' B { foldr Forall (Base $4) $2 }
+QuantifiedType : Ty { Base $1 }
+               | forall Args '.' Ty { foldr Forall (Base $4) $2 }
 
 TypeSignature : ident ':' QuantifiedType { TypeSignature $1 $3 }
 
