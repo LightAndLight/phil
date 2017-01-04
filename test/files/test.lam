@@ -6,6 +6,6 @@ h x = let f = 2 in f
 
 data Maybe a = Just a | Nothing
 
-maybe a f m = case m of { Nothing -> a; Just a -> f a }
+maybe nothing just m = case m of { Nothing -> nothing; Just a -> just a }
 
 test = maybe 0 f (Just 2)
