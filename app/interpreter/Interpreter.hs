@@ -8,6 +8,7 @@ import Data.Bifunctor
 import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.Trans
+import Control.Monad.Reader
 import Control.Monad.State
 import Data.Functor
 import Data.List.NonEmpty (NonEmpty(..))
@@ -80,8 +81,7 @@ tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
 
 reduce ::
-  ( HasSymbolTable s
-  , MonadState s m
+  ( MonadReader (Map Identifier C.Expr) m
   , AsInterpreterError e
   , MonadError e m
   )
@@ -89,7 +89,7 @@ reduce ::
   -> m C.Expr
 reduce (Error message) = throwError $ _RuntimeError # message
 reduce (Id name) = do
-  maybeExpr <- use (symbolTable . at name)
+  maybeExpr <- view $ at name
   case maybeExpr of
     Just expr -> return expr
     Nothing -> throwError $ _NotBound # name
@@ -97,14 +97,11 @@ reduce (App func input) = do
   func' <- reduce func
   input' <- reduce input
   case func' of
-    Abs name output -> do
-      symbolTable %= M.insert name input'
-      reduce output
+    Abs name output -> local (M.insert name input') $ reduce output
     _ -> error "Tried to apply a value to a non-function expression"
 reduce (Let name expr rest) = do
   expr' <- reduce expr
-  symbolTable %= M.insert name expr'
-  reduce rest
+  local (M.insert name expr') $ reduce rest
 reduce c@(Case var (b :| bs)) = do
   var' <- reduce var
   case var' of
@@ -112,17 +109,13 @@ reduce c@(Case var (b :| bs)) = do
     _ -> tryBranch var' b bs
   where
     inexhaustiveCase = Error "Inexhaustive case expression"
-    tryBranch expr (PatId name,b) [] = do
-      symbolTable %= M.insert name expr
-      reduce b
+    tryBranch expr (PatId name,b) [] = local (M.insert name expr) $ reduce b
     tryBranch expr (PatWildcard,b) [] = reduce b
     tryBranch expr (PatCon con args,b) [] = do
       expr' <- reduce expr
       case expr' of
         Prod name vals
-          | con == name -> do
-              for_ (zip args vals) $ \(a,v) -> symbolTable %= M.insert a v
-              reduce b
+          | con == name -> local (flip (foldr (uncurry M.insert)) (zip args vals)) $ reduce b
           | otherwise  -> return inexhaustiveCase
         _ -> error "Structure pattern in branch but matching on non-structured value"
     tryBranch expr (PatLit l,b) [] = do
@@ -174,7 +167,8 @@ evaluate ::
 evaluate expr = do
   ctxt <- use context
   runWithContext ctxt expr
-  reduce expr
+  table <- use symbolTable
+  runReaderT (reduce expr) table
 
 define ::
   ( HasTypeTable s
