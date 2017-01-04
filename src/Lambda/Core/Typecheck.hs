@@ -278,6 +278,7 @@ w e = do
         (Lit (LitInt e)) -> return (M.empty,PrimType Int)
         (Lit (LitString e)) -> return (M.empty,PrimType String)
         (Lit (LitChar e)) -> return (M.empty,PrimType Char)
+        (Lit (LitBool e)) -> return (M.empty,PrimType Bool)
         (App f x) -> do
           (s1,t1) <- w' f
           local (over context $ substituteContext s1) $ do
