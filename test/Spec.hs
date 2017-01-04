@@ -26,11 +26,12 @@ constTypeSubbedB (Identifier a) b
 constTypeSubbedAB :: Type -> Type -> TypeScheme
 constTypeSubbedAB a b = Base $ FunType a (FunType b a)
 
-prop_specialize_equivalent :: Identifier
-                     -> Identifier
-                     -> Identifier
-                     -> Identifier
-                     -> Property
+prop_specialize_equivalent
+  :: Identifier
+  -> Identifier
+  -> Identifier
+  -> Identifier
+  -> Property
 prop_specialize_equivalent a b a' b'
   = a /= b && a' /= b'
     ==> let right = constType a' b'
@@ -54,10 +55,11 @@ prop_specialize_const_good a b b'
     ==> let right = constTypeSubbedB a b'
         in specialize (constType a b) right
 
-prop_specialize_const_bad :: Identifier
-                          -> Type
-                          -> Type
-                          -> Property
+prop_specialize_const_bad
+  :: Identifier
+  -> Type
+  -> Type
+  -> Property
 prop_specialize_const_bad a b b'
   = b /= b' ==> not (specialize (constTypeSubbedB a b) (constTypeSubbedB a b'))
 

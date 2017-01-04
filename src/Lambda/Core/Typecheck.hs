@@ -130,7 +130,7 @@ boundInContext :: Map Identifier TypeScheme -> Set Identifier
 boundInContext
   = foldl (\bounds (name,ty) -> bounds `S.union` snd (bound ty)) S.empty . M.toList
 
-type Substitutions = Map Identifier Type
+type Substitution = Map Identifier Type
 
 specializeTypes :: Set Identifier -> Type -> Type -> Bool
 specializeTypes names ty ty'
@@ -139,7 +139,7 @@ specializeTypes names ty ty'
     canSpecializeMulti names a a' b b'
       = liftA2 (&&) (canSpecialize names a a') (canSpecialize names b b')
 
-    canSpecialize :: Set Identifier -> Type -> Type -> State Substitutions Bool
+    canSpecialize :: Set Identifier -> Type -> Type -> State Substitution Bool
     canSpecialize names (TypeVar name) ty' = do
       sub <- gets $ M.lookup name
       case sub of
@@ -176,17 +176,17 @@ generalize ctxt ty
       (Base ty)
       (freeInType ty `S.difference` free ctxt)
 
-substitute :: Substitutions -> Type -> Type
+substitute :: Substitution -> Type -> Type
 substitute subs ty@(TypeVar name) = fromMaybe ty $ M.lookup name subs
 substitute subs (FunType from to) = FunType (substitute subs from) (substitute subs to)
 substitute subs (PolyType tyName tys) = PolyType tyName $ map (substitute subs) tys
 substitute subs ty = ty
 
-substituteScheme :: Substitutions -> TypeScheme -> TypeScheme
+substituteScheme :: Substitution -> TypeScheme -> TypeScheme
 substituteScheme subs (Base ty) = Base $ substitute subs ty
 substituteScheme subs (Forall name scheme) = Forall name $ substituteScheme (M.delete name subs) scheme
 
-substituteContext :: Substitutions -> Map Identifier TypeScheme -> Map Identifier TypeScheme
+substituteContext :: Substitution -> Map Identifier TypeScheme -> Map Identifier TypeScheme
 substituteContext subs = fmap (substituteScheme subs)
 
 fresh :: (HasFreshCount s, MonadState s m) => m Type
@@ -222,10 +222,10 @@ occurs name ty
   | otherwise = return ()
 
 -- If both arguments are type variables then replaces the first with the second
-mgu :: (AsTypeError e, MonadError e m) => Type -> Type -> m Substitutions
+mgu :: (AsTypeError e, MonadError e m) => Type -> Type -> m Substitution
 mgu (TypeVar name) ty@TypeVar{} = return (M.singleton name ty)
 mgu (TypeVar name) ty = occurs name ty >> return (M.singleton name ty)
-mgu ty (TypeVar name) = return $ M.singleton name ty
+mgu ty (TypeVar name) = occurs name ty >> return (M.singleton name ty)
 mgu (FunType from to) (FunType from' to') = do
   fromSubs <- mgu from from'
   toSubs <- mgu (substitute fromSubs to) (substitute fromSubs to')
@@ -256,9 +256,9 @@ w ::
   => Expr
   -> m TypeScheme
 w e = do
-  res <- w' e
+  (subs,ty) <- w' e
   ctxt <- view context
-  return . generalize ctxt $ uncurry substitute res
+  return . generalize ctxt $ foldr substitute ty subs
   where
     inferBranch (pat,branch) = do
       res <- patType pat
@@ -281,38 +281,34 @@ w e = do
       , MonadError e m
       )
       => Expr
-      -> m (Substitutions, Type)
+      -> m ([Substitution], Type)
     w' e = case e of
-        (Error _) -> (,) M.empty <$> fresh
+        (Error _) -> (,) [] <$> fresh
         (Id name) -> do
           res <- view (context . at name)
           case res of
             Nothing -> throwError $ _NotInScope # [name]
-            Just scheme -> (,) M.empty <$> instantiate scheme
-        (Lit (LitInt e)) -> return (M.empty,PrimType Int)
-        (Lit (LitString e)) -> return (M.empty,PrimType String)
-        (Lit (LitChar e)) -> return (M.empty,PrimType Char)
-        (Lit (LitBool e)) -> return (M.empty,PrimType Bool)
+            Just scheme -> (,) [] <$> instantiate scheme
+        (Lit (LitInt e)) -> return ([],PrimType Int)
+        (Lit (LitString e)) -> return ([],PrimType String)
+        (Lit (LitChar e)) -> return ([],PrimType Char)
+        (Lit (LitBool e)) -> return ([],PrimType Bool)
         (App f x) -> do
           (s1,t1) <- w' f
-          local (over context $ substituteContext s1) $ do
-            (s2,t2) <- w' x
-            b <- fresh
-            s3 <- mgu (substitute s2 t1) (FunType t2 b)
-            return (s3 `M.union` s2 `M.union` s1, substitute s3 b)
+          (s2,t2) <- local (over context $ flip (foldr substituteContext) s1) $ w' x
+          b <- fresh
+          s3 <- mgu (FunType t2 b) (foldr substitute t1 s2)
+          return (s3 : s2 ++ s1, substitute s3 b)
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
-          local (over context $ M.insert x (Base b)) $ do
-            (s1,t1) <- w' expr
-            return (s1,FunType (substitute s1 b) t1)
+          (s1,t1) <- local (over context $ M.insert x (Base b)) $ w' expr
+          return (s1,FunType (foldr substitute b s1) t1)
         (Let x e e') -> do
           (s1,t1) <- w' e
-          ctxt <- view context
-          let addVar = M.insert x (generalize (substituteContext s1 ctxt) t1) . substituteContext s1
-          local (over context addVar) $ do
-            (s2,t2) <- w' e'
-            return (s2 `M.union` s1, t2)
+          let addVar ctxt = let ctxt' = foldr substituteContext ctxt s1 in M.insert x (generalize ctxt' t1) ctxt'
+          (s2,t2) <- local (over context addVar) $ w' e'
+          return (s2 ++ s1, t2)
         (Case input bs) -> do
           (_,inputType) <- w' input
           bs' <- traverse inferBranch bs
@@ -328,8 +324,8 @@ w e = do
                 rhsSubs <- mgu currentRhst rhst
                 return $ subs `M.union` rhsSubs
           subs <- foldlM genSubs M.empty bs'
-          finalSubs <- mgu inputType lhst
-          pure (subs `M.union` finalSubs,rhst)
+          finalSub <- mgu inputType lhst
+          pure ([finalSub,subs],rhst)
 
 buildFunction :: [Type] -> Type -> Type
 buildFunction argTys retTy = foldr FunType retTy argTys
