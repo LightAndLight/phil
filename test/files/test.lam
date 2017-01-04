@@ -1,11 +1,15 @@
+f : forall a. a -> a
 f x = x
 
+g : forall b. b -> b
 g x = f x
 
+h : forall x. x -> Int
 h x = let f = 2 in f
 
 data Maybe a = Just a | Nothing
 
+maybe : forall a b. a -> (b -> a) -> Maybe b -> a
 maybe nothing just m = case m of { Nothing -> nothing; Just a -> just a }
 
 test = maybe 0 f (Just 2)

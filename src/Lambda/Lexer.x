@@ -26,6 +26,10 @@ tokens :-
     <0> forall { \(p,_,_,_) _ -> return $ Token p TokForall }
     <0> true { \(p,_,_,_) _ -> return $ Token p TokTrue }
     <0> false { \(p,_,_,_) _ -> return $ Token p TokFalse }
+    <0> Int { \(p,_,_,_) _ -> return $ Token p TokIntType }
+    <0> String { \(p,_,_,_) _ -> return $ Token p TokStringType }
+    <0> Char { \(p,_,_,_) _ -> return $ Token p TokCharType }
+    <0> Bool { \(p,_,_,_) _ -> return $ Token p TokBoolType }
     <0> "=" { \(p,_,_,_) _ -> return $ Token p TokEq }
     <0> "_" { \(p,_,_,_) _ -> return $ Token p TokWildcard }
     <0> \\ { \(p,_,_,_) _ -> return $ Token p TokLam }
@@ -89,6 +93,10 @@ data TokenType
     | TokTrue
     | TokFalse
     | TokWildcard
+    | TokIntType
+    | TokStringType
+    | TokCharType
+    | TokBoolType
     deriving Show
 
 newtype LexError = MkLexError { getLexError :: String } deriving Show

@@ -3,9 +3,12 @@
 import           Data.Either
 import           Data.List.NonEmpty    (NonEmpty (..))
 import qualified Data.Map              as M
+import qualified Data.Set              as S
+
 import           Lambda.Core.AST       hiding (Identifier)
 import           Lambda.Core.Typecheck
 import           Lambda.Test.Arbitrary
+
 import           Test.QuickCheck
 
 constType :: Identifier -> Identifier -> TypeScheme
@@ -77,6 +80,34 @@ prop_case_inference2 = left == right
   where
     left = Right $ Base (FunType (PrimType Int) (PrimType String))
     right = runW (Abs "x" $ Case (Id "x") ((PatLit (LitInt 0),Lit (LitString "hello")) :| []))
+
+prop_case_complicated_inference1 :: Bool
+prop_case_complicated_inference1 = correct $ runWithContext ctxt ast
+  where
+    u = Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+      FunType (TypeVar "a") $
+      FunType (TypeVar "b") $
+      PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    v = Forall "a" $ Forall "b" $ Forall "c" $ Forall "d" $ Base $
+      FunType (TypeVar "c") $
+      FunType (TypeVar "d") $
+      PolyType "T" [TypeVar "a", TypeVar "b", TypeVar "c", TypeVar "d"]
+    ctxt = M.fromList [("U",u), ("V",v)]
+    ast = Abs "x" $ Abs "y" $ Case (Id "x") $
+      (PatCon "U" ["a", "b"],Id "a") :|
+      [ (PatWildcard,Id "y")
+      , (PatCon "V" ["a","b"],Id "a")
+      ]
+
+    correct :: Either TypeError TypeScheme -> Bool
+    correct (Right (Forall a (Forall b (Forall c (Base (FunType (PolyType t [TypeVar one, TypeVar two, TypeVar three, TypeVar four]) (FunType (TypeVar y) (TypeVar z))))))))
+      = all (== z) [one, three, y] &&
+        two `elem` [a,b,c] &&
+        four `elem` [a,b,c] &&
+        z `elem` [a,b,c] &&
+        length (S.fromList [two,four,z]) == 3 &&
+        length (S.fromList [a,b,c]) == 3
+    correct _ = False
 
 prop_case_wrong_pattern_type1 :: Bool
 prop_case_wrong_pattern_type1 = isLeft res

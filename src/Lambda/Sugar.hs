@@ -6,6 +6,7 @@ import qualified Lambda.Core.AST    as C
 
 desugar :: Definition -> C.Definition
 desugar (Data name typeArgs constructors) = C.Data name typeArgs constructors
+desugar (TypeSignature name ty) = C.TypeSignature name ty
 desugar (Function def) = translateDefinition def
 
 desugarExpr :: Expr -> C.Expr
@@ -22,6 +23,7 @@ desugarExpr (Error err) = C.Error err
 
 data Definition
   = Data C.Identifier [C.Identifier] (NonEmpty C.ProdDecl)
+  | TypeSignature C.Identifier C.TypeScheme
   | Function FunctionDefinition
 
 data Expr
