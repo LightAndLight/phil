@@ -87,6 +87,11 @@ Constructors : Constructor { $1 :| [] }
 DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
                | data cons '=' Constructors { Data $2 [] $4 }
 
+QuantifiedType : B { Base $1 }
+               | forall Args '.' B { foldr Forall (Base $4) $2 }
+
+TypeSignature : ident ':' QuantifiedType { TypeSignature $1 $3 }
+
 FunctionDefinition : ident FunctionArgs '=' Expr { FunctionDefinition $1 $2 $4 }
 
 ExprOrDef : DataDefinition eof { ReplDef $1 }
@@ -97,6 +102,7 @@ FunctionArgs : { [] }
 
 Definition : DataDefinition { $1 }
            | FunctionDefinition { Function $1 }
+           | TypeSignature { $1 }
 
 Definitions : { [] }
             | Definition eol Definitions { $1:$3 }

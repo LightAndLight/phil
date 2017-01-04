@@ -39,6 +39,7 @@ data ProdDecl = ProdDecl Identifier [Type]
 
 data Definition
   = Data Identifier [Identifier] (NonEmpty ProdDecl)
+  | TypeSignature Identifier TypeScheme
   | Binding Identifier Expr
 
 data Expr
