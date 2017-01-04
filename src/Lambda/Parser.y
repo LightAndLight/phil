@@ -47,6 +47,7 @@ import Lambda.Sugar
     eof { TokEOF }
     lam { Token _ TokLam }
     '=' { Token _ TokEq }
+    '_' { Token _ TokWildcard }
     '.' { Token _ TokDot }
     '->' { Token _ TokArr }
     ':' { Token _ TokType }
@@ -114,6 +115,7 @@ Pattern : NoArgCon { $1 }
         | MultiArgCon { $1 }
         | ident { PatId $1 }
         | Literal { PatLit $1 }
+        | '_' { PatWildcard }
 
 Arg : NoArgCon { $1 }
     | '(' MultiArgCon ')' { $2 }

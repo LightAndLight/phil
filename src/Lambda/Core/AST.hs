@@ -32,6 +32,7 @@ data Literal = LitInt Int
 data Pattern = PatId Identifier
              | PatCon Identifier [Identifier]
              | PatLit Literal
+             | PatWildcard
              deriving (Eq, Show)
 
 data ProdDecl = ProdDecl Identifier [Type]

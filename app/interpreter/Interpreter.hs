@@ -255,6 +255,7 @@ showLiteral :: Literal -> String
 showLiteral (LitInt a) = show a
 showLiteral (LitString a) = show a
 showLiteral (LitChar a) = show a
+showLiteral (LitBool b) = if b then "true" else "false"
 
 showPattern :: Pattern -> String
 showPattern (PatId a) = a

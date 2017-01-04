@@ -119,6 +119,9 @@ genPHPExpr (Case val branches) = do
   pure $ PHPExprFunctionCall (PHPExprFunction [] (S.toList sc) branches') []
   where
     genBranch :: (HasScope s, MonadState s m) => PHPExpr -> (Pattern,Expr) -> m [PHPStatement]
+    genBranch val (PatWildcard,res) = do
+      res' <- genPHPExpr res
+      pure [PHPStatementReturn res']
     genBranch val (PatId name,res) = do
       let name' = phpId name
       res' <- genPHPExpr res

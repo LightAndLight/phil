@@ -27,6 +27,7 @@ tokens :-
     <0> true { \(p,_,_,_) _ -> return $ Token p TokTrue }
     <0> false { \(p,_,_,_) _ -> return $ Token p TokFalse }
     <0> "=" { \(p,_,_,_) _ -> return $ Token p TokEq }
+    <0> "_" { \(p,_,_,_) _ -> return $ Token p TokWildcard }
     <0> \\ { \(p,_,_,_) _ -> return $ Token p TokLam }
     <0> "." { \(p,_,_,_) _ -> return $ Token p TokDot }
     <0> "|" { \(p,_,_,_) _ -> return $ Token p TokPipe }
@@ -87,6 +88,7 @@ data TokenType
     | TokChar String
     | TokTrue
     | TokFalse
+    | TokWildcard
     deriving Show
 
 newtype LexError = MkLexError { getLexError :: String } deriving Show

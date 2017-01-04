@@ -89,10 +89,10 @@ patType ::
   , MonadError e m
   )
   => Pattern
-  -> m (Map Identifier TypeScheme,Type)
+  -> m (Maybe (Map Identifier TypeScheme,Type))
 patType (PatId name) = do
   ty <- fresh
-  return (M.singleton name $ Base ty,ty)
+  return $ Just (M.singleton name $ Base ty,ty)
 patType (PatCon conName args) = do
   conTy <- instantiate =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
@@ -100,11 +100,12 @@ patType (PatCon conName args) = do
       argTysLen = length argTys
   when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
   let boundVars = foldr (\(arg,argTy) -> M.insert arg (Base argTy)) M.empty $ zip args argTys
-  return (boundVars,retTy)
-patType (PatLit (LitInt p)) = return (M.empty,PrimType Int)
-patType (PatLit (LitString p)) = return (M.empty,PrimType String)
-patType (PatLit (LitChar p)) = return (M.empty,PrimType Char)
-patType (PatLit (LitBool p)) = return (M.empty,PrimType Bool)
+  return $ Just (boundVars,retTy)
+patType (PatLit (LitInt p)) = return $ Just (M.empty,PrimType Int)
+patType (PatLit (LitString p)) = return $ Just (M.empty,PrimType String)
+patType (PatLit (LitChar p)) = return $ Just (M.empty,PrimType Char)
+patType (PatLit (LitBool p)) = return $ Just (M.empty,PrimType Bool)
+patType PatWildcard = return Nothing
 
 freeInType :: Type -> Set Identifier
 freeInType (TypeVar name) = S.singleton name
@@ -220,6 +221,7 @@ occurs name ty
   | name `S.member` freeInType ty = throwError $ _OccursError # (name,ty)
   | otherwise = return ()
 
+-- If both arguments are type variables then replaces the first with the second
 mgu :: (AsTypeError e, MonadError e m) => Type -> Type -> m Substitutions
 mgu (TypeVar name) ty@TypeVar{} = return (M.singleton name ty)
 mgu (TypeVar name) ty = occurs name ty >> return (M.singleton name ty)
@@ -258,6 +260,18 @@ w e = do
   ctxt <- view context
   return . generalize ctxt $ uncurry substitute res
   where
+    inferBranch (pat,branch) = do
+      res <- patType pat
+      case res of
+        Just (boundVars,patternType) ->
+          local (over context $ M.union boundVars) $ do
+            (_,branchType) <- w' branch
+            return (patternType,branchType)
+        Nothing -> do
+          (_,branchType) <- w' branch
+          patType <- fresh
+          return (patType,branchType)
+
     w' ::
       ( HasFreshCount s
       , MonadState s m
@@ -299,22 +313,23 @@ w e = do
           local (over context addVar) $ do
             (s2,t2) <- w' e'
             return (s2 `M.union` s1, t2)
-        (Case e bs) -> do
-          ((pt',bt') :| bs') <- for bs $ \(p,b) -> do
-            (boundVars,pt) <- patType p
-            local (over context $ M.union boundVars) $ do
-              (_,bt) <- w' b
-              return (pt,bt)
-          let foldOver (pt,_) m = do
-                (subs,t) <- m
-                subs' <- mgu pt t
-                return (subs `M.union` subs', substitute subs' pt)
-          (subslhs,tlhs) <- foldr foldOver (return (M.empty, pt')) bs'
-          let trhs = substitute subslhs bt'
-          subsrhs <- foldr (\(_,bt) subs -> liftA2 M.union (mgu (substitute subslhs bt) trhs) subs) (return M.empty) bs'
-          let t'lhs = substitute subsrhs tlhs
-          (_,te) <- w' e
-          liftA2 (,) (mgu te t'lhs) (pure trhs)
+        (Case input bs) -> do
+          (_,inputType) <- w' input
+          bs' <- traverse inferBranch bs
+          let unifyBranches (currentLhst,currentRhst) (lhst,rhst) = do
+                toCurrent <- mgu lhst currentLhst
+                let rhst' = substitute toCurrent rhst
+                rhsSubs <- mgu rhst' currentRhst
+                let lhst' = substitute rhsSubs $ substitute toCurrent lhst
+                lhsSubs <- mgu lhst' (substitute toCurrent currentLhst)
+                return (substitute lhsSubs lhst',substitute rhsSubs rhst')
+          (lhst,rhst) <- foldlM unifyBranches (N.head bs') (N.tail bs')
+          let genSubs subs (currentLhst,currentRhst) = do
+                rhsSubs <- mgu currentRhst rhst
+                return $ subs `M.union` rhsSubs
+          subs <- foldlM genSubs M.empty bs'
+          finalSubs <- mgu inputType lhst
+          pure (subs `M.union` finalSubs,rhst)
 
 buildFunction :: [Type] -> Type -> Type
 buildFunction argTys retTy = foldr FunType retTy argTys
