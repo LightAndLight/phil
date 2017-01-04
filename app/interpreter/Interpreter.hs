@@ -80,46 +80,46 @@ tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
 
-reduce ::
+eval ::
   ( MonadReader (Map Identifier C.Expr) m
   , AsInterpreterError e
   , MonadError e m
   )
   => C.Expr
   -> m C.Expr
-reduce (Error message) = throwError $ _RuntimeError # message
-reduce (Id name) = do
+eval (Error message) = throwError $ _RuntimeError # message
+eval (Id name) = do
   maybeExpr <- view $ at name
   case maybeExpr of
     Just expr -> return expr
     Nothing -> throwError $ _NotBound # name
-reduce (App func input) = do
-  func' <- reduce func
-  input' <- reduce input
+eval (App func input) = do
+  func' <- eval func
+  input' <- eval input
   case func' of
-    Abs name output -> local (M.insert name input') $ reduce output
+    Abs name output -> local (M.insert name input') $ eval output
     _ -> error "Tried to apply a value to a non-function expression"
-reduce (Let name expr rest) = do
-  expr' <- reduce expr
-  local (M.insert name expr') $ reduce rest
-reduce c@(Case var (b :| bs)) = do
-  var' <- reduce var
+eval (Let name expr rest) = do
+  expr' <- eval expr
+  local (M.insert name expr') $ eval rest
+eval c@(Case var (b :| bs)) = do
+  var' <- eval var
   case var' of
     Id{} -> return c
     _ -> tryBranch var' b bs
   where
     inexhaustiveCase = Error "Inexhaustive case expression"
-    tryBranch expr (PatId name,b) [] = local (M.insert name expr) $ reduce b
-    tryBranch expr (PatWildcard,b) [] = reduce b
+    tryBranch expr (PatId name,b) [] = local (M.insert name expr) $ eval b
+    tryBranch expr (PatWildcard,b) [] = eval b
     tryBranch expr (PatCon con args,b) [] = do
-      expr' <- reduce expr
+      expr' <- eval expr
       case expr' of
         Prod name vals
-          | con == name -> local (flip (foldr (uncurry M.insert)) (zip args vals)) $ reduce b
+          | con == name -> local (flip (foldr (uncurry M.insert)) (zip args vals)) $ eval b
           | otherwise  -> return inexhaustiveCase
         _ -> error "Structure pattern in branch but matching on non-structured value"
     tryBranch expr (PatLit l,b) [] = do
-      expr' <- reduce expr
+      expr' <- eval expr
       return $ case expr' of
         Lit l'
           | l == l' -> b
@@ -129,9 +129,9 @@ reduce c@(Case var (b :| bs)) = do
       res <- tryBranch expr br []
       case res of
         Error _ -> tryBranch expr b bs
-        _ -> reduce res
-reduce (Prod name args) = Prod name <$> traverse reduce args
-reduce expr = pure expr
+        _ -> eval res
+eval (Prod name args) = Prod name <$> traverse eval args
+eval expr = pure expr
 
 data ReplF a
   = Read (String -> a)
@@ -167,7 +167,7 @@ evaluate expr = do
   ctxt <- use context
   runWithContext ctxt expr
   table <- use symbolTable
-  runReaderT (reduce expr) table
+  runReaderT (eval expr) table
 
 define ::
   ( HasTypeTable s
