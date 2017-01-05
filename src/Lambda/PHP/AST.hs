@@ -9,6 +9,7 @@ module Lambda.PHP.AST
   , PHPClassMember(..)
   , Visibility(..)
   , PHPExpr(..)
+  , PHPArg(..)
   , UnOp(..)
   , BinOp(..)
   , PHPStatement(..)
@@ -35,13 +36,17 @@ instance IsString PHPId where
   fromString = phpId
 
 data PHPDecl
-  = PHPDeclFunc PHPId [PHPId] [PHPStatement]
+  = PHPDeclFunc PHPId [PHPArg] [PHPStatement]
   | PHPDeclClass PHPId [PHPClassMember]
   | PHPDeclStatement PHPStatement
 data PHPClassMember
-  = PHPClassFunc Bool Visibility PHPId [PHPId] [PHPStatement]
+  = PHPClassFunc Bool Visibility PHPId [PHPArg] [PHPStatement]
   | PHPClassVar Bool Visibility PHPId (Maybe PHPExpr)
 data Visibility = Public | Protected | Private
+data PHPArg
+  = PHPArgValue PHPId
+  | PHPArgReference PHPId
+  deriving (Eq, Ord)
 data PHPExpr
   = PHPExprVar PHPId
   | PHPExprNew PHPId [PHPExpr]
@@ -49,7 +54,7 @@ data PHPExpr
   | PHPExprBinop BinOp PHPExpr PHPExpr
   | PHPExprUnop UnOp PHPExpr
   | PHPExprAssign PHPExpr PHPExpr
-  | PHPExprFunction [PHPId] [PHPId] [PHPStatement]
+  | PHPExprFunction [PHPArg] [PHPArg] [PHPStatement]
   | PHPExprClassAccess PHPExpr PHPId (Maybe [PHPExpr])
   | PHPExprArrayAccess PHPExpr PHPExpr
   | PHPExprFunctionCall PHPExpr [PHPExpr]

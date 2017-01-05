@@ -72,12 +72,16 @@ phpToSource (PHP decls) = do
 variable :: PHPId -> String
 variable name = "$" <> unPHPId name
 
-functionArgsToSource :: [PHPId] -> String
-functionArgsToSource = intercalate ", " . fmap variable
+phpArg :: PHPArg -> String
+phpArg (PHPArgValue name) = variable name
+phpArg (PHPArgReference name) = "&" ++ variable name
+
+phpArgs :: [PHPArg] -> String
+phpArgs = intercalate ", " . fmap phpArg
 
 phpDeclToSource :: PHPDecl -> SourceM ()
 phpDeclToSource (PHPDeclFunc name args body) = do
-  lineWords ["function", unPHPId name <> bracketed (functionArgsToSource args), "{"]
+  lineWords ["function", unPHPId name <> bracketed (phpArgs args), "{"]
   indented $ traverse phpStatementToSource body
   line "}"
   line ""
@@ -139,8 +143,8 @@ phpExprToSource (PHPExprFunction args use body) = do
   bracket <- linesAdded $ line "}"
   let useVars = case use of
         [] -> ""
-        use -> " use " <> bracketed (functionArgsToSource use)
-  return $ "function" <> bracketed (functionArgsToSource args) <> useVars <> " {\n" <>
+        use -> " use " <> bracketed (phpArgs use)
+  return $ "function" <> bracketed (phpArgs args) <> useVars <> " {\n" <>
     (unlines . toList $ added) <>
     (head . toList $ bracket)
 phpExprToSource (PHPExprFunctionCall func args) = do
@@ -164,7 +168,7 @@ classMemberPrefix False visibility = [visibilityToSource visibility]
 
 phpClassMemberToSource :: PHPClassMember -> SourceM ()
 phpClassMemberToSource (PHPClassFunc static visibility name args body) = do
-  lineWords $ classMemberPrefix static visibility <> ["function", unPHPId name <> bracketed (functionArgsToSource args) <> " {"]
+  lineWords $ classMemberPrefix static visibility <> ["function", unPHPId name <> bracketed (phpArgs args) <> " {"]
   indented $ traverse phpStatementToSource body
   line "}"
 phpClassMemberToSource (PHPClassVar static visibility name value) = do
