@@ -349,7 +349,7 @@ w e = do
           b <- fresh
           (s1,t1) <- local (over context $ M.insert x (Base b)) $ w' expr
           return (s1,FunType (foldr substitute b s1) t1)
-        (Let x e e') -> do
+        (Let (Binding x e) e') -> do
           (s1,t1) <- w' e
           let addVar ctxt = let ctxt' = foldr substituteContext ctxt s1 in M.insert x (generalize ctxt' t1) ctxt'
           (s2,t2) <- local (over context addVar) $ w' e'
@@ -427,7 +427,7 @@ checkDefinition (Data tyCon tyVars decls) = do
           context %= M.insert dataCon (generalize ctxt $ substitute subs conFun)
           return (dataCon, buildDataCon p)
 
-checkDefinition (Binding name expr) = do
+checkDefinition (Function (Binding name expr)) = do
   freshCount .= 0
   maybeVar <- uses typeTable (M.lookup name)
   case maybeVar of

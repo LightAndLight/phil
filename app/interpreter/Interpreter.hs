@@ -84,6 +84,16 @@ tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
 
+withBinding ::
+  ( MonadReader (Map Identifier C.Expr) m
+  , AsInterpreterError e
+  , MonadError e m
+  )
+  => Binding -> m a -> m a
+withBinding (Binding name expr) m = do
+  expr' <- eval expr
+  local (M.insert name expr') m
+
 eval ::
   ( MonadReader (Map Identifier C.Expr) m
   , AsInterpreterError e
@@ -103,9 +113,7 @@ eval (App func input) = do
   case func' of
     Abs name output -> local (M.insert name input') $ eval output
     _ -> error "Tried to apply a value to a non-function expression"
-eval (Let name expr rest) = do
-  expr' <- eval expr
-  local (M.insert name expr') $ eval rest
+eval (Let binding rest) = withBinding binding $ eval rest
 eval c@(Case var (b :| bs)) = do
   var' <- eval var
   case var' of

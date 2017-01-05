@@ -34,6 +34,7 @@ import Lambda.Sugar
     case { Token _ TokCase }
     of { Token _ TokOf }
     let { Token _ TokLet }
+    rec { Token _ TokRec }
     in { Token _ TokIn }
     forall { Token _ TokForall }
     true { Token _ TokTrue }
@@ -146,7 +147,12 @@ Branch : Pattern '->' Expr { ($1,$3) }
 Branches : Branch { $1 :| [] }
          | Branch eol Branches { $1 <| $3 }
 
+RecursiveDefinitions : { [] }
+                     | FunctionDefinition { [$1] }
+                     | FunctionDefinition eol RecursiveDefinitions { $1:$3 }
+
 Let : let FunctionDefinition in Expr { Let $2 $4 }
+Rec : rec '{' RecursiveDefinitions '}' in Expr { Rec $3 $6 }
 Case : case Expr of '{' Branches '}' { Case $2 $5 }
 Lam : lam ident '.' Expr { Abs $2 $4 }
 
@@ -164,6 +170,7 @@ Expr : FunExpr { $1 }
      | Let { $1 }
      | Lam { $1 }
      | Case { $1 }
+     | Rec { $1 }
 
 {
 

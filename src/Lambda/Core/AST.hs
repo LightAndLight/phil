@@ -37,10 +37,16 @@ data Pattern = PatId Identifier
 
 data ProdDecl = ProdDecl Identifier [Type]
 
+data Binding
+  = Binding
+  { bindingName  :: Identifier
+  , bindingValue :: Expr
+  } deriving (Eq, Show)
+
 data Definition
   = Data Identifier [Identifier] (NonEmpty ProdDecl)
   | TypeSignature Identifier TypeScheme
-  | Binding Identifier Expr
+  | Function Binding
 
 data Expr
   = Id Identifier
@@ -48,7 +54,8 @@ data Expr
   | Prod Identifier [Expr]
   | App Expr Expr
   | Abs Identifier Expr
-  | Let Identifier Expr Expr
+  | Let Binding Expr
+  | Rec [Binding] Expr
   | Case Expr (NonEmpty (Pattern,Expr))
   | Error String
   deriving (Eq, Show)

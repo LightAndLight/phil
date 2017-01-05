@@ -75,9 +75,9 @@ genPHPDecl :: (HasCode s, HasScope s, MonadState s m) => Definition -> m ()
 genPHPDecl (Data _ _ constructors) = do
   let decls = genConstructor =<< N.toList constructors
   code %= flip D.append (D.fromList decls)
-genPHPDecl (Binding name value) = do
+genPHPDecl (Function binding) = do
   scope .= S.empty
-  assignment <- genPHPAssignment name value
+  assignment <- genPHPAssignment binding
   code %= flip D.snoc (PHPDeclStatement assignment)
 
 genPHPLiteral :: Literal -> PHPLiteral
@@ -106,10 +106,10 @@ genPHPExpr (Abs name body) = do
   scope %= S.delete name'
   sc <- use scope
   pure $ PHPExprFunction [name'] (S.toList sc) [PHPStatementReturn body']
-genPHPExpr (Let var value rest) = do
-  assignment <- genPHPAssignment var value
+genPHPExpr (Let binding rest) = do
+  assignment <- genPHPAssignment binding
   rest' <- genPHPExpr rest
-  scope %= S.delete (phpId var)
+  scope %= S.delete (phpId $ bindingName binding)
   sc <- use scope
   pure $ PHPExprFunctionCall (PHPExprFunction [] (S.toList sc) [assignment, PHPStatementReturn rest']) []
 genPHPExpr (Case val branches) = do
@@ -148,5 +148,5 @@ genPHPExpr (Case val branches) = do
                   (PHPExprLiteral $ PHPInt ix))
 genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] [] [PHPStatementThrow $ PHPExprNew (phpId "Exception") []]) []
 
-genPHPAssignment :: (HasScope s, MonadState s m) => Identifier -> Expr -> m PHPStatement
-genPHPAssignment name value = PHPStatementExpr . PHPExprAssign (PHPExprVar $ phpId name) <$> genPHPExpr value
+genPHPAssignment :: (HasScope s, MonadState s m) => Binding -> m PHPStatement
+genPHPAssignment (Binding name value) = PHPStatementExpr . PHPExprAssign (PHPExprVar $ phpId name) <$> genPHPExpr value
