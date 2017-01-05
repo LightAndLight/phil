@@ -20,16 +20,18 @@ import           Lambda.Core.AST
 import Lambda.Core.Typecheck
 import           Lambda.PHP.AST
 
+data ArgType = Reference | Value
+
 data CodegenState
   = CodegenState
-  { _codegenScope :: Set PHPArg
+  { _codegenScope :: Map PHPId ArgType
   , _codegenCode :: DList PHPDecl
   }
 
 makeClassy ''CodegenState
 
 class HasScope s where
-  scope :: Lens' s (Set PHPArg)
+  scope :: Lens' s (Map PHPId ArgType)
 
 class HasCode s where
   code :: Lens' s (DList PHPDecl)
@@ -42,12 +44,19 @@ instance HasCode CodegenState where
 
 genPHP :: [Definition] -> PHP
 genPHP defs
-  = let finalState = execState (traverse_ genPHPDecl defs) (CodegenState S.empty D.empty)
+  = let finalState = execState (traverse_ genPHPDecl defs) (CodegenState M.empty D.empty)
     in PHP $ D.toList (finalState ^. code)
 
 toFunction :: Expr -> Maybe (Expr, Identifier)
 toFunction (Abs varName expr) = Just (expr,varName)
 toFunction _ = Nothing
+
+scopeToArgs :: Map PHPId ArgType -> [PHPArg]
+scopeToArgs = M.foldrWithKey (\k a -> (valueOrReference k a :)) []
+  where
+    valueOrReference name argType = case argType of
+      Value -> PHPArgValue name
+      Reference -> PHPArgReference name
 
 genConstructor :: ProdDecl -> [PHPDecl]
 genConstructor (ProdDecl name args) = [classDecl, funcDecl]
@@ -76,7 +85,7 @@ genPHPDecl (Data _ _ constructors) = do
   let decls = genConstructor =<< N.toList constructors
   code %= flip D.append (D.fromList decls)
 genPHPDecl (Function binding) = do
-  scope .= S.empty
+  scope .= M.empty
   assignment <- genPHPAssignment binding
   code %= flip D.snoc (PHPDeclStatement assignment)
 
@@ -89,7 +98,7 @@ genPHPLiteral (LitBool b) = PHPBool b
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
 genPHPExpr (Id name) = do
   let name' = phpId name
-  scope %= S.insert (PHPArgValue name')
+  scope %= M.insertWith (flip const) name' Value
   pure $ PHPExprVar name'
 genPHPExpr (Lit lit) = pure . PHPExprLiteral $ genPHPLiteral lit
 genPHPExpr (Prod name args)
@@ -101,22 +110,30 @@ genPHPExpr (App f x) = do
   x' <- genPHPExpr x
   pure $ PHPExprFunctionCall f' [x']
 genPHPExpr (Abs name body) = do
-  let name' = PHPArgValue $ phpId name
+  let name' = phpId name
   body' <- genPHPExpr body
-  scope %= S.delete name'
+  scope %= M.delete name'
   sc <- use scope
-  pure $ PHPExprFunction [name'] (S.toList sc) [PHPStatementReturn body']
+  pure $ PHPExprFunction [PHPArgValue name'] (scopeToArgs sc) [PHPStatementReturn body']
 genPHPExpr (Let binding rest) = do
   assignment <- genPHPAssignment binding
   rest' <- genPHPExpr rest
-  scope %= S.delete (PHPArgValue . phpId $ bindingName binding)
+  scope %= M.delete (phpId $ bindingName binding)
   sc <- use scope
-  pure $ PHPExprFunctionCall (PHPExprFunction [] (S.toList sc) [assignment, PHPStatementReturn rest']) []
+  pure $ PHPExprFunctionCall (PHPExprFunction [] (scopeToArgs sc) [assignment, PHPStatementReturn rest']) []
+genPHPExpr (Rec binding rest) = do
+  let name = phpId $ bindingName binding
+  scope %= M.insert name Reference
+  assignment <- genPHPAssignment binding
+  rest' <- genPHPExpr rest
+  scope %= M.delete name
+  sc <- use scope
+  pure $ PHPExprFunctionCall (PHPExprFunction [] (scopeToArgs sc) [assignment, PHPStatementReturn rest']) []
 genPHPExpr (Case val branches) = do
   val' <- genPHPExpr val
   branches' <- join . N.toList <$> traverse (genBranch val') branches
   sc <- use scope
-  pure $ PHPExprFunctionCall (PHPExprFunction [] (S.toList sc) branches') []
+  pure $ PHPExprFunctionCall (PHPExprFunction [] (scopeToArgs sc) branches') []
   where
     genBranch :: (HasScope s, MonadState s m) => PHPExpr -> (Pattern,Expr) -> m [PHPStatement]
     genBranch val (PatWildcard,res) = do
@@ -125,7 +142,7 @@ genPHPExpr (Case val branches) = do
     genBranch val (PatId name,res) = do
       let name' = phpId name
       res' <- genPHPExpr res
-      scope %= S.delete (PHPArgValue name')
+      scope %= M.delete name'
       pure [PHPStatementExpr $ PHPExprAssign (PHPExprVar name') val, PHPStatementReturn res']
     genBranch val (PatLit lit,res) = do
       res' <- genPHPExpr res
@@ -133,10 +150,10 @@ genPHPExpr (Case val branches) = do
     genBranch val (PatCon name args,res) = do
       let args' = fmap phpId args
       sc <- use scope
-      let localArgs = filter (not . flip S.member sc) (fmap PHPArgValue args')
+      let localArgs = filter (not . flip M.member sc) args'
       let assignments = genBinding <$> zip [0..] args'
       res' <- genPHPExpr res
-      scope %= flip (foldr S.delete) localArgs
+      scope %= flip (foldr M.delete) localArgs
       pure [PHPStatementIfThenElse (PHPExprBinop InstanceOf val (PHPExprName . phpId $ name ++ "Con")) (assignments ++ [PHPStatementReturn res']) Nothing]
       where
         genBinding (ix,arg)
