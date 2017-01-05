@@ -1,21 +1,17 @@
-f : forall a. a -> a
-f x = x
+data List a = Nil | Cons a (List a)
 
-g : forall b. b -> b
-g x = f x
+fix : forall a. (a -> a) -> a
+fix = rec fix' f x = f (fix' f) x in fix'
 
-h : forall x. x -> Int
-h x = let f = 2 in f
+ite c t e = case c of { true -> t; _ -> e }
 
-data Maybe a = Just a | Nothing
+filter : forall a. (a -> Bool) -> List a -> List a
+filter = let f recurse pred list = case list of { Nil -> Nil; Cons a rest -> ite (pred a) (Cons a (recurse pred rest)) (recurse pred rest) } in fix f
 
-maybe : forall a b. a -> (b -> a) -> Maybe b -> a
-maybe nothing just m = case m of { Nothing -> nothing; Just a -> just a }
+filter' : forall a. (a -> Bool) -> List a -> List a
+filter' = rec filter'' pred list = case list of { Nil -> Nil; Cons a rest -> ite (pred a) (Cons a (filter'' pred rest)) (filter'' pred rest) } in filter''
 
-test = maybe 0 f (Just 2)
+isOne : Int -> Bool
+isOne x = case x of { 1 -> true; _ -> false }
 
-ifThenElse trueCase falseCase cond = case cond of { true -> trueCase; false -> falseCase }
-
-and a b = case a of { true -> b; false -> false }
-
-data Exception = Exception
+test = filter' isOne (Cons 0 (Cons 0 (Cons 0 (Cons 1 (Cons 2 (Cons 1 Nil))))))

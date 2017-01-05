@@ -28,14 +28,20 @@ import Lambda.Core.Typecheck
 import Lambda.Lexer
 import Lambda.Parser
 
-type SymbolTable = Map Identifier C.Expr
+data Value
+  = VLiteral Literal
+  | VClosure (Map Identifier Value) Identifier C.Expr
+  | VProduct Identifier [Value]
+  | VPointer C.Expr
+  | VError String
+  deriving (Eq, Show)
 
 class HasSymbolTable s where
-  symbolTable :: Lens' s (Map Identifier C.Expr)
+  symbolTable :: Lens' s (Map Identifier Value)
 
 data InterpreterState
   = InterpreterState
-    { _interpSymbolTable :: Map Identifier C.Expr
+    { _interpSymbolTable :: Map Identifier Value
     , _interpTypeTable :: Map Identifier Int
     , _interpTypesignatures :: Map Identifier TypeScheme
     , _interpContext :: Map Identifier TypeScheme
@@ -84,58 +90,67 @@ tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
 tryAll e (e':es) = e `catchError` const (tryAll e' es)
 
+withBinding ::
+  ( MonadReader (Map Identifier Value) m
+  , AsInterpreterError e
+  , MonadError e m
+  )
+  => Binding -> m a -> m a
+withBinding (Binding name expr) m = do
+  expr' <- eval expr
+  local (M.insert name expr') m
+
 eval ::
-  ( MonadReader (Map Identifier C.Expr) m
+  ( MonadReader (Map Identifier Value) m
   , AsInterpreterError e
   , MonadError e m
   )
   => C.Expr
-  -> m C.Expr
+  -> m Value
+eval (Lit lit) = pure $ VLiteral lit
 eval (Error message) = throwError $ _RuntimeError # message
 eval (Id name) = do
   maybeExpr <- view $ at name
   case maybeExpr of
-    Just expr -> return expr
-    Nothing -> throwError $ _NotBound # name
+    Just (VPointer expr) -> eval expr
+    Just value -> pure value
+    Nothing -> do
+      table <- ask
+      throwError $ _NotBound # name
+eval (Abs name output) = VClosure <$> ask <*> pure name <*> pure output
 eval (App func input) = do
   func' <- eval func
-  input' <- eval input
   case func' of
-    Abs name output -> local (M.insert name input') $ eval output
-    _ -> error "Tried to apply a value to a non-function expression"
-eval (Let name expr rest) = do
-  expr' <- eval expr
-  local (M.insert name expr') $ eval rest
+    VClosure env name output -> do
+      input' <- eval input
+      local (M.insert name input' . const env) $ eval output
+    VPointer expr -> eval (App expr input)
+    _ -> error $ "Tried to apply a value to a non-function expression: " ++ show func'
+eval (Let binding rest) = withBinding binding $ eval rest
+eval (Rec (Binding name value) rest) = local (M.insert name $ VPointer value) $ eval rest
 eval c@(Case var (b :| bs)) = do
   var' <- eval var
-  case var' of
-    Id{} -> return c
-    _ -> tryBranch var' b bs
+  tryBranch var' b bs
   where
-    inexhaustiveCase = Error "Inexhaustive case expression"
-    tryBranch expr (PatId name,b) [] = local (M.insert name expr) $ eval b
-    tryBranch expr (PatWildcard,b) [] = eval b
-    tryBranch expr (PatCon con args,b) [] = do
-      expr' <- eval expr
-      case expr' of
-        Prod name vals
-          | con == name -> local (flip (foldr (uncurry M.insert)) (zip args vals)) $ eval b
-          | otherwise  -> return inexhaustiveCase
-        _ -> error "Structure pattern in branch but matching on non-structured value"
-    tryBranch expr (PatLit l,b) [] = do
-      expr' <- eval expr
-      return $ case expr' of
-        Lit l'
-          | l == l' -> b
-          | otherwise -> inexhaustiveCase
+    inexhaustiveCase = VError "Inexhaustive case expression"
+    tryBranch val (PatId name,b) [] = local (M.insert name val) $ eval b
+    tryBranch val (PatWildcard,b) [] = eval b
+    tryBranch val (PatCon con args,b) [] = case val of
+      VProduct name vals
+        | con == name -> local (flip (foldr (uncurry M.insert)) (zip args vals)) $ eval b
+        | otherwise  -> return inexhaustiveCase
+      _ -> error "Structure pattern in branch but matching on non-structured value"
+    tryBranch val (PatLit l,b) [] = case val of
+        VLiteral l'
+          | l == l' -> eval b
+          | otherwise -> return inexhaustiveCase
         _ -> error "Literal in branch but matching on non-literal value"
-    tryBranch expr br (b:bs) = do
-      res <- tryBranch expr br []
+    tryBranch val br (b:bs) = do
+      res <- tryBranch val br []
       case res of
-        Error _ -> tryBranch expr b bs
-        _ -> eval res
-eval (Prod name args) = Prod name <$> traverse eval args
-eval expr = pure expr
+        VError _ -> tryBranch val b bs
+        _ -> pure res
+eval (Prod name args) = VProduct name <$> traverse eval args
 
 data ReplF a
   = Read (String -> a)
@@ -166,7 +181,7 @@ evaluate ::
   , MonadError e m
   , MonadState s m
   ) => C.Expr
-  -> m C.Expr
+  -> m Value
 evaluate expr = do
   ctxt <- use context
   runWithContext ctxt expr
@@ -179,6 +194,7 @@ define ::
   , HasFreshCount s
   , HasContext s
   , HasTypesignatures s
+  , AsInterpreterError e
   , AsTypeError e
   , MonadError e m
   , MonadState s m
@@ -187,7 +203,8 @@ define ::
   -> m ()
 define def = do
   exprs <- checkDefinition $ S.desugar def
-  symbolTable %= M.union exprs
+  exprs' <- runReaderT (traverse eval exprs) =<< use symbolTable
+  symbolTable %= M.union exprs'
 
 typeCheck ::
   ( HasTypeTable s
@@ -236,13 +253,15 @@ showPattern (PatId a) = a
 showPattern (PatCon name args) = name ++ unwords args
 showPattern (PatLit lit) = showLiteral lit
 
-showValue :: C.Expr -> Maybe String
-showValue (Id expr) = Just expr
-showValue (Lit lit) = Just $ showLiteral lit
-showValue (Abs name expr) = Just "<Function>"
-showValue (Error message) = Just $ "Runtime Error: " ++ message
-showValue (Prod name args) = unwords . (:) name <$> traverse showValue args
-showValue _ = Nothing
+showNestedValue :: Value -> String
+showNestedValue v@(VProduct _ (_:_)) = "(" ++ showValue v ++ ")"
+showNestedValue v = showValue v
+
+showValue :: Value -> String
+showValue (VLiteral lit) = showLiteral lit
+showValue VClosure{} = "<Function>"
+showValue (VError message) = "Runtime Error: " ++ message
+showValue (VProduct name args) = unwords . (:) name $ fmap showNestedValue args
 
 repl ::
   ( HasTypeTable s
@@ -272,7 +291,7 @@ repl = flip catchError handleError $ do
       toks <- tokenize rest
       input <- parseExprOrData toks
       case input of
-        ReplExpr expr -> fromJust . showValue <$> evaluate (S.desugarExpr expr)
+        ReplExpr expr -> showValue <$> evaluate (S.desugarExpr expr)
         ReplDef dat -> define dat $> ""
   printLine output
   repl

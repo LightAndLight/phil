@@ -34,6 +34,7 @@ import Lambda.Sugar
     case { Token _ TokCase }
     of { Token _ TokOf }
     let { Token _ TokLet }
+    rec { Token _ TokRec }
     in { Token _ TokIn }
     forall { Token _ TokForall }
     true { Token _ TokTrue }
@@ -147,6 +148,7 @@ Branches : Branch { $1 :| [] }
          | Branch eol Branches { $1 <| $3 }
 
 Let : let FunctionDefinition in Expr { Let $2 $4 }
+Rec : rec FunctionDefinition in Expr { Rec $2 $4 }
 Case : case Expr of '{' Branches '}' { Case $2 $5 }
 Lam : lam ident '.' Expr { Abs $2 $4 }
 
@@ -164,6 +166,7 @@ Expr : FunExpr { $1 }
      | Let { $1 }
      | Lam { $1 }
      | Case { $1 }
+     | Rec { $1 }
 
 {
 

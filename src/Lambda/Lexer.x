@@ -22,6 +22,7 @@ tokens :-
     <0> data { \(p,_,_,_) _ -> return $ Token p TokData }
     <0> of { \(p,_,_,_) _ -> return $ Token p TokOf }
     <0> let { \(p,_,_,_) _ -> return $ Token p TokLet }
+    <0> rec { \(p,_,_,_) _ -> return $ Token p TokRec }
     <0> in { \(p,_,_,_) _ -> return $ Token p TokIn }
     <0> forall { \(p,_,_,_) _ -> return $ Token p TokForall }
     <0> true { \(p,_,_,_) _ -> return $ Token p TokTrue }
@@ -69,6 +70,7 @@ data TokenType
     | TokOf
     | TokData
     | TokLet
+    | TokRec
     | TokIn
     | TokPipe
     | TokEq
