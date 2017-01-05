@@ -130,5 +130,12 @@ prop_case_wrong_branch_type = isLeft res
       ((PatLit (LitInt 0),Lit (LitString "blah"))
         :| [(PatLit (LitInt 1),Lit (LitInt 0))]))
 
+prop_fixpoint_inference :: Bool
+prop_fixpoint_inference = correct $ runW ast
+  where
+    ast = Rec (Binding "fix" $ Abs "f" $ App (Id "f") (App (Id "fix") (Id "f"))) (Id "fix")
+    correct (Right (Forall n (Base (FunType (FunType (TypeVar a) (TypeVar b)) (TypeVar c))))) = n == a && a == b && b == c
+    correct _ = False
+
 return []
 main = $quickCheckAll

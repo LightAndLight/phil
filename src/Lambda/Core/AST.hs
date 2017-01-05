@@ -55,7 +55,7 @@ data Expr
   | App Expr Expr
   | Abs Identifier Expr
   | Let Binding Expr
-  | Rec [Binding] Expr
+  | Rec Binding Expr
   | Case Expr (NonEmpty (Pattern,Expr))
   | Error String
   deriving (Eq, Show)

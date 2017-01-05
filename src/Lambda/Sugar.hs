@@ -17,8 +17,8 @@ desugarExpr (App f x) = C.App (desugarExpr f) (desugarExpr x)
 desugarExpr (Abs n expr) = C.Abs n $ desugarExpr expr
 desugarExpr (Let def expr)
   = C.Let (translateDefinition def) $ desugarExpr expr
-desugarExpr (Rec defs expr)
-  = C.Rec (fmap translateDefinition defs) $ desugarExpr expr
+desugarExpr (Rec def expr)
+  = C.Rec (translateDefinition def) $ desugarExpr expr
 desugarExpr (Case n bs) = C.Case (desugarExpr n) $ fmap (fmap desugarExpr) bs
 desugarExpr (Error err) = C.Error err
 
@@ -34,7 +34,7 @@ data Expr
   | App Expr Expr
   | Abs C.Identifier Expr
   | Let FunctionDefinition Expr
-  | Rec [FunctionDefinition] Expr
+  | Rec FunctionDefinition Expr
   | Case Expr (NonEmpty (C.Pattern,Expr))
   | Error String
 

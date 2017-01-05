@@ -1,1 +1,12 @@
-thing = rec { f x = f x; a = a } in f a
+data List a = Nil | Cons a (List a)
+
+fix : forall a. (a -> a) -> a
+fix = rec fix' f = f (fix' f) in fix'
+
+ite c t e = case c of { true -> t; _ -> e }
+
+filter : forall a. (a -> Bool) -> List a -> List a
+filter = let f recurse pred list = case list of { Nil -> Nil; Cons a rest -> ite (pred a) (Cons a (recurse pred rest)) (recurse pred rest) } in fix f
+
+filter' : forall a. (a -> Bool) -> List a -> List a
+filter' = rec filter'' pred list = case list of { Nil -> Nil; Cons a rest -> ite (pred a) (Cons a (filter'' pred rest)) (filter'' pred rest) } in filter''

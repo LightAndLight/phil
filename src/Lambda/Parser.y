@@ -147,12 +147,8 @@ Branch : Pattern '->' Expr { ($1,$3) }
 Branches : Branch { $1 :| [] }
          | Branch eol Branches { $1 <| $3 }
 
-RecursiveDefinitions : { [] }
-                     | FunctionDefinition { [$1] }
-                     | FunctionDefinition eol RecursiveDefinitions { $1:$3 }
-
 Let : let FunctionDefinition in Expr { Let $2 $4 }
-Rec : rec '{' RecursiveDefinitions '}' in Expr { Rec $3 $6 }
+Rec : rec FunctionDefinition in Expr { Rec $2 $4 }
 Case : case Expr of '{' Branches '}' { Case $2 $5 }
 Lam : lam ident '.' Expr { Abs $2 $4 }
 
