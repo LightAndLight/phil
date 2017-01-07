@@ -9,11 +9,13 @@ data Prim
   | Bool
   deriving (Eq, Show, Ord)
 
+data TyCon = FunTy | DataTy Identifier deriving (Eq, Show, Ord)
+
 data Type
-  = TypeVar String
-  | PrimType Prim
-  | FunType Type Type
-  | PolyType String [Type]
+  = TyVar String
+  | TyApp Type Type
+  | TyCon TyCon
+  | TyPrim Prim
   deriving (Eq, Show, Ord)
 
 data TypeScheme
