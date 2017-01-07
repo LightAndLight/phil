@@ -26,7 +26,7 @@ data KindError
   = KNotDefined Identifier
   | KOccurs Identifier
   | KCannotUnify Kind Kind
-  | KTyVarNotInScope Identifier
+  | KNotInScope Identifier
   deriving (Eq, Show)
 
 substitute :: Map Identifier Kind -> Kind -> Kind
@@ -90,7 +90,7 @@ inferKind (TyVar var) = do
   maybeKind <- views kindTable $ M.lookup var
   case maybeKind of
     Just kind -> pure (M.empty,kind)
-    Nothing -> throwError $ _KTyVarNotInScope # var
+    Nothing -> throwError $ _KNotInScope # var
 inferKind (TyApp con arg) = do
   (s1,conKind) <- inferKind con
   (s2,argKind) <- local (over kindTable $ subKindTable s1) $ inferKind arg
