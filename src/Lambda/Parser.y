@@ -71,14 +71,16 @@ Start : Definitions eof { $1 }
 Args : ident { [$1] }
      | ident Args { $1:$2 }
 
-Ty : B { $1 }
-   | B '->' Ty { FunType $1 $3 }
+Ty : A { $1 }
+   | A '->' Ty { TyApp TyFun $1 $3 }
 
-B : cons TypeArgs { PolyType $1 $2 }
-  | A { $1 }
+A : B B { TyApp $1 $2 }
+  | B { $1 }
 
-A : ident { TypeVar $1 }
-  | PrimType { PrimType $1 }
+B : ident { TyVar $1 }
+  | PrimType { TyPrim $1 }
+  | cons { TyCon $1 }
+  | '(' '->' ')' { TyFun }
   | '(' Ty ')' { $2 }
 
 PrimType : intType { Int }
@@ -86,9 +88,8 @@ PrimType : intType { Int }
          | charType { Char }
          | boolType { Bool }
 
-
 TypeArgs : { [] }
-         | A TypeArgs { $1:$2 }
+         | B TypeArgs { $1:$2 }
 
 Constructor : cons TypeArgs { ProdDecl $1 $2 }
 
