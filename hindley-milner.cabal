@@ -16,6 +16,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lambda.Core.AST
+                     , Lambda.Core.AST.Lens
                      , Lambda.Core.Codegen
                      , Lambda.Core.Kinds
                      , Lambda.Core.Typecheck
@@ -78,6 +79,7 @@ test-suite hindley-milner-test
   default-language:    Haskell2010
   other-modules:       Lambda.Test.Arbitrary
                      , Test.Lambda.Core.Kind
+                     , Test.Lambda.Core.Typecheck
   build-tools:         alex
                      , happy
 
