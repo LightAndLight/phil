@@ -121,8 +121,8 @@ inferKind (TyApp con arg) = do
   s3 <- unify [(substitute s2 conKind,KindArrow argKind returnKind)]
   pure (applySubs s3 $ applySubs s2 s1,substitute s3 returnKind)
 inferKind (TyCon tyCon) = case tyCon of
-  FunTy -> pure (M.empty,KindArrow Star $ KindArrow Star Star)
-  DataTy con -> do
+  FunCon -> pure (M.empty,KindArrow Star $ KindArrow Star Star)
+  TypeCon con -> do
     maybeKind <- asks $ M.lookup con
     case maybeKind of
       Just kind -> pure (M.empty,kind)

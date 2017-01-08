@@ -236,13 +236,13 @@ kindOf ::
   -> m Kind
 kindOf name = do
   table <- use kindTable
-  snd <$> evalStateT (runReaderT (inferKind (TyCon $ DataTy name)) table) (KindInferenceState 0)
+  snd <$> evalStateT (runReaderT (inferKind (TyCon $ TypeCon name)) table) (KindInferenceState 0)
 
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
 
 nestedFunc :: Type -> String
-nestedFunc ty@(TyApp (TyApp (TyCon FunTy) _) _) = "(" ++ showType ty ++ ")"
+nestedFunc ty@(TyFun _ _) = "(" ++ showType ty ++ ")"
 nestedFunc ty = showType ty
 
 nestedCon :: Type -> String
@@ -252,10 +252,10 @@ nestedCon ty = showType ty
 showType :: Type -> String
 showType (TyVar name) = name
 showType (TyPrim ty) = show ty
-showType (TyApp (TyApp (TyCon FunTy) from) to) = nestedFunc from ++ " -> " ++ showType to
+showType (TyFun from to) = nestedFunc from ++ " -> " ++ showType to
 showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
-showType (TyCon FunTy) = "(->)"
-showType (TyCon (DataTy con)) = con
+showType (TyCon FunCon) = "(->)"
+showType (TyCon (TypeCon con)) = con
 
 showTypeScheme :: TypeScheme -> String
 showTypeScheme (Base ty) = showType ty

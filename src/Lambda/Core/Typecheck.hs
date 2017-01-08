@@ -94,11 +94,8 @@ lookupId name = do
     Just ty -> return ty
     Nothing -> throwError $ _NotInScope # [name]
 
-funTy :: Type -> Type -> Type
-funTy a = TyApp (TyApp (TyCon FunTy) a)
-
 conArgTypes :: Type -> (Type,[Type])
-conArgTypes (TyApp (TyApp (TyCon FunTy) from) to) = (from :) <$> conArgTypes to
+conArgTypes (TyFun from to) = (from :) <$> conArgTypes to
 conArgTypes ty = (ty,[])
 
 patType ::
@@ -355,13 +352,13 @@ w e = do
           (s1,t1) <- w' f
           (s2,t2) <- local (over context $ flip (foldr substituteContext) s1) $ w' x
           b <- fresh
-          s3 <- mgu [(funTy t2 b,foldr substitute t1 s2)]
+          s3 <- mgu [(TyFun t2 b,foldr substitute t1 s2)]
           return (s3 ++ s2 ++ s1, foldr substitute b s3)
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
           (s1,t1) <- local (over context $ M.insert x (Base b)) $ w' expr
-          return (s1,funTy (foldr substitute b s1) t1)
+          return (s1,TyFun (foldr substitute b s1) t1)
         (Let (Binding x e) e') -> do
           (s1,t1) <- w' e
           let addVar ctxt = let ctxt' = foldr substituteContext ctxt s1 in M.insert x (generalize ctxt' t1) ctxt'
@@ -416,7 +413,7 @@ checkDefinition (Data tyCon tyVars decls) = do
       case maybeCon of
         Just _ -> throwError $ _AlreadyDefined # dataCon
         Nothing -> do
-          let conFun = flip (foldr funTy) argTys $ foldl' TyApp (TyCon $ DataTy tyCon) tyVars
+          let conFun = flip (foldr TyFun) argTys $ foldl' TyApp (TyCon $ TypeCon tyCon) tyVars
           ctxt <- use context
           context %= M.insert dataCon (generalize ctxt conFun)
           return (dataCon, buildDataCon p)

@@ -72,15 +72,15 @@ Args : ident { [$1] }
      | ident Args { $1:$2 }
 
 Ty : A { $1 }
-   | A '->' Ty { TyApp (TyApp (TyCon FunTy) $1) $3 }
+   | A '->' Ty { TyFun $1 $3 }
 
 A : A B { TyApp $1 $2 }
   | B { $1 }
 
 B : ident { TyVar $1 }
   | PrimType { TyPrim $1 }
-  | cons { TyCon (DataTy $1) }
-  | '(' '->' ')' { TyCon FunTy }
+  | cons { TyCon (TypeCon $1) }
+  | '(' '->' ')' { TyCon FunCon }
   | '(' Ty ')' { $2 }
 
 PrimType : intType { Int }

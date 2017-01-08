@@ -1,3 +1,5 @@
+{-# LANGUAGE PatternSynonyms #-}
+
 module Lambda.Core.AST where
 
 import           Data.List.NonEmpty (NonEmpty)
@@ -9,7 +11,7 @@ data Prim
   | Bool
   deriving (Eq, Show, Ord)
 
-data TyCon = FunTy | DataTy Identifier deriving (Eq, Show, Ord)
+data TyCon = FunCon | TypeCon Identifier deriving (Eq, Show, Ord)
 
 data Type
   = TyVar String
@@ -17,6 +19,8 @@ data Type
   | TyCon TyCon
   | TyPrim Prim
   deriving (Eq, Show, Ord)
+
+pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 
 data TypeScheme
   = Base Type
