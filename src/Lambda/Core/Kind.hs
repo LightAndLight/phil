@@ -9,6 +9,7 @@ module Lambda.Core.Kind
   , checkDefinitionKinds
   , freshKindVar
   , inferKind
+  , runInferKind
   , showKind
   )
   where
@@ -128,6 +129,9 @@ inferKind (TyCon tyCon) = case tyCon of
       Just kind -> pure (M.empty,kind)
       Nothing -> throwError $ _KNotDefined # con
 inferKind (TyPrim _) = pure (M.empty,Star)
+
+runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m Kind
+runInferKind ty = fmap snd . flip evalStateT (KindInferenceState 0) . runReaderT (inferKind ty)
 
 inferKinds
   :: ( HasFreshCount s

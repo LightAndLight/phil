@@ -234,9 +234,7 @@ kindOf ::
   )
   => Identifier
   -> m Kind
-kindOf name = do
-  table <- use kindTable
-  snd <$> evalStateT (runReaderT (inferKind (TyCon $ TypeCon name)) table) (KindInferenceState 0)
+kindOf name = runInferKind (TyCon $ TypeCon name) =<< use kindTable
 
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
