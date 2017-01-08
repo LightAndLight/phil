@@ -241,40 +241,6 @@ kindOf name = do
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
 
-nestedFunc :: Type -> String
-nestedFunc ty@(TyFun _ _) = "(" ++ showType ty ++ ")"
-nestedFunc ty = showType ty
-
-nestedCon :: Type -> String
-nestedCon ty@TyApp{} = "(" ++ showType ty ++ ")"
-nestedCon ty = showType ty
-
-showType :: Type -> String
-showType (TyVar name) = name
-showType (TyPrim ty) = show ty
-showType (TyFun from to) = nestedFunc from ++ " -> " ++ showType to
-showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
-showType (TyCon FunCon) = "(->)"
-showType (TyCon (TypeCon con)) = con
-
-showTypeScheme :: TypeScheme -> String
-showTypeScheme (Base ty) = showType ty
-showTypeScheme (Forall name scheme) = "forall " ++ name ++ showTypeScheme' scheme
-  where
-    showTypeScheme' (Base ty) = ". " ++ showType ty
-    showTypeScheme' (Forall name scheme) = " " ++ name ++ showTypeScheme' scheme
-
-showLiteral :: Literal -> String
-showLiteral (LitInt a) = show a
-showLiteral (LitString a) = show a
-showLiteral (LitChar a) = show a
-showLiteral (LitBool b) = if b then "true" else "false"
-
-showPattern :: Pattern -> String
-showPattern (PatId a) = a
-showPattern (PatCon name args) = name ++ unwords args
-showPattern (PatLit lit) = showLiteral lit
-
 showNestedValue :: Value -> String
 showNestedValue v@(VProduct _ (_:_)) = "(" ++ showValue v ++ ")"
 showNestedValue v = showValue v
