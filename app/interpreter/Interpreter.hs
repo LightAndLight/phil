@@ -22,6 +22,7 @@ import System.FilePath
 import System.IO
 
 import Lambda.Core.AST hiding (Definition, Expr)
+import Lambda.Core.Kind
 import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
 import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
 import Lambda.Core.Typecheck
@@ -42,7 +43,7 @@ class HasSymbolTable s where
 data InterpreterState
   = InterpreterState
     { _interpSymbolTable :: Map Identifier Value
-    , _interpTypeTable :: Map Identifier Int
+    , _interpKindTable :: Map Identifier Kind
     , _interpTypesignatures :: Map Identifier TypeScheme
     , _interpContext :: Map Identifier TypeScheme
     , _interpFreshCount :: Int
@@ -64,8 +65,8 @@ instance HasTypesignatures InterpreterState where
 instance HasFreshCount InterpreterState where
   freshCount = interpreterState . interpFreshCount
 
-instance HasTypeTable InterpreterState where
-  typeTable = interpreterState . interpTypeTable
+instance HasKindTable InterpreterState where
+  kindTable = interpreterState . interpKindTable
 
 data InterpreterError
   = NotBound String
@@ -79,6 +80,9 @@ makeClassyPrisms ''InterpreterError
 
 instance AsTypeError InterpreterError where
   _TypeError = _InterpreterTypeError . _TypeError
+
+instance AsKindError InterpreterError where
+  _KindError = _InterpreterTypeError . _KindError
 
 instance AsParseError InterpreterError where
   _ParseError = _InterpreterParseError . _ParseError
@@ -172,7 +176,7 @@ printString :: MonadFree ReplF m => String -> m ()
 printString str = liftF $ PrintString str ()
 
 evaluate ::
-  ( HasTypeTable s
+  ( HasKindTable s
   , HasContext s
   , HasFreshCount s
   , HasSymbolTable s
@@ -189,13 +193,14 @@ evaluate expr = do
   runReaderT (eval expr) table
 
 define ::
-  ( HasTypeTable s
+  ( HasKindTable s
   , HasSymbolTable s
   , HasFreshCount s
   , HasContext s
   , HasTypesignatures s
   , AsInterpreterError e
   , AsTypeError e
+  , AsKindError e
   , MonadError e m
   , MonadState s m
   )
@@ -207,7 +212,7 @@ define def = do
   symbolTable %= M.union exprs'
 
 typeCheck ::
-  ( HasTypeTable s
+  ( HasKindTable s
   , HasContext s
   , HasFreshCount s
   , AsTypeError e
@@ -221,37 +226,18 @@ typeCheck expr = do
   ctxt <- use context
   runWithContext ctxt expr
 
+kindOf ::
+  ( HasKindTable s
+  , AsKindError e
+  , MonadError e m
+  , MonadState s m
+  )
+  => Identifier
+  -> m Kind
+kindOf name = runInferKind (TyCon $ TypeCon name) =<< use kindTable
+
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
-
-nested :: Type -> String
-nested ty@FunType{} = "(" ++ showType ty ++ ")"
-nested ty@PolyType{} = "(" ++ showType ty ++ ")"
-nested ty = showType ty
-
-showType :: Type -> String
-showType (TypeVar name) = name
-showType (PrimType ty) = show ty
-showType (FunType from to) = nested from ++ " -> " ++ showType to
-showType (PolyType cons args) = cons ++ " " ++ unwords (fmap nested args)
-
-showTypeScheme :: TypeScheme -> String
-showTypeScheme (Base ty) = showType ty
-showTypeScheme (Forall name scheme) = "forall " ++ name ++ showTypeScheme' scheme
-  where
-    showTypeScheme' (Base ty) = ". " ++ showType ty
-    showTypeScheme' (Forall name scheme) = " " ++ name ++ showTypeScheme' scheme
-
-showLiteral :: Literal -> String
-showLiteral (LitInt a) = show a
-showLiteral (LitString a) = show a
-showLiteral (LitChar a) = show a
-showLiteral (LitBool b) = if b then "true" else "false"
-
-showPattern :: Pattern -> String
-showPattern (PatId a) = a
-showPattern (PatCon name args) = name ++ unwords args
-showPattern (PatLit lit) = showLiteral lit
 
 showNestedValue :: Value -> String
 showNestedValue v@(VProduct _ (_:_)) = "(" ++ showValue v ++ ")"
@@ -264,7 +250,7 @@ showValue (VError message) = "Runtime Error: " ++ message
 showValue (VProduct name args) = unwords . (:) name $ fmap showNestedValue args
 
 repl ::
-  ( HasTypeTable s
+  ( HasKindTable s
   , HasContext s
   , HasTypesignatures s
   , HasSymbolTable s
@@ -274,6 +260,7 @@ repl ::
   , AsLexError e
   , AsParseError e
   , AsTypeError e
+  , AsKindError e
   , AsInterpreterError e
   , MonadError e m
   , MonadState s m
@@ -283,10 +270,13 @@ repl = flip catchError handleError $ do
   input <- readLine
   output <- case input of
     ':':'q':_ -> quit
-    ':':'t':rest -> do
+    ':':'t':' ':rest -> do
       toks <- tokenize rest
       expr <- parseExpression toks
       showTypeScheme <$> typeCheck (S.desugarExpr expr)
+    ':':'k':' ':rest -> do
+      kind <- kindOf rest
+      pure $ unwords [rest, ":", showKind kind]
     rest -> do
       toks <- tokenize rest
       input <- parseExprOrData toks

@@ -4,7 +4,7 @@ import           Lambda.Core.AST hiding (Identifier)
 import           Test.QuickCheck
 
 instance Arbitrary Prim where
-  arbitrary = elements [Int,String,Char]
+  arbitrary = elements [Int,String,Char,Bool]
 
 instance Arbitrary Type where
   arbitrary = resize 5 $ sized sizedType
@@ -12,10 +12,10 @@ instance Arbitrary Type where
 sizedType :: Int -> Gen Type
 sizedType n
   | n < 0 = error "No tree of size zero"
-  | n == 0 = PrimType <$> arbitrary
+  | n == 0 = TyPrim <$> arbitrary
   | otherwise
       = oneof
-          [ FunType <$> sizedType (n - 1) <*> sizedType (n - 1)
+          [ TyFun <$> sizedType (n - 1) <*> sizedType (n - 1)
           ]
 
 newtype Identifier = Identifier String

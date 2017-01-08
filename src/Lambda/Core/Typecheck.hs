@@ -23,6 +23,7 @@ import qualified Data.Set             as S
 import           Data.Traversable
 
 import           Lambda.Core.AST
+import Lambda.Core.Kind
 
 import Debug.Trace
 
@@ -30,7 +31,7 @@ data InferenceState
   = InferenceState
     { _context    :: Map Identifier TypeScheme
     , _typesignatures :: Map Identifier TypeScheme
-    , _typeTable  :: Map Identifier Int
+    , _kindTable  :: Map Identifier Kind
     , _freshCount :: Int
     }
 
@@ -42,13 +43,11 @@ class HasContext s where
 class HasTypesignatures s where
   typesignatures :: Lens' s (Map Identifier TypeScheme)
 
--- Currently the only information stored in this table is the arity of a type
--- contructor
-class HasTypeTable s where
-  typeTable :: Lens' s (Map Identifier Int)
-
 class HasFreshCount s where
   freshCount :: Lens' s Int
+
+class HasKindTable s where
+  kindTable :: Lens' s (Map Identifier Kind)
 
 instance HasContext InferenceState where
   context = lens _context (\s c -> s { _context = c })
@@ -56,8 +55,8 @@ instance HasContext InferenceState where
 instance HasTypesignatures InferenceState where
   typesignatures = lens _typesignatures (\s c -> s { _typesignatures = c })
 
-instance HasTypeTable InferenceState where
-  typeTable = lens _typeTable (\s t -> s { _typeTable = t })
+instance HasKindTable InferenceState where
+  kindTable = lens _kindTable (\s t -> s { _kindTable = t })
 
 instance HasFreshCount InferenceState where
   freshCount = lens _freshCount (\s c -> s { _freshCount = c })
@@ -72,10 +71,14 @@ data TypeError
   | WrongArity [Type]
   | NotDefined Identifier
   | DuplicateTypeSignatures Identifier
-  | FreeTypeVar Identifier
+  | FreeTyVar Identifier
+  | KindInferenceError KindError
   deriving (Eq, Show)
 
 makeClassyPrisms ''TypeError
+
+instance AsKindError TypeError where
+  _KindError = _KindInferenceError . _KindError
 
 lookupId ::
   ( HasContext r
@@ -92,7 +95,7 @@ lookupId name = do
     Nothing -> throwError $ _NotInScope # [name]
 
 conArgTypes :: Type -> (Type,[Type])
-conArgTypes (FunType from to) = (from :) <$> conArgTypes to
+conArgTypes (TyFun from to) = (from :) <$> conArgTypes to
 conArgTypes ty = (ty,[])
 
 patType ::
@@ -116,16 +119,15 @@ patType (PatCon conName args) = do
   when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
   let boundVars = foldr (\(arg,argTy) -> M.insert arg (Base argTy)) M.empty $ zip args argTys
   return $ Just (boundVars,retTy)
-patType (PatLit (LitInt p)) = return $ Just (M.empty,PrimType Int)
-patType (PatLit (LitString p)) = return $ Just (M.empty,PrimType String)
-patType (PatLit (LitChar p)) = return $ Just (M.empty,PrimType Char)
-patType (PatLit (LitBool p)) = return $ Just (M.empty,PrimType Bool)
+patType (PatLit (LitInt p)) = return $ Just (M.empty,TyPrim Int)
+patType (PatLit (LitString p)) = return $ Just (M.empty,TyPrim String)
+patType (PatLit (LitChar p)) = return $ Just (M.empty,TyPrim Char)
+patType (PatLit (LitBool p)) = return $ Just (M.empty,TyPrim Bool)
 patType PatWildcard = return Nothing
 
 freeInType :: Type -> Set Identifier
-freeInType (TypeVar name) = S.singleton name
-freeInType (FunType from to) = freeInType from `S.union` freeInType to
-freeInType (PolyType _ args) = foldr (\a b -> freeInType a `S.union` b) S.empty args
+freeInType (TyVar name) = S.singleton name
+freeInType (TyApp con arg) = freeInType con `S.union` freeInType arg
 freeInType _ = S.empty
 
 freeInScheme :: TypeScheme -> Set Identifier
@@ -155,7 +157,7 @@ specializeTypes names ty ty'
       = liftA2 (&&) (canSpecialize names a a') (canSpecialize names b b')
 
     canSpecialize :: Set Identifier -> Type -> Type -> State Substitution Bool
-    canSpecialize names (TypeVar name) ty' = do
+    canSpecialize names (TyVar name) ty' = do
       sub <- gets $ M.lookup name
       case sub of
         Just ty -> return $ ty == ty'
@@ -163,12 +165,9 @@ specializeTypes names ty ty'
           let nameInNames = name `S.member` names
           when nameInNames . modify $ M.insert name ty'
           return nameInNames
-    canSpecialize names ty@PrimType{} ty' = return $ ty == ty'
-    canSpecialize names (FunType from to) (FunType from' to')
+    canSpecialize names ty@TyPrim{} ty' = return $ ty == ty'
+    canSpecialize names (TyApp from to) (TyApp from' to')
       = canSpecializeMulti names from from' to to'
-    canSpecialize names (PolyType tyName tys) (PolyType tyName' tys')
-      = fmap (tyName == tyName' &&)
-        getAll . fold <$> traverse (\(a,b) -> All <$> canSpecialize names a b) (zip tys tys')
     canSpecialize names _ _ = return False
 
 specialize :: TypeScheme -> TypeScheme -> Bool
@@ -192,9 +191,8 @@ generalize ctxt ty
       (freeInType ty `S.difference` free ctxt)
 
 substitute :: Substitution -> Type -> Type
-substitute subs ty@(TypeVar name) = fromMaybe ty $ M.lookup name subs
-substitute subs (FunType from to) = FunType (substitute subs from) (substitute subs to)
-substitute subs (PolyType tyName tys) = PolyType tyName $ map (substitute subs) tys
+substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
+substitute subs (TyApp from to) = TyApp (substitute subs from) (substitute subs to)
 substitute subs ty = ty
 
 substituteScheme :: Substitution -> TypeScheme -> TypeScheme
@@ -213,7 +211,7 @@ fresh :: (HasFreshCount s, MonadState s m) => m Type
 fresh = do
   n <- use freshCount
   freshCount += 1
-  return . TypeVar $ "t" ++ show n
+  return . TyVar $ "t" ++ show n
 
 instantiate ::
   ( HasFreshCount s
@@ -245,21 +243,18 @@ mgu ((ty,ty'):c) = mgu1 ty ty' c
       | ty == ty' = mgu c
       | otherwise = mgu2 ty ty' c
 
-    mgu2 (TypeVar name) ty c = do
+    mgu2 (TyVar name) ty c = do
       occurs name ty
       second <- mgu (substituteConstraint (M.singleton name ty) c)
       pure $ second ++ [M.singleton name ty]
-    mgu2 ty (TypeVar name) c = mgu2 (TypeVar name) ty c
-    mgu2 (FunType from to) (FunType from' to') c = mgu ((from,from'):(to,to'):c)
-    mgu2 ty@(PolyType tyName tys) ty'@(PolyType tyName' tys') c
-      | tyName == tyName' = mgu (zip tys tys' ++ c)
-      | otherwise = throwError $ _TypeMismatch # (ty,ty')
+    mgu2 ty (TyVar name) c = mgu2 (TyVar name) ty c
+    mgu2 ty@(TyApp from to) ty'@(TyApp from' to') c = mgu ((from,from'):(to,to'):c)
     mgu2 ty ty' c = throwError $ _TypeMismatch # (ty,ty')
 
 unify :: (AsTypeError e, MonadError e m) => TypeScheme -> TypeScheme -> m ()
 unify (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
   where
-    unifyBase ty@(TypeVar name) ty'@(TypeVar name') = do
+    unifyBase ty@(TyVar name) ty'@(TyVar name') = do
       maybeTy <- gets $ M.lookup name
       case maybeTy of
         Nothing -> modify $ M.insert name ty'
@@ -268,22 +263,19 @@ unify (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
       case maybeTy of
         Nothing -> modify $ M.insert name' ty
         Just ty' -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-    unifyBase (TypeVar name) ty' = do
+    unifyBase (TyVar name) ty' = do
       maybeTy <- gets $ M.lookup name
       case maybeTy of
         Nothing -> modify $ M.insert name ty'
         Just ty -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-    unifyBase ty (TypeVar name) = do
+    unifyBase ty (TyVar name) = do
       maybeTy <- gets $ M.lookup name
       case maybeTy of
         Nothing -> modify $ M.insert name ty
         Just ty' -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-    unifyBase (FunType from to) (FunType from' to') = do
+    unifyBase ty@(TyApp from to) ty'@(TyApp from' to') = do
       unifyBase from from'
       unifyBase to to'
-    unifyBase ty@(PolyType tyName tys) ty'@(PolyType tyName' tys')
-      | tyName == tyName' = fold <$> traverse (uncurry unifyBase) (zip tys tys')
-      | otherwise = throwError $ _TypeMismatch # (ty,ty')
     unifyBase ty ty' = when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
 unify (Forall a ty) ty' = unify ty ty'
 unify ty (Forall a ty') = unify ty ty'
@@ -352,21 +344,21 @@ w e = do
           case res of
             Nothing -> throwError $ _NotInScope # [name]
             Just scheme -> (,) [] <$> instantiate scheme
-        (Lit (LitInt e)) -> return ([],PrimType Int)
-        (Lit (LitString e)) -> return ([],PrimType String)
-        (Lit (LitChar e)) -> return ([],PrimType Char)
-        (Lit (LitBool e)) -> return ([],PrimType Bool)
+        (Lit (LitInt e)) -> return ([],TyPrim Int)
+        (Lit (LitString e)) -> return ([],TyPrim String)
+        (Lit (LitChar e)) -> return ([],TyPrim Char)
+        (Lit (LitBool e)) -> return ([],TyPrim Bool)
         (App f x) -> do
           (s1,t1) <- w' f
           (s2,t2) <- local (over context $ flip (foldr substituteContext) s1) $ w' x
           b <- fresh
-          s3 <- mgu [(FunType t2 b,foldr substitute t1 s2)]
+          s3 <- mgu [(TyFun t2 b,foldr substitute t1 s2)]
           return (s3 ++ s2 ++ s1, foldr substitute b s3)
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
           (s1,t1) <- local (over context $ M.insert x (Base b)) $ w' expr
-          return (s1,FunType (foldr substitute b s1) t1)
+          return (s1,TyFun (foldr substitute b s1) t1)
         (Let (Binding x e) e') -> do
           (s1,t1) <- w' e
           let addVar ctxt = let ctxt' = foldr substituteContext ctxt s1 in M.insert x (generalize ctxt' t1) ctxt'
@@ -375,7 +367,7 @@ w e = do
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
           (s1,t1) <- local (over context . M.insert name $ Base freshVar) $ w' value
-          s2 <- mgu $ (t1,freshVar) : M.toList (M.mapKeys TypeVar $ foldr M.union M.empty s1)
+          s2 <- mgu $ (t1,freshVar) : M.toList (M.mapKeys TyVar $ foldr M.union M.empty s1)
           (s3,t2) <- local (over context $ \ctxt -> M.insert name (generalize ctxt $ foldr substitute t1 s2) $ foldr substituteContext ctxt s1) $ w' rest
           pure (s3 ++ s1,t2)
         (Case input bs) -> do
@@ -385,9 +377,6 @@ w e = do
           let constraints = foldr (\(p,b) constrs -> (p,inputType):(b,outputType):constrs) [] bs'
           subs <- mgu constraints
           pure (subs ++ bSubs ++ s1,foldr substitute outputType subs)
-
-buildFunction :: [Type] -> Type -> Type
-buildFunction argTys retTy = foldr FunType retTy argTys
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
@@ -401,49 +390,37 @@ buildDataCon (ProdDecl dataCon argTys)
 
 checkDefinition ::
   ( HasFreshCount s
-  , HasTypeTable s
+  , HasKindTable s
   , HasContext s
   , HasTypesignatures s
   , MonadState s m
   , AsTypeError e
+  , AsKindError e
   , MonadError e m
   )
   => Definition
   -> m (Map Identifier Expr)
 checkDefinition (Data tyCon tyVars decls) = do
   freshCount .= 0
-  M.fromList <$> traverse (checkDataDecl tyCon tyVars) (N.toList decls)
+  table <- use kindTable
+  kind <- runReaderT (checkDefinitionKinds tyCon tyVars decls) table
+  kindTable %= M.insert tyCon kind
+  let tyVars' = fmap TyVar tyVars
+  M.fromList <$> traverse (checkDataDecl tyCon tyVars') (N.toList decls)
   where
-    tyVarsNotInScope tyVars argTys =
-      foldr S.union S.empty (fmap freeInType argTys) `S.difference` S.fromList tyVars
-
-    arity n (PolyType name as) = do
-      maybeArity <- use (typeTable . at name)
-      case maybeArity of
-        Nothing -> throwError $ _NotDefined # name
-        Just maxArity -> return $ maxArity - length as == n
-    arity 0 _ = return True
-    arity _ _ = return False
-
     checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
       maybeCon <- use (context . at dataCon)
       case maybeCon of
         Just _ -> throwError $ _AlreadyDefined # dataCon
         Nothing -> do
-          let notInScope = tyVarsNotInScope tyVars argTys
-          when (notInScope /= S.empty) . throwError $ _NotInScope # S.toList notInScope
-          typeTable %= M.insert tyCon (length tyVars)
-          wrongArities <- filterM (fmap not . arity 0) argTys
-          when (wrongArities /= []) . throwError $ _WrongArity # wrongArities
-          let conFun = buildFunction argTys $ PolyType tyCon (fmap TypeVar tyVars)
-          subs <- M.fromList . zip tyVars <$> replicateM (length tyVars) fresh
+          let conFun = flip (foldr TyFun) argTys $ foldl' TyApp (TyCon $ TypeCon tyCon) tyVars
           ctxt <- use context
-          context %= M.insert dataCon (generalize ctxt $ substitute subs conFun)
+          context %= M.insert dataCon (generalize ctxt conFun)
           return (dataCon, buildDataCon p)
 
 checkDefinition (Function (Binding name expr)) = do
   freshCount .= 0
-  maybeVar <- uses typeTable (M.lookup name)
+  maybeVar <- uses kindTable (M.lookup name)
   case maybeVar of
     Nothing -> do
       ctxt <- use context
@@ -468,23 +445,24 @@ checkDefinition (TypeSignature name ty) = do
     validateSig (Forall name ty) = local (S.insert name) $ validateSig ty
     validateSig (Base ty) = validateType ty
 
-    validateType (TypeVar ty) = do
+    validateType (TyVar ty) = do
       bound <- ask
-      unless (ty `S.member` bound) . throwError $ _FreeTypeVar # ty
-    validateType (PrimType ty) = pure ()
-    validateType (FunType from to) = validateType from >> validateType to
-    validateType (PolyType name args) = do
-      declared <- uses typeTable (M.member name)
-      unless declared . throwError $ _NotDefined # name
-      traverse_ validateType args
+      unless (ty `S.member` bound) . throwError $ _FreeTyVar # ty
+    validateType ty = do
+      table <- use kindTable
+      quantified <- ask
+      void . flip runStateT (KindInferenceState 0) $ do
+        quantified' <- for (S.toList quantified) $ \a -> (,) a <$> freshKindVar
+        flip runReaderT (M.fromList quantified' `M.union` table) $ inferKind ty
 
 checkDefinitions ::
   ( HasFreshCount s
-  , HasTypeTable s
+  , HasKindTable s
   , HasContext s
   , HasTypesignatures s
   , MonadState s m
   , AsTypeError e
+  , AsKindError e
   , MonadError e m
   )
   => [Definition]

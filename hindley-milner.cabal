@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Lambda.Core.AST
                      , Lambda.Core.Codegen
+                     , Lambda.Core.Kind
                      , Lambda.Core.Typecheck
                      , Lambda.Lexer
                      , Lambda.Parser
@@ -70,10 +71,13 @@ test-suite hindley-milner-test
   build-depends:       base
                      , containers
                      , hindley-milner
+                     , hspec
+                     , mtl
                      , QuickCheck
                      , semigroups
   default-language:    Haskell2010
   other-modules:       Lambda.Test.Arbitrary
+                     , Test.Lambda.Core.Kind
   build-tools:         alex
                      , happy
 

@@ -10,6 +10,7 @@ import           Options.Applicative
 import           System.Environment
 
 import           Lambda.Core.Codegen
+import           Lambda.Core.Kind
 import           Lambda.Core.Typecheck
 import           Lambda.Lexer
 import           Lambda.Parser         (parseProgram)
@@ -28,6 +29,9 @@ makeClassyPrisms ''CompilerError
 
 instance AsTypeError CompilerError where
   _TypeError = _CompilerTypeError . _TypeError
+
+instance AsKindError CompilerError where
+  _KindError = _CompilerTypeError . _KindError
 
 instance AsParseError CompilerError where
   _ParseError = _CompilerParseError . _ParseError
@@ -53,6 +57,7 @@ compile ::
   , AsLexError e
   , AsParseError e
   , AsTypeError e
+  , AsKindError e
   , AsCompilerError e
   , MonadError e m
   , MonadIO m
