@@ -17,7 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Lambda.Core.AST
                      , Lambda.Core.Codegen
-                     , Lambda.Core.Kind
+                     , Lambda.Core.Kinds
                      , Lambda.Core.Typecheck
                      , Lambda.Lexer
                      , Lambda.Parser

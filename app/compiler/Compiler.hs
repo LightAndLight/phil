@@ -10,7 +10,7 @@ import           Options.Applicative
 import           System.Environment
 
 import           Lambda.Core.Codegen
-import           Lambda.Core.Kind
+import           Lambda.Core.Kinds
 import           Lambda.Core.Typecheck
 import           Lambda.Lexer
 import           Lambda.Parser         (parseProgram)

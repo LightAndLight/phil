@@ -22,7 +22,7 @@ import System.FilePath
 import System.IO
 
 import Lambda.Core.AST hiding (Definition, Expr)
-import Lambda.Core.Kind
+import Lambda.Core.Kinds
 import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
 import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
 import Lambda.Core.Typecheck

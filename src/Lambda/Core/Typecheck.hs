@@ -23,9 +23,7 @@ import qualified Data.Set             as S
 import           Data.Traversable
 
 import           Lambda.Core.AST
-import Lambda.Core.Kind
-
-import Debug.Trace
+import Lambda.Core.Kinds
 
 data InferenceState
   = InferenceState

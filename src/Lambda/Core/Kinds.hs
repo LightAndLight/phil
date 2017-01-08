@@ -1,7 +1,7 @@
 {-# language TemplateHaskell #-}
 {-# language FlexibleContexts #-}
 
-module Lambda.Core.Kind
+module Lambda.Core.Kinds
   ( KindError(..)
   , Kind(..)
   , KindInferenceState(..)

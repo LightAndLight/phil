@@ -1,4 +1,4 @@
-module Test.Lambda.Core.Kind (kindSpec) where
+module Test.Lambda.Core.Kinds (kindSpec) where
 
 import           Control.Monad.Except
 import           Control.Monad.Reader
@@ -9,7 +9,7 @@ import qualified Data.Map             as M
 import           Data.Traversable
 
 import           Lambda.Core.AST
-import           Lambda.Core.Kind
+import           Lambda.Core.Kinds
 
 import           Test.Hspec
 
