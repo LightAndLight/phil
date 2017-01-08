@@ -59,6 +59,9 @@ kindSpec = describe "Lambda.Core.Kind" $ do
       it "data List a = Nil | Cons a List" $
         runCheckDefinitionKinds "List" ["a"] (ProdDecl "Nil" [] :| [ProdDecl "Cons" [TyVar "a", TyCon $ TypeCon "List"]])
           `shouldSatisfy` isLeft
+      it "data Occurs a b = A (a b) | B (b a)" $
+        runCheckDefinitionKinds "Occurs" ["a", "b"] (ProdDecl "A" [TyApp (TyVar "a") (TyVar "b")] :| [ProdDecl "B" [TyApp (TyVar "b") (TyVar "a")]])
+          `shouldSatisfy` isLeft
   describe "inferKind" $
     it "forall f a. f a -> f fails" $
       runInferKindTypeScheme ["a", "f"] (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyVar "f"))

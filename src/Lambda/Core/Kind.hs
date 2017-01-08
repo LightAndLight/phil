@@ -55,6 +55,11 @@ substitute subs Star = Star
 substitute subs (KindArrow k1 k2) = KindArrow (substitute subs k1) (substitute subs k2)
 substitute subs (KindVar name) = fromMaybe (KindVar name) $ M.lookup name subs
 
+-- If we don't instantiate the result of kind inference then we have Kind Polymorphism
+instantiate :: Kind -> Kind
+instantiate (KindArrow k1 k2) = KindArrow (instantiate k1) (instantiate k2)
+instantiate _ = Star
+
 -- Apply s1 to s2
 applySubs :: Map Identifier Kind -> Map Identifier Kind -> Map Identifier Kind
 applySubs s1 = M.union s1 . fmap (substitute s1)
@@ -133,7 +138,7 @@ inferKind (TyPrim _) = pure (M.empty,Star)
 runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m Kind
 runInferKind ty = fmap snd . flip evalStateT (KindInferenceState 0) . runReaderT (inferKind ty)
 
-inferKinds
+unifyProductArguments
   :: ( HasFreshCount s
      , MonadState s m
      , MonadReader (Map Identifier Kind) m
@@ -141,15 +146,15 @@ inferKinds
      , MonadError e m
      )
   => [Type]
-  -> m (Map Identifier Kind, [Kind])
-inferKinds [] = pure (M.empty,[])
-inferKinds (ty:tys) = do
+  -> m (Map Identifier Kind)
+unifyProductArguments [] = pure M.empty
+unifyProductArguments (ty:tys) = do
   (s1,k1) <- inferKind ty
-  (ss,ks) <- local (subKindTable s1) $ inferKinds tys
-  s2 <- unify [(substitute ss k1,Star)]
-  pure (applySubs s2 $ applySubs ss s1, substitute s2 k1 : ks)
+  s2 <- local (subKindTable s1) $ unifyProductArguments tys
+  s3 <- unify [(substitute s2 k1,Star)]
+  pure (applySubs s3 $ applySubs s2 s1)
 
-unifyProdDeclKinds
+unifyProducts
   :: ( HasFreshCount s
      , MonadState s m
      , MonadReader (Map Identifier Kind) m
@@ -158,13 +163,29 @@ unifyProdDeclKinds
      )
   => [ProdDecl]
   -> m (Map Identifier Kind)
-unifyProdDeclKinds [] = pure M.empty
-unifyProdDeclKinds (ProdDecl _ argTys:prods) = do
-  (s1,ks) <- inferKinds argTys
-  ss <- local (subKindTable s1) $ unifyProdDeclKinds prods
-  --subs <- unify $ fmap (\k -> (substitute ss k, Star)) ks
-  --pure . applySubs subs $ applySubs ss s1
+unifyProducts [] = pure M.empty
+unifyProducts (ProdDecl name argTys:prods) = do
+  s1 <- unifyProductArguments argTys
+  ss <- local (subKindTable s1) $ unifyProducts prods
   pure $ applySubs ss s1
+
+inferWithTypeVars
+  :: ( MonadReader (Map Identifier Kind) m
+     , HasFreshCount s
+     , MonadState s m
+     , AsKindError e
+     , MonadError e m
+     )
+  => [Identifier]
+  -> NonEmpty ProdDecl
+  -> m (Map Identifier Kind,Kind)
+inferWithTypeVars [] prods = do
+  subs <- unifyProducts $ N.toList prods
+  pure (subs, Star)
+inferWithTypeVars (tv:tvs) prods = do
+  freshVar <- freshKindVar
+  (subs,k) <- local (M.insert tv freshVar) $ inferWithTypeVars tvs prods
+  pure (subs, KindArrow (substitute subs freshVar) k)
 
 checkDefinitionKinds
   :: ( MonadReader (Map Identifier Kind) m
@@ -178,15 +199,7 @@ checkDefinitionKinds
 checkDefinitionKinds tyCon tyVars prods
   = flip evalStateT (KindInferenceState 0) $ do
       freshVar <- freshKindVar
-      (subs,ty) <- local (M.insert tyCon freshVar) $ go tyVars
+      (subs,ty) <- local (M.insert tyCon freshVar) $ inferWithTypeVars tyVars prods
       subs' <- unify [(freshVar, ty)]
       subs'' <- unify [(substitute subs freshVar, substitute subs' freshVar)]
-      pure $ substitute subs'' ty
-  where
-    go [] = do
-      subs <- unifyProdDeclKinds $ N.toList prods
-      pure (subs, Star)
-    go (tv:tvs) = do
-      freshVar <- freshKindVar
-      (subs,k) <- local (M.insert tv freshVar) $ go tvs
-      pure (subs, KindArrow (substitute subs freshVar) k)
+      pure . instantiate $ substitute subs'' ty
