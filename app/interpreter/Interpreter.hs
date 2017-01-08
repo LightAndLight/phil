@@ -241,15 +241,19 @@ kindOf name = do
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
 
-nested :: Type -> String
-nested ty@TyApp{} = "(" ++ showType ty ++ ")"
-nested ty = showType ty
+nestedFunc :: Type -> String
+nestedFunc ty@(TyApp (TyApp (TyCon FunTy) _) _) = "(" ++ showType ty ++ ")"
+nestedFunc ty = showType ty
+
+nestedCon :: Type -> String
+nestedCon ty@TyApp{} = "(" ++ showType ty ++ ")"
+nestedCon ty = showType ty
 
 showType :: Type -> String
 showType (TyVar name) = name
 showType (TyPrim ty) = show ty
-showType (TyApp (TyApp (TyCon FunTy) from) to) = nested from ++ " -> " ++ showType to
-showType (TyApp cons arg) = nested cons ++ " " ++ nested arg
+showType (TyApp (TyApp (TyCon FunTy) from) to) = nestedFunc from ++ " -> " ++ showType to
+showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
 showType (TyCon FunTy) = "(->)"
 showType (TyCon (DataTy con)) = con
 
