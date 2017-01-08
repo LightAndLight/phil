@@ -66,7 +66,6 @@ data Expr
   | Error String
   deriving (Eq, Show)
 
-
 nestedFunc :: Type -> String
 nestedFunc ty@(TyFun _ _) = "(" ++ showType ty ++ ")"
 nestedFunc ty = showType ty

@@ -193,12 +193,16 @@ substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
 substitute subs (TyApp from to) = TyApp (substitute subs from) (substitute subs to)
 substitute subs ty = ty
 
-substituteScheme :: Substitution -> TypeScheme -> TypeScheme
-substituteScheme subs (Base ty) = Base $ substitute subs ty
-substituteScheme subs (Forall name scheme) = Forall name $ substituteScheme (M.delete name subs) scheme
+-- apply s1 to s2
+applySubs :: Substitution -> Substitution -> Substitution
+applySubs s1 = M.union s1 . fmap (substitute s1)
 
-substituteContext :: Substitution -> Map Identifier TypeScheme -> Map Identifier TypeScheme
-substituteContext subs = fmap (substituteScheme subs)
+subTypeScheme :: Substitution -> TypeScheme -> TypeScheme
+subTypeScheme subs (Base ty) = Base $ substitute subs ty
+subTypeScheme subs (Forall name scheme) = Forall name $ subTypeScheme (M.delete name subs) scheme
+
+subContext :: Substitution -> Map Identifier TypeScheme -> Map Identifier TypeScheme
+subContext subs = fmap (subTypeScheme subs)
 
 type Constraint = [(Type,Type)]
 
@@ -227,27 +231,23 @@ instantiate scheme = instantiate' scheme M.empty
       freshVar <- fresh
       instantiate' ty $ M.insert name freshVar subs
 
-occurs :: (AsTypeError e, MonadError e m) => Identifier -> Type -> m ()
-occurs name ty
-  | name `S.member` freeInType ty = throwError $ _OccursError # (name,ty)
-  | otherwise = return ()
+occurs :: Identifier -> Type -> Bool
+occurs name ty = name `S.member` freeInType ty
 
--- If both arguments are type variables then replaces the first with the second
-mgu :: (AsTypeError e, MonadError e m) => Constraint -> m [Substitution]
-mgu [] = pure []
-mgu ((ty,ty'):c) = mgu1 ty ty' c
-  where
-    mgu1 ty ty' c
-      | ty == ty' = mgu c
-      | otherwise = mgu2 ty ty' c
-
-    mgu2 (TyVar name) ty c = do
-      occurs name ty
-      second <- mgu (substituteConstraint (M.singleton name ty) c)
-      pure $ second ++ [M.singleton name ty]
-    mgu2 ty (TyVar name) c = mgu2 (TyVar name) ty c
-    mgu2 ty@(TyApp from to) ty'@(TyApp from' to') c = mgu ((from,from'):(to,to'):c)
-    mgu2 ty ty' c = throwError $ _TypeMismatch # (ty,ty')
+mgu :: (AsTypeError e, MonadError e m) => Constraint -> m Substitution
+mgu [] = pure M.empty
+mgu (eq:eqs)
+  | uncurry (==) eq = mgu eqs
+  | otherwise = case eq of
+      (TyVar name,ty)
+        | not $ occurs name ty -> do
+            let sub = M.singleton name ty
+            subs <- mgu $ substituteConstraint sub eqs
+            pure $ applySubs sub subs
+        | otherwise -> throwError $ _OccursError # (name,ty)
+      (ty,TyVar name) -> mgu $ (TyVar name,ty):eqs
+      (TyApp con arg,TyApp con' arg') -> mgu $ (con,con'):(arg,arg'):eqs
+      (ty,ty') -> throwError $ _TypeMismatch # (ty,ty')
 
 unify :: (AsTypeError e, MonadError e m) => TypeScheme -> TypeScheme -> m ()
 unify (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
@@ -299,7 +299,7 @@ w ::
 w e = do
   (subs,ty) <- w' e
   ctxt <- view context
-  return . generalize ctxt $ foldr substitute ty subs
+  return . generalize ctxt $ substitute subs ty
   where
     inferBranches ::
       ( HasFreshCount s
@@ -310,8 +310,8 @@ w e = do
       , MonadError e m
       )
       => NonEmpty (Pattern,Expr)
-      -> m ([Substitution], [(Type,Type)])
-    inferBranches = foldrM inferBranch ([],[])
+      -> m (Substitution, [(Type,Type)])
+    inferBranches = foldrM inferBranch (M.empty,[])
       where
         inferBranch (pat,branch) (subs,bTypes) = do
           res <- patType pat
@@ -319,11 +319,11 @@ w e = do
             Just (boundVars,patternType) ->
               local (over context $ M.union boundVars) $ do
                 (branchSubs,branchType) <- w' branch
-                pure (branchSubs ++ subs, (patternType,branchType):bTypes)
+                pure (applySubs branchSubs subs, (patternType,branchType):bTypes)
             Nothing -> do
               (branchSubs,branchType) <- w' branch
               patternType <- fresh
-              pure (branchSubs ++ subs, (patternType,branchType):bTypes)
+              pure (applySubs branchSubs subs, (patternType,branchType):bTypes)
 
     w' ::
       ( HasFreshCount s
@@ -334,47 +334,47 @@ w e = do
       , MonadError e m
       )
       => Expr
-      -> m ([Substitution], Type)
+      -> m (Substitution, Type)
     w' e = case e of
-        (Error _) -> (,) [] <$> fresh
+        (Error _) -> (,) M.empty <$> fresh
         (Id name) -> do
           res <- view (context . at name)
           case res of
             Nothing -> throwError $ _NotInScope # [name]
-            Just scheme -> (,) [] <$> instantiate scheme
-        (Lit (LitInt e)) -> return ([],TyPrim Int)
-        (Lit (LitString e)) -> return ([],TyPrim String)
-        (Lit (LitChar e)) -> return ([],TyPrim Char)
-        (Lit (LitBool e)) -> return ([],TyPrim Bool)
+            Just scheme -> (,) M.empty <$> instantiate scheme
+        (Lit (LitInt e)) -> return (M.empty,TyPrim Int)
+        (Lit (LitString e)) -> return (M.empty,TyPrim String)
+        (Lit (LitChar e)) -> return (M.empty,TyPrim Char)
+        (Lit (LitBool e)) -> return (M.empty,TyPrim Bool)
         (App f x) -> do
           (s1,t1) <- w' f
-          (s2,t2) <- local (over context $ flip (foldr substituteContext) s1) $ w' x
+          (s2,t2) <- local (over context $ subContext s1) $ w' x
           b <- fresh
-          s3 <- mgu [(TyFun t2 b,foldr substitute t1 s2)]
-          return (s3 ++ s2 ++ s1, foldr substitute b s3)
+          s3 <- mgu [(TyFun t2 b,substitute s2 t1)]
+          return (applySubs s3 $ applySubs s2 s1, substitute s3 b)
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
           (s1,t1) <- local (over context $ M.insert x (Base b)) $ w' expr
-          return (s1,TyFun (foldr substitute b s1) t1)
+          return (s1,TyFun (substitute s1 b) t1)
         (Let (Binding x e) e') -> do
           (s1,t1) <- w' e
-          let addVar ctxt = let ctxt' = foldr substituteContext ctxt s1 in M.insert x (generalize ctxt' t1) ctxt'
+          let addVar ctxt = let ctxt' = subContext s1 ctxt in M.insert x (generalize ctxt' t1) ctxt'
           (s2,t2) <- local (over context addVar) $ w' e'
-          return (s2 ++ s1, t2)
+          return (applySubs s2 s1, t2)
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
           (s1,t1) <- local (over context . M.insert name $ Base freshVar) $ w' value
-          s2 <- mgu $ (t1,freshVar) : M.toList (M.mapKeys TyVar $ foldr M.union M.empty s1)
-          (s3,t2) <- local (over context $ \ctxt -> M.insert name (generalize ctxt $ foldr substitute t1 s2) $ foldr substituteContext ctxt s1) $ w' rest
-          pure (s3 ++ s1,t2)
+          s2 <- mgu $ (t1,freshVar) : M.toList (M.mapKeys TyVar s1)
+          (s3,t2) <- local (over context $ \ctxt -> M.insert name (generalize ctxt $ substitute s2 t1) $ subContext s1 ctxt) $ w' rest
+          pure (applySubs s3 s1,t2)
         (Case input bs) -> do
           (s1,inputType) <- w' input
           (bSubs,bs') <- inferBranches bs
           outputType <- fresh
           let constraints = foldr (\(p,b) constrs -> (p,inputType):(b,outputType):constrs) [] bs'
           subs <- mgu constraints
-          pure (subs ++ bSubs ++ s1,foldr substitute outputType subs)
+          pure (applySubs subs $ applySubs bSubs s1,substitute subs outputType)
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
