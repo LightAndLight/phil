@@ -37,6 +37,11 @@ makePrisms ''Literal
 
 makePrisms ''Pattern
 makePrisms ''Expr
+makePrisms ''Binding
+
+_Binding' :: Identifier -> Prism' Binding Expr
+_Binding' name = prism' (Binding name) $
+  \(Binding name' e) -> if name == name' then Just e else Nothing
 
 _Id' :: Identifier -> Prism' Expr ()
 _Id' = only . Id

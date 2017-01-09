@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE RankNTypes       #-}
+{-# LANGUAGE ConstraintKinds       #-}
 
 module Lambda.Core.Typecheck where
 
@@ -95,33 +96,6 @@ lookupId name = do
 conArgTypes :: Type -> (Type,[Type])
 conArgTypes (TyFun from to) = (from :) <$> conArgTypes to
 conArgTypes ty = (ty,[])
-
-patType ::
-  ( HasFreshCount s
-  , MonadState s m
-  , HasContext r
-  , MonadReader r m
-  , AsTypeError e
-  , MonadError e m
-  )
-  => Pattern
-  -> m (Maybe (Map Identifier TypeScheme,Type))
-patType (PatId name) = do
-  ty <- fresh
-  return $ Just (M.singleton name $ Base ty,ty)
-patType (PatCon conName args) = do
-  conTy <- instantiate =<< lookupId conName
-  let (retTy,argTys) = conArgTypes conTy
-      argsLen = length args
-      argTysLen = length argTys
-  when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
-  let boundVars = foldr (\(arg,argTy) -> M.insert arg (Base argTy)) M.empty $ zip args argTys
-  return $ Just (boundVars,retTy)
-patType (PatLit (LitInt p)) = return $ Just (M.empty,TyPrim Int)
-patType (PatLit (LitString p)) = return $ Just (M.empty,TyPrim String)
-patType (PatLit (LitChar p)) = return $ Just (M.empty,TyPrim Char)
-patType (PatLit (LitBool p)) = return $ Just (M.empty,TyPrim Bool)
-patType PatWildcard = return Nothing
 
 freeInType :: Type -> Set Identifier
 freeInType (TyVar name) = S.singleton name
@@ -225,7 +199,16 @@ runWithContext ctxt
   = flip evalStateT initialInferenceState .
     flip runReaderT initialInferenceState { _context = ctxt } . w
 
-w ::
+type MonadW r s e m
+  = ( HasFreshCount s
+    , MonadState s m
+    , HasContext r
+    , MonadReader r m
+    , AsTypeError e
+    , MonadError e m
+    )
+
+patType ::
   ( HasFreshCount s
   , MonadState s m
   , HasContext r
@@ -233,54 +216,44 @@ w ::
   , AsTypeError e
   , MonadError e m
   )
-  => Expr
-  -> m TypeScheme
+  => Pattern
+  -> m (Map Identifier TypeScheme,Type)
+patType (PatId name) = do
+  ty <- fresh
+  return (M.singleton name $ Base ty,ty)
+patType (PatCon conName args) = do
+  conTy <- instantiate =<< lookupId conName
+  let (retTy,argTys) = conArgTypes conTy
+      argsLen = length args
+      argTysLen = length argTys
+  when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
+  let boundVars = foldr (\(arg,argTy) -> M.insert arg (Base argTy)) M.empty $ zip args argTys
+  return (boundVars,retTy)
+patType (PatLit (LitInt p)) = return (M.empty,TyPrim Int)
+patType (PatLit (LitString p)) = return (M.empty,TyPrim String)
+patType (PatLit (LitChar p)) = return (M.empty,TyPrim Char)
+patType (PatLit (LitBool p)) = return (M.empty,TyPrim Bool)
+patType PatWildcard = (,) M.empty <$> fresh
+
+w :: MonadW r s e m => Expr -> m TypeScheme
 w e = do
   (subs,ty) <- w' e
   ctxt <- view context
   return . generalize ctxt $ substitute subs ty
   where
-    inferBranches ::
-      ( HasFreshCount s
-      , MonadState s m
-      , HasContext r
-      , MonadReader r m
-      , AsTypeError e
-      , MonadError e m
-      )
-      => NonEmpty (Pattern,Expr)
-      -> m (Substitution, [(Type,Type)])
+    inferBranches :: MonadW r s e m => NonEmpty (Pattern,Expr) -> m (Substitution, [(Type,Type)])
     inferBranches = foldrM inferBranch (M.empty,[])
       where
         inferBranch (pat,branch) (subs,bTypes) = do
-          res <- patType pat
-          case res of
-            Just (boundVars,patternType) ->
-              local (over context $ M.union boundVars) $ do
-                (branchSubs,branchType) <- w' branch
-                pure (applySubs branchSubs subs, (patternType,branchType):bTypes)
-            Nothing -> do
-              (branchSubs,branchType) <- w' branch
-              patternType <- fresh
-              pure (applySubs branchSubs subs, (patternType,branchType):bTypes)
+          (boundVars,patternType) <- patType pat
+          local (over context $ M.union boundVars) $ do
+            (branchSubs,branchType) <- w' branch
+            pure (applySubs branchSubs subs, (patternType,branchType):bTypes)
 
-    w' ::
-      ( HasFreshCount s
-      , MonadState s m
-      , HasContext r
-      , MonadReader r m
-      , AsTypeError e
-      , MonadError e m
-      )
-      => Expr
-      -> m (Substitution, Type)
+    w' :: MonadW r s e m => Expr -> m (Substitution, Type)
     w' e = case e of
         (Error _) -> (,) M.empty <$> fresh
-        (Id name) -> do
-          res <- view (context . at name)
-          case res of
-            Nothing -> throwError $ _NotInScope # [name]
-            Just scheme -> (,) M.empty <$> instantiate scheme
+        (Id name) -> (,) M.empty <$> (lookupId name >>= instantiate)
         (Lit (LitInt e)) -> return (M.empty,TyPrim Int)
         (Lit (LitString e)) -> return (M.empty,TyPrim String)
         (Lit (LitChar e)) -> return (M.empty,TyPrim Char)
