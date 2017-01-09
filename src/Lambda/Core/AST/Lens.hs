@@ -4,6 +4,7 @@
 module Lambda.Core.AST.Lens where
 
 import           Control.Lens
+import           Control.Monad.Except
 import           Data.Set              (Set)
 import qualified Data.Set              as S (fromList)
 
@@ -64,3 +65,7 @@ _Abs' name = prism' (Abs name) $
       | name == name' -> Just e'
       | otherwise -> Nothing
     _ -> Nothing
+
+unifies :: AReview TypeScheme () -> Either e TypeScheme -> Bool
+unifies p (Left _) = False
+unifies p (Right scheme) = has _Right (unify (p # ()) scheme :: Either TypeError ())
