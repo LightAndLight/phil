@@ -1,4 +1,13 @@
-data Maybe a = Nothing | Just a
+data List a = Nil | Cons a (List a)
 
-id : forall b. b -> b
-id x = x
+ifte cond a b = case cond of { true -> a; false -> b }
+
+filter = rec filter' pred list = case list of {
+  Nil -> Nil;
+  Cons a rest -> ifte (pred a) (Cons a (filter' pred rest)) (filter' pred rest)
+  } in filter'
+
+test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
+
+id : Int -> Int
+id x = case x of { 1 -> 0; _ -> false}

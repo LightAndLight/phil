@@ -199,33 +199,23 @@ mgu (eq:eqs)
       (ty,ty') -> throwError $ _TypeMismatch # (ty,ty')
 
 unify :: (AsTypeError e, MonadError e m) => TypeScheme -> TypeScheme -> m ()
-unify (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
+unify scheme scheme'
+  | scheme == scheme' = pure ()
+  | otherwise = case (scheme,scheme') of
+      (Forall vars ty,Forall vars' ty')
+        | vars == vars' -> unifyTypes ty ty'
+        | otherwise -> do
+            let subs = M.fromList $ zip (S.elems vars) (S.elems vars')
+            let bound = S.difference vars vars' `S.union` vars'
+            unify (Forall bound $ substitute (TyVar <$> subs) ty) (Forall bound ty')
+      (Forall vars ty,Base ty') -> unifyTypes ty ty'
+      (Base ty,Base ty') -> unifyTypes ty ty'
+      _ -> unify scheme' scheme
   where
-    unifyBase ty@(TyVar name) ty'@(TyVar name') = do
-      maybeTy <- gets $ M.lookup name
-      case maybeTy of
-        Nothing -> modify $ M.insert name ty'
-        Just ty -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-      maybeTy <- gets $ M.lookup name'
-      case maybeTy of
-        Nothing -> modify $ M.insert name' ty
-        Just ty' -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-    unifyBase (TyVar name) ty' = do
-      maybeTy <- gets $ M.lookup name
-      case maybeTy of
-        Nothing -> modify $ M.insert name ty'
-        Just ty -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-    unifyBase ty (TyVar name) = do
-      maybeTy <- gets $ M.lookup name
-      case maybeTy of
-        Nothing -> modify $ M.insert name ty
-        Just ty' -> when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-    unifyBase ty@(TyApp from to) ty'@(TyApp from' to') = do
-      unifyBase from from'
-      unifyBase to to'
-    unifyBase ty ty' = when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-unify (Forall _ ty) ty' = unify (Base ty) ty'
-unify ty (Forall _ ty') = unify ty (Base ty')
+    unifyTypes (TyApp con arg) (TyApp con' arg') = unifyTypes arg arg' >> unifyTypes con con'
+    unifyTypes ty ty'
+      | ty == ty' = pure ()
+      | otherwise = throwError $ _TypeMismatch # (ty,ty')
 
 runW :: Expr -> Either TypeError TypeScheme
 runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
