@@ -73,12 +73,13 @@ test-suite hindley-milner-test
                      , containers
                      , hindley-milner
                      , hspec
+                     , lens
                      , mtl
                      , QuickCheck
                      , semigroups
   default-language:    Haskell2010
   other-modules:       Lambda.Test.Arbitrary
-                     , Test.Lambda.Core.Kind
+                     , Test.Lambda.Core.Kinds
                      , Test.Lambda.Core.Typecheck
   build-tools:         alex
                      , happy
