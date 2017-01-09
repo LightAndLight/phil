@@ -114,6 +114,10 @@ type Substitution = Map Identifier Type
 generalize :: Map Identifier TypeScheme -> Type -> TypeScheme
 generalize ctxt ty = Forall (freeInType ty `S.difference` free ctxt) ty
 
+rename :: Identifier -> Identifier -> TypeScheme -> TypeScheme
+rename a b (Forall vars ty) = Forall (S.insert b $ S.delete a vars) $ substitute (M.singleton a $ TyVar b) ty
+rename a b (Base ty) = Base $ substitute (M.singleton a $ TyVar b) ty
+
 substitute :: Substitution -> Type -> Type
 substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
 substitute subs (TyApp from to) = TyApp (substitute subs from) (substitute subs to)
