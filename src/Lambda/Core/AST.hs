@@ -3,6 +3,8 @@
 module Lambda.Core.AST where
 
 import           Data.List.NonEmpty (NonEmpty)
+import           Data.Set           (Set)
+import qualified Data.Set           as S
 
 data Prim
   = Int
@@ -24,7 +26,7 @@ pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 
 data TypeScheme
   = Base Type
-  | Forall String TypeScheme
+  | Forall (Set String) Type
   deriving (Eq, Show, Ord)
 
 type Identifier = String
@@ -84,10 +86,7 @@ showType (TyCon (TypeCon con)) = con
 
 showTypeScheme :: TypeScheme -> String
 showTypeScheme (Base ty) = showType ty
-showTypeScheme (Forall name scheme) = "forall " ++ name ++ showTypeScheme' scheme
-  where
-    showTypeScheme' (Base ty) = ". " ++ showType ty
-    showTypeScheme' (Forall name scheme) = " " ++ name ++ showTypeScheme' scheme
+showTypeScheme (Forall vars ty) = unwords ("forall" : S.toList vars) ++ ". " ++ showType ty
 
 showLiteral :: Literal -> String
 showLiteral (LitInt a) = show a

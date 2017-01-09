@@ -130,63 +130,15 @@ freeInType _ = S.empty
 
 freeInScheme :: TypeScheme -> Set Identifier
 freeInScheme (Base ty) = freeInType ty
-freeInScheme (Forall name scheme)
-  = freeInScheme scheme `S.difference` S.singleton name
+freeInScheme (Forall vars ty) = freeInType ty `S.difference` vars
 
 free :: Map Identifier TypeScheme -> Set Identifier
-free
-  = foldl (\frees (name,ty) -> frees `S.union` freeInScheme ty) S.empty . M.toList
-
-bound :: TypeScheme -> (Type, Set Identifier)
-bound (Base ty) = (ty, S.empty)
-bound (Forall name scheme) = S.insert name <$> bound scheme
-
-boundInContext :: Map Identifier TypeScheme -> Set Identifier
-boundInContext
-  = foldl (\bounds (name,ty) -> bounds `S.union` snd (bound ty)) S.empty . M.toList
+free = foldr (\scheme frees -> freeInScheme scheme `S.union` frees) S.empty
 
 type Substitution = Map Identifier Type
 
-specializeTypes :: Set Identifier -> Type -> Type -> Bool
-specializeTypes names ty ty'
-  = evalState (canSpecialize names ty ty') M.empty
-  where
-    canSpecializeMulti names a a' b b'
-      = liftA2 (&&) (canSpecialize names a a') (canSpecialize names b b')
-
-    canSpecialize :: Set Identifier -> Type -> Type -> State Substitution Bool
-    canSpecialize names (TyVar name) ty' = do
-      sub <- gets $ M.lookup name
-      case sub of
-        Just ty -> return $ ty == ty'
-        Nothing -> do
-          let nameInNames = name `S.member` names
-          when nameInNames . modify $ M.insert name ty'
-          return nameInNames
-    canSpecialize names ty@TyPrim{} ty' = return $ ty == ty'
-    canSpecialize names (TyApp from to) (TyApp from' to')
-      = canSpecializeMulti names from from' to to'
-    canSpecialize names _ _ = return False
-
-specialize :: TypeScheme -> TypeScheme -> Bool
-specialize (Base ty) s@(Base ty') = ty == ty'
-specialize (Base scheme) scheme'
-  = freeInType scheme `S.intersection` snd (bound scheme') == S.empty
-specialize scheme scheme'@(Base ty')
-  = let (ty, tyVars) = bound scheme
-    in specializeTypes tyVars ty ty'
-specialize scheme scheme'
-  = let (ty, tyVars) = bound scheme
-        (ty', tyVars') = bound scheme'
-    in freeInScheme scheme `S.intersection` tyVars' == S.empty &&
-       specializeTypes tyVars ty ty'
-
 generalize :: Map Identifier TypeScheme -> Type -> TypeScheme
-generalize ctxt ty
-  = foldr
-      Forall
-      (Base ty)
-      (freeInType ty `S.difference` free ctxt)
+generalize ctxt ty = Forall (freeInType ty `S.difference` free ctxt) ty
 
 substitute :: Substitution -> Type -> Type
 substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
@@ -199,7 +151,7 @@ applySubs s1 = M.union s1 . fmap (substitute s1)
 
 subTypeScheme :: Substitution -> TypeScheme -> TypeScheme
 subTypeScheme subs (Base ty) = Base $ substitute subs ty
-subTypeScheme subs (Forall name scheme) = Forall name $ subTypeScheme (M.delete name subs) scheme
+subTypeScheme subs (Forall vars ty) = Forall vars $ substitute (foldr M.delete subs vars) ty
 
 subContext :: Substitution -> Map Identifier TypeScheme -> Map Identifier TypeScheme
 subContext subs = fmap (subTypeScheme subs)
@@ -224,12 +176,9 @@ instantiate ::
   => TypeScheme
   -> m Type
 instantiate (Base ty) = return ty
-instantiate scheme = instantiate' scheme M.empty
-  where
-    instantiate' (Base ty) subs = pure $ substitute subs ty
-    instantiate' (Forall name ty) subs = do
-      freshVar <- fresh
-      instantiate' ty $ M.insert name freshVar subs
+instantiate (Forall vars ty) = do
+  subs <- M.fromList <$> for (S.toList vars) (\var -> (,) var <$> fresh)
+  pure $ substitute subs ty
 
 occurs :: Identifier -> Type -> Bool
 occurs name ty = name `S.member` freeInType ty
@@ -275,8 +224,8 @@ unify (Base ty) (Base ty') = evalStateT (unifyBase ty ty') M.empty
       unifyBase from from'
       unifyBase to to'
     unifyBase ty ty' = when (ty /= ty') . throwError $ _TypeMismatch # (ty,ty')
-unify (Forall a ty) ty' = unify ty ty'
-unify ty (Forall a ty') = unify ty ty'
+unify (Forall _ ty) ty' = unify (Base ty) ty'
+unify ty (Forall _ ty') = unify ty (Base ty')
 
 runW :: Expr -> Either TypeError TypeScheme
 runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
@@ -435,23 +384,19 @@ checkDefinition (TypeSignature name ty) = do
   maybeSig <- use (typesignatures . at name)
   case maybeSig of
     Nothing -> do
-      runReaderT (validateSig ty) S.empty
+      case ty of
+        Forall vars ty -> validateType vars ty
+        Base ty -> validateType S.empty ty
       typesignatures %= M.insert name ty
     _ -> throwError $ _DuplicateTypeSignatures # name
   pure M.empty
   where
-    validateSig (Forall name ty) = local (S.insert name) $ validateSig ty
-    validateSig (Base ty) = validateType ty
-
-    validateType (TyVar ty) = do
-      bound <- ask
-      unless (ty `S.member` bound) . throwError $ _FreeTyVar # ty
-    validateType ty = do
+    validateType bound (TyVar ty) = unless (ty `S.member` bound) . throwError $ _FreeTyVar # ty
+    validateType bound ty = do
       table <- use kindTable
-      quantified <- ask
       void . flip runStateT (KindInferenceState 0) $ do
-        quantified' <- for (S.toList quantified) $ \a -> (,) a <$> freshKindVar
-        flip runReaderT (M.fromList quantified' `M.union` table) $ inferKind ty
+        bound' <- for (S.toList bound) $ \a -> (,) a <$> freshKindVar
+        flip runReaderT (M.fromList bound' `M.union` table) $ inferKind ty
 
 checkDefinitions ::
   ( HasFreshCount s

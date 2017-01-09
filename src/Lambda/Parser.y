@@ -14,6 +14,7 @@ module Lambda.Parser
 import Control.Lens (Prism', prism', review)
 import Control.Monad.Except
 import Data.List.NonEmpty (NonEmpty(..), (<|))
+import qualified Data.Set as S
 
 import Lambda.Lexer
 import Lambda.Core.AST hiding (Expr(..), Definition(..))
@@ -100,7 +101,7 @@ DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
                | data cons '=' Constructors { Data $2 [] $4 }
 
 QuantifiedType : Ty { Base $1 }
-               | forall Args '.' Ty { foldr Forall (Base $4) $2 }
+               | forall Args '.' Ty { Forall (S.fromList $2) $4 }
 
 TypeSignature : ident ':' QuantifiedType { TypeSignature $1 $3 }
 
