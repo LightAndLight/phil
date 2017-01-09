@@ -4,6 +4,7 @@
 module Lambda.Core.AST.Lens where
 
 import           Control.Lens
+import           Data.Set        (Set)
 
 import           Lambda.Core.AST
 
@@ -11,11 +12,19 @@ makePrisms ''Prim
 makePrisms ''TyCon
 makePrisms ''Type
 
- -- pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 _TyFun :: Prism' Type (Type,Type)
 _TyFun = prism' (uncurry TyFun) $ \ty -> case ty of { TyFun from to -> Just (from,to); _ -> Nothing }
 
 makePrisms ''TypeScheme
+
+_Forall' :: Set Identifier -> Prism' TypeScheme Type
+_Forall' vars = prism' (Forall vars) $
+  \scheme -> case scheme of
+    Forall vars' ty
+      | vars == vars' -> Just ty
+      | otherwise -> Nothing
+    _ -> Nothing
+
 makePrisms ''Literal
 
 makePrisms ''Pattern
