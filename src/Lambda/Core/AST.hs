@@ -2,7 +2,9 @@
 
 module Lambda.Core.AST where
 
+import           Data.List
 import           Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as N
 import           Data.Set           (Set)
 import qualified Data.Set           as S
 
@@ -26,8 +28,10 @@ pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 
 data TypeScheme
   = Base Type
-  | Forall (Set String) Type
-  deriving (Eq, Show, Ord)
+  | Forall (Set Identifier) Qualified
+  deriving (Eq, Show)
+
+data Qualified = Qualified (Set Type) Type deriving (Eq, Show)
 
 type Identifier = String
 
@@ -84,9 +88,18 @@ showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
 showType (TyCon FunCon) = "(->)"
 showType (TyCon (TypeCon con)) = con
 
+showPredicates :: Set Type -> String
+showPredicates preds
+  = let preds' = intercalate ", " . fmap showType $ S.toList preds
+    in if length preds > 1 then "(" ++ preds' ++ ")"
+       else preds'
+
+showQualified :: Qualified -> String
+showQualified (Qualified preds ty) = showPredicates preds ++ "=> " ++ showType ty
+
 showTypeScheme :: TypeScheme -> String
 showTypeScheme (Base ty) = showType ty
-showTypeScheme (Forall vars ty) = unwords ("forall" : S.toList vars) ++ ". " ++ showType ty
+showTypeScheme (Forall vars qual) = unwords ("forall" : S.toList vars) ++ ". " ++ showQualified qual
 
 showLiteral :: Literal -> String
 showLiteral (LitInt a) = show a

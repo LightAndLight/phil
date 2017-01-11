@@ -55,7 +55,9 @@ import Lambda.Sugar
     '=' { Token _ TokEq }
     '_' { Token _ TokWildcard }
     '.' { Token _ TokDot }
+    ',' { Token _ TokComma }
     '->' { Token _ TokArr }
+    '=>' { Token _ TokConstraint }
     ':' { Token _ TokType }
     '(' { Token _ TokLParen }
     ')' { Token _ TokRParen }
@@ -100,10 +102,19 @@ Constructors : Constructor { $1 :| [] }
 DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
                | data cons '=' Constructors { Data $2 [] $4 }
 
-QuantifiedType : Ty { Base $1 }
-               | forall Args '.' Ty { Forall (S.fromList $2) $4 }
+Predicates : A ',' A { [$1,$3] }
+           | A ',' Predicates { $1:$3 }
 
-TypeSignature : ident ':' QuantifiedType { TypeSignature $1 $3 }
+Constraint : A { $1 }
+           | '(' Predicates ')' { $2 }
+
+Qualified : Ty { Qualified S.empty $1 }
+          | Predicates '=>' Ty { Qualified $1 $3 }
+
+TypeScheme : Ty { Base $1 }
+           | forall Args '.' Qualified { Forall (S.fromList $2) $4 }
+
+TypeSignature : ident ':' TypeScheme { TypeSignature $1 $3 }
 
 FunctionDefinition : ident FunctionArgs '=' Expr { FunctionDefinition $1 $2 $4 }
 

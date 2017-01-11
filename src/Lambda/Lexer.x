@@ -35,9 +35,11 @@ tokens :-
     <0> "_" { \(p,_,_,_) _ -> return $ Token p TokWildcard }
     <0> \\ { \(p,_,_,_) _ -> return $ Token p TokLam }
     <0> "." { \(p,_,_,_) _ -> return $ Token p TokDot }
+    <0> "," { \(p,_,_,_) _ -> return $ Token p TokComma }
     <0> "|" { \(p,_,_,_) _ -> return $ Token p TokPipe }
     <0> ":" { \(p,_,_,_) _ -> return $ Token p TokType }
     <0> "->" { \(p,_,_,_) _ -> return $ Token p TokArr }
+    <0> "=>" { \(p,_,_,_) _ -> return $ Token p TokConstraint }
     <0> "(" { \(p,_,_,_) _ -> return $ Token p TokLParen }
     <0> ")" { \(p,_,_,_) _ -> return $ Token p TokRParen }
     <0> "{" { \(p,_,_,_) _ -> return $ Token p TokLBrace }
@@ -77,7 +79,9 @@ data TokenType
     | TokLam
     | TokForall
     | TokDot
+    | TokComma
     | TokArr
+    | TokConstraint
     | TokType
     | TokEOL
     | TokLParen
