@@ -20,6 +20,7 @@ library
                      , Lambda.Core.Codegen
                      , Lambda.Core.Kinds
                      , Lambda.Core.Typecheck
+                     , Lambda.Core.Typecheck.Lens
                      , Lambda.Lexer
                      , Lambda.Parser
                      , Lambda.PHP

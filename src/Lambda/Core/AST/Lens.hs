@@ -5,11 +5,10 @@ module Lambda.Core.AST.Lens where
 
 import           Control.Lens
 import           Control.Monad.Except
-import           Data.Set              (Set)
-import qualified Data.Set              as S (fromList)
+import           Data.Set             (Set)
+import qualified Data.Set             as S (fromList)
 
 import           Lambda.Core.AST
-import           Lambda.Core.Typecheck
 
 ast :: Prism' Expr () -> Expr
 ast p = p # ()
@@ -26,11 +25,11 @@ _TyFun' ty ty' = only $ TyFun ty ty'
 
 makePrisms ''TypeScheme
 
-_Forall' :: [Identifier] -> Prism' TypeScheme Type
-_Forall' vars = prism' (Forall $ S.fromList vars) $
+_Forall' :: [Identifier] -> [Type] -> Prism' TypeScheme Type
+_Forall' vars cons = prism' (Forall (S.fromList vars) . Qualified (S.fromList cons)) $
   \scheme -> case scheme of
-    Forall vars' ty
-      | S.fromList vars == vars' -> Just ty
+    Forall vars' (Qualified cons' ty)
+      | S.fromList vars == vars' && S.fromList cons == cons' -> Just ty
       | otherwise -> Nothing
     _ -> Nothing
 
@@ -65,7 +64,3 @@ _Abs' name = prism' (Abs name) $
       | name == name' -> Just e'
       | otherwise -> Nothing
     _ -> Nothing
-
-unifies :: AReview TypeScheme () -> Either e TypeScheme -> Bool
-unifies p (Left _) = False
-unifies p (Right scheme) = has _Right (unify (p # ()) scheme :: Either TypeError ())

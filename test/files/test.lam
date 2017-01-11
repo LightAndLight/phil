@@ -8,6 +8,3 @@ filter = rec filter' pred list = case list of {
   } in filter'
 
 test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
-
-id : Int -> Int
-id x = case x of { 1 -> 0; _ -> false}

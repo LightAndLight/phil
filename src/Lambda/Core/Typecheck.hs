@@ -24,6 +24,7 @@ import qualified Data.Set             as S
 import           Data.Traversable
 
 import           Lambda.Core.AST
+import           Lambda.Core.AST.Lens
 import Lambda.Core.Kinds
 
 data InferenceState
@@ -104,19 +105,22 @@ freeInType _ = S.empty
 
 freeInScheme :: TypeScheme -> Set Identifier
 freeInScheme (Base ty) = freeInType ty
-freeInScheme (Forall vars ty) = freeInType ty `S.difference` vars
+freeInScheme (Forall vars (Qualified _ ty)) = freeInType ty `S.difference` vars
 
 free :: Map Identifier TypeScheme -> Set Identifier
 free = foldr (\scheme frees -> freeInScheme scheme `S.union` frees) S.empty
 
 type Substitution = Map Identifier Type
 
-generalize :: Map Identifier TypeScheme -> Type -> TypeScheme
-generalize ctxt ty = Forall (freeInType ty `S.difference` free ctxt) ty
+generalize :: Map Identifier TypeScheme -> Qualified -> TypeScheme
+generalize ctxt (Qualified cons ty) = Forall (freeInType ty `S.difference` free ctxt) $ Qualified cons ty
 
-rename :: Identifier -> Identifier -> TypeScheme -> TypeScheme
-rename a b (Forall vars ty) = Forall (S.insert b $ S.delete a vars) $ substitute (M.singleton a $ TyVar b) ty
-rename a b (Base ty) = Base $ substitute (M.singleton a $ TyVar b) ty
+rename :: Map Identifier Type -> TypeScheme -> TypeScheme
+rename subs (Forall vars (Qualified cons ty))
+  = Forall (S.map (\v -> fromMaybe v (subs ^. at v ^? _Just . _TyVar)) vars) $
+    Qualified (S.map (substitute subs) cons) $
+    substitute (M.filterWithKey (\k a -> k `S.member` vars) subs) ty
+rename _ (Base ty) = Base ty
 
 substitute :: Substitution -> Type -> Type
 substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
@@ -129,7 +133,7 @@ applySubs s1 = M.union s1 . fmap (substitute s1)
 
 subTypeScheme :: Substitution -> TypeScheme -> TypeScheme
 subTypeScheme subs (Base ty) = Base $ substitute subs ty
-subTypeScheme subs (Forall vars ty) = Forall vars $ substitute (foldr M.delete subs vars) ty
+subTypeScheme subs (Forall vars (Qualified cons ty)) = Forall vars . Qualified cons $ substitute (foldr M.delete subs vars) ty
 
 subContext :: Substitution -> Map Identifier TypeScheme -> Map Identifier TypeScheme
 subContext subs = fmap (subTypeScheme subs)
@@ -154,7 +158,7 @@ instantiate ::
   => TypeScheme
   -> m Type
 instantiate (Base ty) = return ty
-instantiate (Forall vars ty) = do
+instantiate (Forall vars (Qualified _ ty)) = do
   subs <- M.fromList <$> for (S.toList vars) (\var -> (,) var <$> fresh)
   pure $ substitute subs ty
 
@@ -180,13 +184,12 @@ unify :: (AsTypeError e, MonadError e m) => TypeScheme -> TypeScheme -> m ()
 unify scheme scheme'
   | scheme == scheme' = pure ()
   | otherwise = case (scheme,scheme') of
-      (Forall vars ty,Forall vars' ty')
-        | vars == vars' -> unifyTypes ty ty'
+      (Forall vars (Qualified cons ty),Forall vars' (Qualified cons' ty'))
+        | vars == vars' && cons == cons' -> unifyTypes ty ty'
         | otherwise -> do
-            let subs = M.fromList $ zip (S.elems vars) (S.elems vars')
-            let bound = S.difference vars vars' `S.union` vars'
-            unify (Forall bound $ substitute (TyVar <$> subs) ty) (Forall bound ty')
-      (Forall vars ty,Base ty') -> unifyTypes ty ty'
+            subs <- mgu [(ty,ty')]
+            unify (rename subs $ Forall vars $ Qualified cons ty) (Forall vars' $ Qualified cons' ty')
+      (Forall vars (Qualified con ty),Base ty') -> unifyTypes ty ty'
       (Base ty,Base ty') -> unifyTypes ty ty'
       _ -> unify scheme' scheme
   where
