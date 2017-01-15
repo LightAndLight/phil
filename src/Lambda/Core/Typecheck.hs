@@ -115,17 +115,23 @@ type Substitution = Map Identifier Type
 generalize :: Map Identifier TypeScheme -> Qualified -> TypeScheme
 generalize ctxt (Qualified cons ty) = Forall (freeInType ty `S.difference` free ctxt) $ Qualified cons ty
 
+substitute :: Substitution -> Type -> Type
+substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
+substitute subs (TyApp from to) = TyApp (substitute subs from) (substitute subs to)
+substitute subs ty = ty
+
+subQualified :: Substitution -> Qualified -> Qualified
+subQualified subs (Qualified cons ty) = Qualified (S.map (substitute subs) cons) $ substitute subs ty
+
+unQualified :: Type -> Qualified
+unQualified = Qualified S.empty
+
 rename :: Map Identifier Type -> TypeScheme -> TypeScheme
 rename subs (Forall vars (Qualified cons ty))
   = Forall (S.map (\v -> fromMaybe v (subs ^. at v ^? _Just . _TyVar)) vars) $
     Qualified (S.map (substitute subs) cons) $
     substitute (M.filterWithKey (\k a -> k `S.member` vars) subs) ty
 rename _ (Base ty) = Base ty
-
-substitute :: Substitution -> Type -> Type
-substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
-substitute subs (TyApp from to) = TyApp (substitute subs from) (substitute subs to)
-substitute subs ty = ty
 
 -- apply s1 to s2
 applySubs :: Substitution -> Substitution -> Substitution
@@ -156,11 +162,11 @@ instantiate ::
   , MonadReader r m
   )
   => TypeScheme
-  -> m Type
-instantiate (Base ty) = return ty
-instantiate (Forall vars (Qualified _ ty)) = do
+  -> m Qualified
+instantiate (Base ty) = pure $ unQualified ty
+instantiate (Forall vars qual) = do
   subs <- M.fromList <$> for (S.toList vars) (\var -> (,) var <$> fresh)
-  pure $ substitute subs ty
+  pure $ subQualified subs qual
 
 occurs :: Identifier -> Type -> Bool
 occurs name ty = name `S.member` freeInType ty
@@ -229,7 +235,7 @@ patType (PatId name) = do
   ty <- fresh
   return (M.singleton name $ Base ty,ty)
 patType (PatCon conName args) = do
-  conTy <- instantiate =<< lookupId conName
+  Qualified _ conTy <- instantiate =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
       argsLen = length args
       argTysLen = length argTys
@@ -242,13 +248,16 @@ patType (PatLit (LitChar p)) = return (M.empty,TyPrim Char)
 patType (PatLit (LitBool p)) = return (M.empty,TyPrim Bool)
 patType PatWildcard = (,) M.empty <$> fresh
 
+entails :: Set Type -> Set Type -> Bool
+entails = undefined
+
 w :: MonadW r s e m => Expr -> m TypeScheme
 w e = do
-  (subs,ty) <- w' e
+  (subs,qual) <- w' e
   ctxt <- view context
-  return . generalize ctxt $ substitute subs ty
+  return . generalize ctxt $ subQualified subs qual
   where
-    inferBranches :: MonadW r s e m => NonEmpty (Pattern,Expr) -> m (Substitution, [(Type,Type)])
+    inferBranches :: MonadW r s e m => NonEmpty (Pattern,Expr) -> m (Substitution, [(Type,Qualified)])
     inferBranches = foldrM inferBranch (M.empty,[])
       where
         inferBranch (pat,branch) (subs,bTypes) = do
@@ -257,25 +266,26 @@ w e = do
             (branchSubs,branchType) <- w' branch
             pure (applySubs branchSubs subs, (patternType,branchType):bTypes)
 
-    w' :: MonadW r s e m => Expr -> m (Substitution, Type)
+    w' :: MonadW r s e m => Expr -> m (Substitution, Qualified)
     w' e = case e of
-        (Error _) -> (,) M.empty <$> fresh
+        (Error _) -> (,) M.empty . unQualified <$> fresh
         (Id name) -> (,) M.empty <$> (lookupId name >>= instantiate)
-        (Lit (LitInt e)) -> return (M.empty,TyPrim Int)
-        (Lit (LitString e)) -> return (M.empty,TyPrim String)
-        (Lit (LitChar e)) -> return (M.empty,TyPrim Char)
-        (Lit (LitBool e)) -> return (M.empty,TyPrim Bool)
+        (Lit (LitInt e)) -> return (M.empty,unQualified $ TyPrim Int)
+        (Lit (LitString e)) -> return (M.empty,unQualified $ TyPrim String)
+        (Lit (LitChar e)) -> return (M.empty,unQualified $ TyPrim Char)
+        (Lit (LitBool e)) -> return (M.empty,unQualified $ TyPrim Bool)
         (App f x) -> do
-          (s1,t1) <- w' f
-          (s2,t2) <- local (over context $ subContext s1) $ w' x
+          (s1,Qualified cons1 t1) <- w' f
+          (s2,Qualified cons2 t2) <- local (over context $ subContext s1) $ w' x
           b <- fresh
           s3 <- mgu [(TyFun t2 b,substitute s2 t1)]
-          return (applySubs s3 $ applySubs s2 s1, substitute s3 b)
+          let cons3 = S.map (substitute $ applySubs s3 s2) cons1 `S.union` S.map (substitute s3) cons2
+          return (applySubs s3 $ applySubs s2 s1, Qualified cons3 $ substitute s3 b)
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
-          (s1,t1) <- local (over context $ M.insert x (Base b)) $ w' expr
-          return (s1,TyFun (substitute s1 b) t1)
+          (s1,Qualified cons t1) <- local (over context $ M.insert x (Base b)) $ w' expr
+          return (s1,Qualified cons $ TyFun (substitute s1 b) t1)
         (Let (Binding x e) e') -> do
           (s1,t1) <- w' e
           let addVar ctxt = let ctxt' = subContext s1 ctxt in M.insert x (generalize ctxt' t1) ctxt'
@@ -283,17 +293,19 @@ w e = do
           return (applySubs s2 s1, t2)
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
-          (s1,t1) <- local (over context . M.insert name $ Base freshVar) $ w' value
+          (s1,Qualified cons1 t1) <- local (over context . M.insert name $ Base freshVar) $ w' value
           s2 <- mgu $ (t1,freshVar) : M.toList (M.mapKeys TyVar s1)
-          (s3,t2) <- local (over context $ \ctxt -> M.insert name (generalize ctxt $ substitute s2 t1) $ subContext s1 ctxt) $ w' rest
-          pure (applySubs s3 s1,t2)
+          let cons1' = S.map (substitute s2) cons1
+          (s3,Qualified cons2 t2) <- local (over context $ \ctxt -> M.insert name (generalize ctxt . Qualified cons1' $ substitute s2 t1) $ subContext s1 ctxt) $ w' rest
+          pure (applySubs s3 s1,subQualified s3 $ Qualified (cons1' `S.union` cons2) t2)
         (Case input bs) -> do
-          (s1,inputType) <- w' input
+          (s1,Qualified cons inputType) <- w' input
           (bSubs,bs') <- inferBranches bs
           outputType <- fresh
-          let constraints = foldr (\(p,b) constrs -> (p,inputType):(b,outputType):constrs) [] bs'
-          subs <- mgu constraints
-          pure (applySubs subs $ applySubs bSubs s1,substitute subs outputType)
+          let equations = foldr (\(p,Qualified _ b) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
+          subs <- mgu equations
+          let constraints = foldr (\(_,Qualified c _) constrs -> S.map (substitute subs) c `S.union` constrs) S.empty bs'
+          pure (applySubs subs $ applySubs bSubs s1,Qualified constraints $ substitute subs outputType)
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
@@ -332,7 +344,7 @@ checkDefinition (Data tyCon tyVars decls) = do
         Nothing -> do
           let conFun = flip (foldr TyFun) argTys $ foldl' TyApp (TyCon $ TypeCon tyCon) tyVars
           ctxt <- use context
-          context %= M.insert dataCon (generalize ctxt conFun)
+          context %= M.insert dataCon (generalize ctxt $ unQualified conFun)
           return (dataCon, buildDataCon p)
 
 checkDefinition (Function (Binding name expr)) = do
@@ -355,7 +367,7 @@ checkDefinition (TypeSignature name ty) = do
   case maybeSig of
     Nothing -> do
       case ty of
-        Forall vars ty -> validateType vars ty
+        Forall vars qual -> validateQualified vars qual
         Base ty -> validateType S.empty ty
       typesignatures %= M.insert name ty
     _ -> throwError $ _DuplicateTypeSignatures # name
@@ -367,6 +379,21 @@ checkDefinition (TypeSignature name ty) = do
       void . flip runStateT (KindInferenceState 0) $ do
         bound' <- for (S.toList bound) $ \a -> (,) a <$> freshKindVar
         flip runReaderT (M.fromList bound' `M.union` table) $ inferKind ty
+
+    validateConstraintKinds table [] = pure M.empty
+    validateConstraintKinds table (con:cons) = do
+      (subs,k) <- runInferKind con table
+      unifyKinds [(k,Constraint)]
+      subs' <- validateConstraintKinds (applyKindSubs subs table) cons
+      pure (applyKindSubs subs' subs)
+
+    validateQualified bound (Qualified cons ty) = do
+      table <- use kindTable
+      subs <- validateConstraintKinds table $ S.toList cons
+      void . flip runStateT (KindInferenceState 0) $ do
+        let bound' = S.toList $ S.map (\a -> (a,substituteKind subs $ KindVar a)) bound
+        flip runReaderT (M.fromList bound' `M.union` table) $ inferKind ty
+
 
 checkDefinitions ::
   ( HasFreshCount s
