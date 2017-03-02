@@ -1,5 +1,6 @@
 data List a = Nil | Cons a (List a)
 
+ifte : forall a. Bool -> a -> a -> a
 ifte cond a b = case cond of { true -> a; false -> b }
 
 filter = rec filter' pred list = case list of {

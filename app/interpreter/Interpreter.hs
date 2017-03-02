@@ -22,7 +22,8 @@ import System.FilePath
 import System.IO
 
 import Lambda.Core.AST hiding (Definition, Expr)
-import Lambda.Core.Kinds
+import Lambda.Core.Kinds hiding (HasFreshCount(..))
+import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
 import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
 import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
 import Lambda.Core.Typecheck
@@ -46,12 +47,21 @@ data InterpreterState
     , _interpKindTable :: Map Identifier Kind
     , _interpTypesignatures :: Map Identifier TypeScheme
     , _interpContext :: Map Identifier TypeScheme
+    , _interpKindInferenceState :: KindInferenceState
     , _interpFreshCount :: Int
     }
 
 makeClassy ''InterpreterState
 
-initialInterpreterState = InterpreterState M.empty M.empty M.empty M.empty 0
+initialInterpreterState
+  = InterpreterState
+  { _interpSymbolTable = M.empty
+  , _interpKindTable = M.empty
+  , _interpTypesignatures = M.empty
+  , _interpContext = M.empty
+  , _interpKindInferenceState = initialKindInferenceState
+  , _interpFreshCount = 0
+  }
 
 instance HasSymbolTable InterpreterState where
   symbolTable = interpreterState . interpSymbolTable
@@ -67,6 +77,12 @@ instance HasFreshCount InterpreterState where
 
 instance HasKindTable InterpreterState where
   kindTable = interpreterState . interpKindTable
+
+instance HasKindInferenceState InterpreterState where
+  kindInferenceState = interpreterState . interpKindInferenceState
+
+instance K.HasFreshCount InterpreterState where
+  freshCount = kindInferenceState . K.freshCount
 
 data InterpreterError
   = NotBound String
@@ -181,6 +197,7 @@ evaluate ::
   , HasFreshCount s
   , HasSymbolTable s
   , AsTypeError e
+  , AsKindError e
   , AsInterpreterError e
   , MonadError e m
   , MonadState s m
@@ -198,6 +215,7 @@ define ::
   , HasFreshCount s
   , HasContext s
   , HasTypesignatures s
+  , K.HasFreshCount s
   , AsInterpreterError e
   , AsTypeError e
   , AsKindError e
@@ -216,6 +234,7 @@ typeCheck ::
   , HasContext s
   , HasFreshCount s
   , AsTypeError e
+  , AsKindError e
   , MonadError e m
   , MonadState s m
   )
@@ -234,7 +253,7 @@ kindOf ::
   )
   => Identifier
   -> m Kind
-kindOf name = runInferKind (TyCon $ TypeCon name) =<< use kindTable
+kindOf name = fmap snd $ runInferKind (TyCon $ TypeCon name) =<< use kindTable
 
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
@@ -255,6 +274,7 @@ repl ::
   , HasTypesignatures s
   , HasSymbolTable s
   , HasFreshCount s
+  , K.HasFreshCount s
   , MonadFree ReplF m
   , Show e
   , AsLexError e

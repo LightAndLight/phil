@@ -1,19 +1,25 @@
 {-# language TemplateHaskell #-}
 {-# language FlexibleContexts #-}
+{-# language FlexibleInstances #-}
 
 module Lambda.Core.Kinds
   ( KindError(..)
   , Kind(..)
   , KindInferenceState(..)
+  , HasKindInferenceState(..)
+  , HasFreshCount(..)
+  , HasKindTable(..)
   , AsKindError(..)
   , applyKindSubs
   , checkDefinitionKinds
   , freshKindVar
   , inferKind
+  , initialKindInferenceState
   , runInferKind
   , unifyKinds
   , showKind
   , substituteKind
+  , subKindTable
   )
   where
 
@@ -104,11 +110,22 @@ unifyKinds = unifyKinds'
 
 newtype KindInferenceState = KindInferenceState { _kindFreshCount :: Int }
 
+initialKindInferenceState = KindInferenceState 0
+
+class HasKindInferenceState s where
+  kindInferenceState :: Lens' s KindInferenceState
+
 class HasFreshCount s where
   freshCount :: Lens' s Int
 
 instance HasFreshCount KindInferenceState where
   freshCount = lens _kindFreshCount (\_ i -> KindInferenceState i)
+
+class HasKindTable s where
+  kindTable :: Lens' s (Map Identifier Kind)
+
+instance HasKindTable (Map Identifier Kind) where
+  kindTable = lens id (flip const)
 
 freshKindVar :: (HasFreshCount s, MonadState s m) => m Kind
 freshKindVar = do
@@ -119,34 +136,35 @@ freshKindVar = do
 inferKind
   :: ( HasFreshCount s
      , MonadState s m
-     , MonadReader (Map Identifier Kind) m
+     , HasKindTable r
+     , MonadReader r m
      , AsKindError e
      , MonadError e m
      )
   => Type
   -> m (Map Identifier Kind, Kind)
 inferKind (TyVar var) = do
-  maybeKind <- asks $ M.lookup var
+  maybeKind <- views kindTable $ M.lookup var
   case maybeKind of
     Just kind -> pure (M.empty,kind)
     Nothing -> throwError $ _KNotInScope # var
 inferKind (TyApp con arg) = do
   (s1,conKind) <- inferKind con
-  (s2,argKind) <- local (subKindTable s1) $ inferKind arg
+  (s2,argKind) <- local (over kindTable $ subKindTable s1) $ inferKind arg
   returnKind <- freshKindVar
   s3 <- unifyKinds [(substituteKind s2 conKind,KindArrow argKind returnKind)]
   pure (applyKindSubs s3 $ applyKindSubs s2 s1,substituteKind s3 returnKind)
 inferKind (TyCon tyCon) = case tyCon of
   FunCon -> pure (M.empty,KindArrow Star $ KindArrow Star Star)
   TypeCon con -> do
-    maybeKind <- asks $ M.lookup con
+    maybeKind <- views kindTable $ M.lookup con
     case maybeKind of
       Just kind -> pure (M.empty,kind)
       Nothing -> throwError $ _KNotDefined # con
 inferKind (TyPrim _) = pure (M.empty,Star)
 
 runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m (Map Identifier Kind, Kind)
-runInferKind ty = flip evalStateT (KindInferenceState 0) . runReaderT (inferKind ty)
+runInferKind ty = flip evalStateT initialKindInferenceState . runReaderT (inferKind ty)
 
 unifyKindsProductArguments
   :: ( HasFreshCount s
@@ -207,7 +225,7 @@ checkDefinitionKinds
   -> NonEmpty ProdDecl
   -> m Kind
 checkDefinitionKinds tyCon tyVars prods
-  = flip evalStateT (KindInferenceState 0) $ do
+  = flip evalStateT initialKindInferenceState $ do
       freshVar <- freshKindVar
       (subs,ty) <- local (M.insert tyCon freshVar) $ inferWithTypeVars tyVars prods
       subs' <- unifyKinds [(freshVar, ty)]

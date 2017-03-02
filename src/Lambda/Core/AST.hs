@@ -28,10 +28,8 @@ pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 
 data TypeScheme
   = Base Type
-  | Forall (Set Identifier) Qualified
+  | Forall (Set Identifier) (Set Type) Type
   deriving (Eq, Show)
-
-data Qualified = Qualified (Set Type) Type deriving (Eq, Show)
 
 type Identifier = String
 
@@ -88,18 +86,17 @@ showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
 showType (TyCon FunCon) = "(->)"
 showType (TyCon (TypeCon con)) = con
 
-showPredicates :: Set Type -> String
-showPredicates preds
-  = let preds' = intercalate ", " . fmap showType $ S.toList preds
-    in if length preds > 1 then "(" ++ preds' ++ ")"
-       else preds'
-
-showQualified :: Qualified -> String
-showQualified (Qualified preds ty) = showPredicates preds ++ "=> " ++ showType ty
+showConstraints :: Set Type -> String
+showConstraints cons
+  | cons == S.empty = ""
+  | otherwise
+  = let cons' = intercalate ", " . fmap showType $ S.toList cons
+    in (if length cons > 1 then "(" ++ cons' ++ ")"
+       else cons') ++ "=> "
 
 showTypeScheme :: TypeScheme -> String
 showTypeScheme (Base ty) = showType ty
-showTypeScheme (Forall vars qual) = unwords ("forall" : S.toList vars) ++ ". " ++ showQualified qual
+showTypeScheme (Forall vars cons ty) = unwords ("forall" : S.toList vars) ++ ". " ++ showConstraints cons ++ showType ty
 
 showLiteral :: Literal -> String
 showLiteral (LitInt a) = show a

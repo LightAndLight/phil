@@ -102,17 +102,17 @@ Constructors : Constructor { $1 :| [] }
 DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
                | data cons '=' Constructors { Data $2 [] $4 }
 
-Predicates : A ',' A { [$1,$3] }
-           | A ',' Predicates { $1:$3 }
+Predicates : A ',' A { S.fromList [$1,$3] }
+           | A ',' Predicates { S.insert $1 $3 }
 
-Constraint : A { $1 }
+Constraint : A { S.singleton $1 }
            | '(' Predicates ')' { $2 }
 
-Qualified : Ty { Qualified S.empty $1 }
-          | Predicates '=>' Ty { Qualified $1 $3 }
+Qualified : Ty { (S.empty, $1) }
+          | Predicates '=>' Ty { ($1, $3) }
 
 TypeScheme : Ty { Base $1 }
-           | forall Args '.' Qualified { Forall (S.fromList $2) $4 }
+           | forall Args '.' Qualified { uncurry (Forall (S.fromList $2)) $4 }
 
 TypeSignature : ident ':' TypeScheme { TypeSignature $1 $3 }
 
