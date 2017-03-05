@@ -111,7 +111,7 @@ Constraint : A { S.singleton $1 }
 Qualified : Ty { (S.empty, $1) }
           | Predicates '=>' Ty { ($1, $3) }
 
-TypeScheme : Ty { Base $1 }
+TypeScheme : Ty { Forall S.empty S.empty $1 }
            | forall Args '.' Qualified { uncurry (Forall (S.fromList $2)) $4 }
 
 TypeSignature : ident ':' TypeScheme { TypeSignature $1 $3 }
