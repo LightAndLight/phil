@@ -3,6 +3,7 @@ data List a = Nil | Cons a (List a)
 ifte : forall a. Bool -> a -> a -> a
 ifte cond a b = case cond of { true -> a; false -> b }
 
+filter : forall a. (a -> Bool) -> List a -> List a
 filter = rec filter' pred list = case list of {
   Nil -> Nil;
   Cons a rest -> ifte (pred a) (Cons a (filter' pred rest)) (filter' pred rest)

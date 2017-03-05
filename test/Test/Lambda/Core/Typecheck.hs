@@ -99,6 +99,15 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
       it "Int -> Int is less general than forall a. a -> a" $
         special (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) idType `shouldSatisfy` has (_Left . _TypeMismatch)
 
+  describe "typeclass" $ do
+    let constrainedId = _Forall' ["a"] [TyApp (TyVar "Constraint") (TyVar "a")] # _TyFun # (_TyVar # "a", _TyVar # "a")
+    describe "success" $ do
+      it "forall a. a -> a is more general than forall a. Constraint a => a -> a" $
+        special (_Forall' ["a"] [] # _TyFun # (_TyVar # "a", _TyVar # "a")) constrainedId `shouldSatisfy` has _Right
+    describe "failure" $ do
+      it "forall a. Constraint a => a -> a ~ Int -> Int but there is no instance Constraint Int" $
+        special constrainedId (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) `shouldSatisfy` has (_Left . _NoInstanceFound)
+
   describe "w" $ do
     describe "success" $ do
       it "\\x. x : forall a. a -> a" $

@@ -1,5 +1,8 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Test.Lambda.Core.Kinds (kindSpec) where
 
+import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State
@@ -13,12 +16,26 @@ import           Lambda.Core.Kinds
 
 import           Test.Hspec
 
+data TestState
+  = TestState
+  { _tsKindTable  :: M.Map Identifier Kind
+  , _tsFreshCount :: Int
+  }
+
+makeLenses ''TestState
+
+instance HasKindTable TestState where
+  kindTable = tsKindTable
+
+instance HasFreshCount TestState where
+  freshCount = tsFreshCount
+
 runCheckDefinitionKinds
   :: Identifier
   -> [Identifier]
   -> NonEmpty ProdDecl
   -> Either KindError Kind
-runCheckDefinitionKinds name tyVars prods = flip runReader M.empty . runExceptT $ checkDefinitionKinds name tyVars prods
+runCheckDefinitionKinds name tyVars prods = flip evalState (TestState M.empty 0) . runExceptT $ checkDefinitionKinds name tyVars prods
 
 runInferKindTypeScheme :: [Identifier] -> Type -> Either KindError Kind
 runInferKindTypeScheme vars ty = flip evalState (KindInferenceState 0) . runExceptT $ do
