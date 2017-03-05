@@ -168,8 +168,8 @@ runInferKind ty = flip evalStateT initialKindInferenceState . runReaderT (inferK
 
 unifyKindsProductArguments
   :: ( HasFreshCount s
+     , HasKindTable s
      , MonadState s m
-     , MonadReader (Map Identifier Kind) m
      , AsKindError e
      , MonadError e m
      )
@@ -177,15 +177,15 @@ unifyKindsProductArguments
   -> m (Map Identifier Kind)
 unifyKindsProductArguments [] = pure M.empty
 unifyKindsProductArguments (ty:tys) = do
-  (s1,k1) <- inferKind ty
-  s2 <- local (subKindTable s1) $ unifyKindsProductArguments tys
+  (s1,k1) <- get >>= runReaderT (inferKind ty)
+  s2 <- kindTable %= subKindTable s1 >> unifyKindsProductArguments tys
   s3 <- unifyKinds [(substituteKind s2 k1,Star)]
   pure (applyKindSubs s3 $ applyKindSubs s2 s1)
 
 unifyKindsProducts
   :: ( HasFreshCount s
+     , HasKindTable s
      , MonadState s m
-     , MonadReader (Map Identifier Kind) m
      , AsKindError e
      , MonadError e m
      )
@@ -194,12 +194,12 @@ unifyKindsProducts
 unifyKindsProducts [] = pure M.empty
 unifyKindsProducts (ProdDecl name argTys:prods) = do
   s1 <- unifyKindsProductArguments argTys
-  ss <- local (subKindTable s1) $ unifyKindsProducts prods
+  ss <- kindTable %= subKindTable s1 >> unifyKindsProducts prods
   pure $ applyKindSubs ss s1
 
 inferWithTypeVars
-  :: ( MonadReader (Map Identifier Kind) m
-     , HasFreshCount s
+  :: ( HasFreshCount s
+     , HasKindTable s
      , MonadState s m
      , AsKindError e
      , MonadError e m
@@ -212,22 +212,24 @@ inferWithTypeVars [] prods = do
   pure (subs, Star)
 inferWithTypeVars (tv:tvs) prods = do
   freshVar <- freshKindVar
-  (subs,k) <- local (M.insert tv freshVar) $ inferWithTypeVars tvs prods
+  (subs,k) <- kindTable %= M.insert tv freshVar >> inferWithTypeVars tvs prods
   pure (subs, KindArrow (substituteKind subs freshVar) k)
 
 checkDefinitionKinds
-  :: ( MonadReader (Map Identifier Kind) m
+  :: ( HasKindTable s
+     , HasFreshCount s
      , AsKindError e
      , MonadError e m
      )
   => Identifier
   -> [Identifier]
   -> NonEmpty ProdDecl
+  -> s
   -> m Kind
-checkDefinitionKinds tyCon tyVars prods
-  = flip evalStateT initialKindInferenceState $ do
+checkDefinitionKinds tyCon tyVars prods initialState
+  = flip evalStateT initialState $ do
       freshVar <- freshKindVar
-      (subs,ty) <- local (M.insert tyCon freshVar) $ inferWithTypeVars tyVars prods
+      (subs,ty) <- kindTable %= M.insert tyCon freshVar >> inferWithTypeVars tyVars prods
       subs' <- unifyKinds [(freshVar, ty)]
       subs'' <- unifyKinds [(substituteKind subs freshVar, substituteKind subs' freshVar)]
       pure . instantiate $ substituteKind subs'' ty

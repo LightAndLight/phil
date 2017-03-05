@@ -86,7 +86,6 @@ data TypeError
   | WrongArity [Type]
   | NotDefined Identifier
   | DuplicateTypeSignatures Identifier
-  | FreeTyVar Identifier
   | KindInferenceError KindError
   | NoInstanceFound Type Type
   deriving (Eq, Show)
@@ -446,8 +445,7 @@ checkDefinition ::
   -> m (Map Identifier Expr)
 checkDefinition (Data tyCon tyVars decls) = do
   freshCount .= 0
-  table <- use kindTable
-  kind <- runReaderT (checkDefinitionKinds tyCon tyVars decls) table
+  kind <- get >>= checkDefinitionKinds tyCon tyVars decls
   kindTable %= M.insert tyCon kind
   let tyVars' = fmap TyVar tyVars
   M.fromList <$> traverse (checkDataDecl tyCon tyVars') (N.toList decls)
@@ -464,17 +462,17 @@ checkDefinition (Data tyCon tyVars decls) = do
 
 checkDefinition (Function (Binding name expr)) = do
   freshCount .= 0
-  maybeVar <- uses kindTable (M.lookup name)
+  maybeVar <- uses context (M.lookup name)
   case maybeVar of
     Nothing -> do
       ctxt <- use context
-      ty <- runWithContext ctxt expr
+      ty <- get >>= runReaderT (w expr)
       maybeSig <- use (typesignatures . at name)
       case maybeSig of
         Nothing -> pure ()
         Just expected -> do
           K.freshCount .= 0
-          get >>= runReaderT (special expected ty)
+          get >>= runReaderT (special ty expected)
       context %= M.insert name ty
       return $ M.singleton name expr
     _ -> throwError $ _AlreadyDefined # name
@@ -490,20 +488,13 @@ checkDefinition (TypeSignature name ty) = do
           void . flip runStateT (KindInferenceState 0) $ do
             let vars' = S.toList $ S.map (\a -> (a,substituteKind subs $ KindVar a)) vars
             flip runReaderT (M.fromList vars' `M.union` table) $ inferKind ty
-        Base ty -> validateType S.empty ty
+        Base ty -> do
+          table <- use kindTable
+          void . flip runStateT (KindInferenceState 0) $ runReaderT (inferKind ty) table
       typesignatures %= M.insert name ty
     _ -> throwError $ _DuplicateTypeSignatures # name
   pure M.empty
   where
-    validateType bound (TyVar ty) = unless (ty `S.member` bound) . throwError $ _FreeTyVar # ty
-    validateType bound _ = pure ()
-      {-
-      table <- use kindTable
-      void . flip runStateT (KindInferenceState 0) $ do
-        bound' <- for (S.toList bound) $ \a -> (,) a <$> freshKindVar
-        flip runReaderT (M.fromList bound' `M.union` table) $ inferKind ty
-        -}
-
     validateConstraintKinds table [] = pure M.empty
     validateConstraintKinds table (con:cons) = do
       (subs,k) <- runInferKind con table
