@@ -23,6 +23,7 @@ data CompilerError
   = CompilerParseError P.ParseError
   | CompilerLexError LexError
   | CompilerTypeError TypeError
+  | CompilerSyntaxError SyntaxError
   deriving Show
 
 makeClassyPrisms ''CompilerError
@@ -38,6 +39,9 @@ instance AsParseError CompilerError where
 
 instance AsLexError CompilerError where
   _LexError = _CompilerLexError . _LexError
+
+instance AsSyntaxError CompilerError where
+  _SyntaxError = _CompilerSyntaxError . _SyntaxError
 
 data CompileOpts
   = CompileOpts
@@ -58,6 +62,7 @@ compile ::
   , AsParseError e
   , AsTypeError e
   , AsKindError e
+  , AsSyntaxError e
   , AsCompilerError e
   , MonadError e m
   , MonadIO m
@@ -68,7 +73,7 @@ compile opts = flip catchError (liftIO . print) $ do
   content <- liftIO . readFile $ filepath opts
   tokens <- tokenize content
   initialAST <- parseProgram tokens
-  let desugaredAST = fmap desugar initialAST
+  desugaredAST <- traverse desugar initialAST
   (typecheckedAST,inferenceState) <- runStateT (checkDefinitions desugaredAST) initialInferenceState
   let phpAST = genPHP typecheckedAST
   let phpSource = toSource "    " phpAST

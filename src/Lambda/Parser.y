@@ -32,7 +32,10 @@ import Lambda.Sugar
 %token
     eol { Token _ TokEOL }
     data { Token _ TokData }
+    where { Token _ TokWhere }
     case { Token _ TokCase }
+    class { Token _ TokClass }
+    instance { Token _ TokInstance }
     of { Token _ TokOf }
     let { Token _ TokLet }
     rec { Token _ TokRec }
@@ -80,11 +83,10 @@ Ty : A { $1 }
 A : A B { TyApp $1 $2 }
   | B { $1 }
 
-B : ident { TyVar $1 }
+B : TyCon { $1 }
   | PrimType { TyPrim $1 }
-  | cons { TyCon (TypeCon $1) }
-  | '(' '->' ')' { TyCon FunCon }
   | '(' Ty ')' { $2 }
+  | ident { TyVar $1 }
 
 PrimType : intType { Int }
          | stringType { String }
@@ -124,9 +126,28 @@ ExprOrDef : DataDefinition eof { ReplDef $1 }
 FunctionArgs : { [] }
              | ident FunctionArgs { $1:$2 }
 
+ClassMembers : { [] }
+             | ident ':' Ty { [($1, $3)] }
+             | ident ':' Ty eol ClassMembers { ($1, $3):$5 }
+
+ClassDefinition : class A where '{' ClassMembers '}' { Class S.empty $2 $5 }
+                | class Constraint '=>' A where '{' ClassMembers '}' { Class $2 $4 $7 }
+
+FunctionDefinitions : { [] }
+                    | FunctionDefinition { [$1] }
+                    | FunctionDefinition eol FunctionDefinitions { $1:$3 }
+
+TyCon : cons { TyCon (TypeCon $1) }
+      | '(' '->' ')' { TyCon FunCon }
+
+InstanceDefinition : instance A where '{' FunctionDefinitions '}' { Instance S.empty $2 $5 }
+                   | instance Constraint '=>' A where '{' FunctionDefinitions '}' { Instance $2 $4 $7 }
+
 Definition : DataDefinition { $1 }
            | FunctionDefinition { Function $1 }
            | TypeSignature { $1 }
+           | ClassDefinition { $1 }
+           | InstanceDefinition { $1 }
 
 Definitions : { [] }
             | Definition eol Definitions { $1:$3 }

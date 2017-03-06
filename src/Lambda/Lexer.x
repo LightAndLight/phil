@@ -18,6 +18,9 @@ tokens :-
     <0> $eol+ { \(p,_,_,_) _ -> return $ Token p TokEOL }
     <0> $white+;
     <0> "--".*;
+    <0> class { \(p,_,_,_) _ -> return $ Token p TokClass }
+    <0> instance { \(p,_,_,_) _ -> return $ Token p TokInstance }
+    <0> where { \(p,_,_,_) _ -> return $ Token p TokWhere }
     <0> case { \(p,_,_,_) _ -> return $ Token p TokCase }
     <0> data { \(p,_,_,_) _ -> return $ Token p TokData }
     <0> of { \(p,_,_,_) _ -> return $ Token p TokOf }
@@ -69,6 +72,9 @@ data Token = Token AlexPosn TokenType
 
 data TokenType
     = TokCase
+    | TokClass
+    | TokInstance
+    | TokWhere
     | TokOf
     | TokData
     | TokLet

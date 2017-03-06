@@ -54,9 +54,16 @@ data Binding
   } deriving (Eq, Show)
 
 data Definition
+  -- | ADT Definition: type constructor, type variables, constructor definitions
   = Data Identifier [Identifier] (NonEmpty ProdDecl)
+  -- | Type signature: function name, type
   | TypeSignature Identifier TypeScheme
+  -- | Function definition
   | Function Binding
+  -- | Class definition: constraints, class name, type variables, class members
+  | Class (Set Type) Identifier [Identifier] [(Identifier, TypeScheme)]
+  -- | Classs instance definition: constraints, class name, type arguments, member implementations
+  | Instance (Set Type) Identifier [Type] [Binding]
 
 data Expr
   = Id Identifier

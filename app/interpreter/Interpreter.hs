@@ -26,6 +26,7 @@ import Lambda.Core.Kinds hiding (HasFreshCount(..))
 import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
 import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
 import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
+import Lambda.Sugar (AsSyntaxError(..), SyntaxError)
 import Lambda.Core.Typecheck
 import Lambda.Lexer
 import Lambda.Parser
@@ -90,6 +91,7 @@ data InterpreterError
   | InterpreterTypeError TypeError
   | InterpreterLexError LexError
   | InterpreterParseError ParseError
+  | InterpreterSyntaxError SyntaxError
   deriving Show
 
 makeClassyPrisms ''InterpreterError
@@ -105,6 +107,9 @@ instance AsParseError InterpreterError where
 
 instance AsLexError InterpreterError where
   _LexError = _InterpreterLexError . _LexError
+
+instance AsSyntaxError InterpreterError where
+  _SyntaxError = _InterpreterSyntaxError . _SyntaxError
 
 tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
@@ -219,13 +224,14 @@ define ::
   , AsInterpreterError e
   , AsTypeError e
   , AsKindError e
+  , AsSyntaxError e
   , MonadError e m
   , MonadState s m
   )
   => S.Definition
   -> m ()
 define def = do
-  exprs <- checkDefinition $ S.desugar def
+  exprs <- checkDefinition =<< S.desugar def
   exprs' <- runReaderT (traverse eval exprs) =<< use symbolTable
   symbolTable %= M.union exprs'
 
@@ -281,6 +287,7 @@ repl ::
   , AsParseError e
   , AsTypeError e
   , AsKindError e
+  , AsSyntaxError e
   , AsInterpreterError e
   , MonadError e m
   , MonadState s m
