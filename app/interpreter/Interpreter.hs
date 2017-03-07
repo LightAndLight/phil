@@ -21,10 +21,14 @@ import System.Exit
 import System.FilePath
 import System.IO
 
-import Lambda.Core.AST hiding (Definition, Expr)
+import Lambda.Core.AST.Binding
+import Lambda.Core.AST.Literal
+import Lambda.Core.AST.Identifier
+import qualified Lambda.Core.AST.Expr as C
+import Lambda.Core.AST.Types
+import Lambda.Core.AST.Pattern
 import Lambda.Core.Kinds hiding (HasFreshCount(..))
 import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
-import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
 import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
 import Lambda.Sugar (AsSyntaxError(..), SyntaxError)
 import Lambda.Core.Typecheck
@@ -120,7 +124,7 @@ withBinding ::
   , AsInterpreterError e
   , MonadError e m
   )
-  => Binding -> m a -> m a
+  => (Binding C.Expr) -> m a -> m a
 withBinding (Binding name expr) m = do
   expr' <- eval expr
   local (M.insert name expr') m
@@ -132,9 +136,9 @@ eval ::
   )
   => C.Expr
   -> m Value
-eval (Lit lit) = pure $ VLiteral lit
-eval (Error message) = throwError $ _RuntimeError # message
-eval (Id name) = do
+eval (C.Lit lit) = pure $ VLiteral lit
+eval (C.Error message) = throwError $ _RuntimeError # message
+eval (C.Id name) = do
   maybeExpr <- view $ at name
   case maybeExpr of
     Just (VPointer expr) -> eval expr
@@ -142,18 +146,18 @@ eval (Id name) = do
     Nothing -> do
       table <- ask
       throwError $ _NotBound # name
-eval (Abs name output) = VClosure <$> ask <*> pure name <*> pure output
-eval (App func input) = do
+eval (C.Abs name output) = VClosure <$> ask <*> pure name <*> pure output
+eval (C.App func input) = do
   func' <- eval func
   case func' of
     VClosure env name output -> do
       input' <- eval input
       local (M.insert name input' . const env) $ eval output
-    VPointer expr -> eval (App expr input)
+    VPointer expr -> eval (C.App expr input)
     _ -> error $ "Tried to apply a value to a non-function expression: " ++ show func'
-eval (Let binding rest) = withBinding binding $ eval rest
-eval (Rec (Binding name value) rest) = local (M.insert name $ VPointer value) $ eval rest
-eval c@(Case var (b :| bs)) = do
+eval (C.Let binding rest) = withBinding binding $ eval rest
+eval (C.Rec (Binding name value) rest) = local (M.insert name $ VPointer value) $ eval rest
+eval c@(C.Case var (b :| bs)) = do
   var' <- eval var
   tryBranch var' b bs
   where
@@ -175,7 +179,7 @@ eval c@(Case var (b :| bs)) = do
       case res of
         VError _ -> tryBranch val b bs
         _ -> pure res
-eval (Prod name args) = VProduct name <$> traverse eval args
+eval (C.Prod name args) = VProduct name <$> traverse eval args
 
 data ReplF a
   = Read (String -> a)

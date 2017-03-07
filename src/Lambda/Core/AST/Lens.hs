@@ -5,10 +5,15 @@ module Lambda.Core.AST.Lens where
 
 import           Control.Lens
 import           Control.Monad.Except
-import           Data.Set             (Set)
-import qualified Data.Set             as S (fromList)
+import           Data.Set                   (Set)
+import qualified Data.Set                   as S (fromList)
 
-import           Lambda.Core.AST
+import           Lambda.Core.AST.Binding
+import           Lambda.Core.AST.Expr
+import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.Literal
+import           Lambda.Core.AST.Pattern
+import           Lambda.Core.AST.Types
 
 ast :: Prism' Expr () -> Expr
 ast p = p # ()
@@ -39,7 +44,7 @@ makePrisms ''Pattern
 makePrisms ''Expr
 makePrisms ''Binding
 
-_Binding' :: Identifier -> Prism' Binding Expr
+_Binding' :: Identifier -> Prism' (Binding Expr) Expr
 _Binding' name = prism' (Binding name) $
   \(Binding name' e) -> if name == name' then Just e else Nothing
 

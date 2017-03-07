@@ -15,8 +15,14 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lambda.Core.AST
+  exposed-modules:     Lambda.Core.AST.Binding
+                     , Lambda.Core.AST.Definitions
+                     , Lambda.Core.AST.Expr
+                     , Lambda.Core.AST.Identifier
+                     , Lambda.Core.AST.Types
                      , Lambda.Core.AST.Lens
+                     , Lambda.Core.AST.Literal
+                     , Lambda.Core.AST.Pattern
                      , Lambda.Core.Codegen
                      , Lambda.Core.Kinds
                      , Lambda.Core.Typecheck

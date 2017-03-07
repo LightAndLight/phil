@@ -6,6 +6,7 @@ module Lambda.Sugar
   , Expr(..)
   , FunctionDefinition(..)
   , SyntaxError(..)
+  , C.ProdDecl(..)
   , desugar
   , desugarExpr
   ) where
@@ -17,34 +18,40 @@ import           Data.Foldable
 import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.Set           as S
 
-import qualified Lambda.Core.AST    as C
+import Lambda.Core.AST.Binding
+import qualified Lambda.Core.AST.Definitions    as C
+import qualified Lambda.Core.AST.Expr    as C
+import Lambda.Core.AST.Identifier
+import Lambda.Core.AST.Literal
+import Lambda.Core.AST.Types
+import Lambda.Core.AST.Pattern
 
-data SyntaxError = MalformedHead C.Type
+data SyntaxError = MalformedHead Type
   deriving (Eq, Show)
 
 makeClassyPrisms ''SyntaxError
 
 -- | Naive generalization that closes over every free variable
-generalize :: S.Set C.Type -> C.Type -> C.TypeScheme
+generalize :: S.Set Type -> Type -> TypeScheme
 generalize constraints ty
-  = C.Forall (foldMap vars constraints `S.union` vars ty) constraints ty
+  = Forall (foldMap vars constraints `S.union` vars ty) constraints ty
   where
-    vars (C.TyVar v) = S.singleton v
-    vars (C.TyApp t t') = vars t `S.union` vars t'
+    vars (TyVar v) = S.singleton v
+    vars (TyApp t t') = vars t `S.union` vars t'
     vars _ = S.empty
 
 -- | Converts a type to the form T a_1 a_2 .. a_n, where a_i are type variables
-asClassDef :: (AsSyntaxError e, MonadError e m) => C.Type -> m (C.Identifier, [C.Identifier])
-asClassDef (C.TyApp (C.TyCon (C.TypeCon con)) (C.TyVar arg)) = pure (con, [arg])
-asClassDef (C.TyApp left (C.TyVar arg)) = do
+asClassDef :: (AsSyntaxError e, MonadError e m) => Type -> m (Identifier, [Identifier])
+asClassDef (TyApp (TyCon (TypeCon con)) (TyVar arg)) = pure (con, [arg])
+asClassDef (TyApp left (TyVar arg)) = do
   (con, args) <- asClassDef left
   pure (con, args ++ [arg])
 asClassDef ty = throwError $ _MalformedHead # ty
 
 -- | Converts a type to the form T a_1 a_2 .. a_n, where a_i are any type
-asClassInstance :: (AsSyntaxError e, MonadError e m) => C.Type -> m (C.Identifier, [C.Type])
-asClassInstance (C.TyApp (C.TyCon (C.TypeCon con)) ty) = pure (con, [ty])
-asClassInstance (C.TyApp left ty) = do
+asClassInstance :: (AsSyntaxError e, MonadError e m) => Type -> m (Identifier, [Type])
+asClassInstance (TyApp (TyCon (TypeCon con)) ty) = pure (con, [ty])
+asClassInstance (TyApp left ty) = do
   (con, tys) <- asClassInstance left
   pure (con, tys ++ [ty])
 asClassInstance ty = throwError $ _MalformedHead # ty
@@ -74,24 +81,24 @@ desugarExpr (Case n bs) = C.Case (desugarExpr n) $ fmap (fmap desugarExpr) bs
 desugarExpr (Error err) = C.Error err
 
 data Definition
-  = Data C.Identifier [C.Identifier] (NonEmpty C.ProdDecl)
-  | TypeSignature C.Identifier C.TypeScheme
+  = Data Identifier [Identifier] (NonEmpty C.ProdDecl)
+  | TypeSignature Identifier TypeScheme
   | Function FunctionDefinition
-  | Class (S.Set C.Type) C.Type [(C.Identifier, C.Type)]
-  | Instance (S.Set C.Type) C.Type [FunctionDefinition]
+  | Class (S.Set Type) Type [(Identifier, Type)]
+  | Instance (S.Set Type) Type [FunctionDefinition]
 
 data Expr
-  = Id C.Identifier
-  | Lit C.Literal
-  | Prod C.Identifier [Expr]
+  = Id Identifier
+  | Lit Literal
+  | Prod Identifier [Expr]
   | App Expr Expr
-  | Abs C.Identifier Expr
+  | Abs Identifier Expr
   | Let FunctionDefinition Expr
   | Rec FunctionDefinition Expr
-  | Case Expr (NonEmpty (C.Pattern,Expr))
+  | Case Expr (NonEmpty (Pattern,Expr))
   | Error String
 
-data FunctionDefinition = FunctionDefinition C.Identifier [C.Identifier] Expr
+data FunctionDefinition = FunctionDefinition Identifier [Identifier] Expr
 
-translateDefinition :: FunctionDefinition -> C.Binding
-translateDefinition (FunctionDefinition name args expr) = C.Binding name $ foldr C.Abs (desugarExpr expr) args
+translateDefinition :: FunctionDefinition -> Binding C.Expr
+translateDefinition (FunctionDefinition name args expr) = Binding name $ foldr C.Abs (desugarExpr expr) args

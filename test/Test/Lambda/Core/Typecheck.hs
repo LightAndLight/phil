@@ -7,14 +7,16 @@ import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Either
-import qualified Data.Map              as M
+import qualified Data.Map                   as M
 import           Data.Maybe
 
-import           Lambda.Core.AST
+import           Lambda.Core.AST.Expr
+import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Lens
-import qualified Lambda.Core.Kinds     as K
-import           Lambda.Core.Typecheck hiding (special)
-import qualified Lambda.Core.Typecheck as T (special)
+import           Lambda.Core.AST.Types
+import qualified Lambda.Core.Kinds          as K
+import           Lambda.Core.Typecheck      hiding (special)
+import qualified Lambda.Core.Typecheck      as T (special)
 
 import           Test.Hspec
 

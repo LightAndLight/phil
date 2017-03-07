@@ -16,7 +16,12 @@ import           qualified Data.DList as D
 import Data.Set (Set)
 import qualified Data.Set as S
 
-import           Lambda.Core.AST
+import           Lambda.Core.AST.Binding
+import           Lambda.Core.AST.Definitions
+import           Lambda.Core.AST.Expr
+import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.Literal
+import           Lambda.Core.AST.Pattern
 import Lambda.Core.Typecheck
 import           Lambda.PHP.AST
 
@@ -165,5 +170,5 @@ genPHPExpr (Case val branches) = do
                   (PHPExprLiteral $ PHPInt ix))
 genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] [] [PHPStatementThrow $ PHPExprNew (phpId "Exception") []]) []
 
-genPHPAssignment :: (HasScope s, MonadState s m) => Binding -> m PHPStatement
+genPHPAssignment :: (HasScope s, MonadState s m) => Binding Expr -> m PHPStatement
 genPHPAssignment (Binding name value) = PHPStatementExpr . PHPExprAssign (PHPExprVar $ phpId name) <$> genPHPExpr value
