@@ -38,7 +38,11 @@ import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as N
 import qualified Data.Map as M
 
-import           Lambda.Core.AST (Identifier, TyCon (..), Type (..), ProdDecl(..))
+import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.Definitions
+import           Lambda.Core.AST.Types
+
+import Debug.Trace
 
 data Kind
   = Star
@@ -101,8 +105,7 @@ unifyKinds = unifyKinds'
           (KindVar name,k)
             | not $ occurs name k -> do
                 let sub = M.singleton name k
-                subs' <- unifyKinds' $ subEquations sub rest
-                pure $ applyKindSubs subs' sub
+                M.union sub <$> unifyKinds' (subEquations sub $ eq : rest)
             | otherwise -> throwError $ _KOccurs # name
           (k,KindVar name) -> unifyKinds' $ (KindVar name,k):rest
           (KindArrow k1 k2,KindArrow k1' k2') -> unifyKinds' $ [(k1,k1'),(k2,k2')] ++ rest
@@ -166,70 +169,33 @@ inferKind (TyPrim _) = pure (M.empty,Star)
 runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m (Map Identifier Kind, Kind)
 runInferKind ty = flip evalStateT initialKindInferenceState . runReaderT (inferKind ty)
 
-unifyKindsProductArguments
-  :: ( HasFreshCount s
-     , HasKindTable s
-     , MonadState s m
-     , AsKindError e
-     , MonadError e m
-     )
-  => [Type]
-  -> m (Map Identifier Kind)
-unifyKindsProductArguments [] = pure M.empty
-unifyKindsProductArguments (ty:tys) = do
-  (s1,k1) <- get >>= runReaderT (inferKind ty)
-  s2 <- kindTable %= subKindTable s1 >> unifyKindsProductArguments tys
-  s3 <- unifyKinds [(substituteKind s2 k1,Star)]
-  pure (applyKindSubs s3 $ applyKindSubs s2 s1)
-
-unifyKindsProducts
-  :: ( HasFreshCount s
-     , HasKindTable s
-     , MonadState s m
-     , AsKindError e
-     , MonadError e m
-     )
-  => [ProdDecl]
-  -> m (Map Identifier Kind)
-unifyKindsProducts [] = pure M.empty
-unifyKindsProducts (ProdDecl name argTys:prods) = do
-  s1 <- unifyKindsProductArguments argTys
-  ss <- kindTable %= subKindTable s1 >> unifyKindsProducts prods
-  pure $ applyKindSubs ss s1
-
-inferWithTypeVars
-  :: ( HasFreshCount s
-     , HasKindTable s
-     , MonadState s m
-     , AsKindError e
-     , MonadError e m
-     )
-  => [Identifier]
-  -> NonEmpty ProdDecl
-  -> m (Map Identifier Kind,Kind)
-inferWithTypeVars [] prods = do
-  subs <- unifyKindsProducts $ N.toList prods
-  pure (subs, Star)
-inferWithTypeVars (tv:tvs) prods = do
-  freshVar <- freshKindVar
-  (subs,k) <- kindTable %= M.insert tv freshVar >> inferWithTypeVars tvs prods
-  pure (subs, KindArrow (substituteKind subs freshVar) k)
-
 checkDefinitionKinds
-  :: ( HasKindTable s
-     , HasFreshCount s
+  :: ( HasFreshCount s
+     , MonadState s m
+     , HasKindTable r
+     , MonadReader r m
      , AsKindError e
      , MonadError e m
      )
   => Identifier
   -> [Identifier]
   -> NonEmpty ProdDecl
-  -> s
   -> m Kind
-checkDefinitionKinds tyCon tyVars prods initialState
-  = flip evalStateT initialState $ do
-      freshVar <- freshKindVar
-      (subs,ty) <- kindTable %= M.insert tyCon freshVar >> inferWithTypeVars tyVars prods
-      subs' <- unifyKinds [(freshVar, ty)]
-      subs'' <- unifyKinds [(substituteKind subs freshVar, substituteKind subs' freshVar)]
-      pure . instantiate $ substituteKind subs'' ty
+checkDefinitionKinds tyCon tyVars prods = do
+  kinds <- traverse (const freshKindVar) tyVars
+  let constructorKind = foldr KindArrow Star kinds
+  let update = M.insert tyCon constructorKind . M.union (M.fromList $ zip tyVars kinds)
+  subs <- local (over kindTable update) . checkConstructors $ N.toList prods
+  pure . instantiate $ substituteKind subs constructorKind
+  where
+    checkConstructors [] = pure M.empty
+    checkConstructors (ProdDecl _ argTys:rest) = do
+      subs <- checkArgs argTys
+      applyKindSubs <$> local (over kindTable $ subKindTable subs) (checkConstructors rest) <*> pure subs
+
+    checkArgs [] = pure M.empty
+    checkArgs (argTy:rest) = do
+      (subs, kind) <- inferKind argTy
+      subs' <- local (over kindTable $ subKindTable subs) $ unifyKinds [(kind, Star)]
+      let subs'' = applyKindSubs subs' subs
+      applyKindSubs <$> local (over kindTable $ subKindTable subs'') (checkArgs rest) <*> pure subs''

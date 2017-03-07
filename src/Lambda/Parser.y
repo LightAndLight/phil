@@ -17,7 +17,9 @@ import Data.List.NonEmpty (NonEmpty(..), (<|))
 import qualified Data.Set as S
 
 import Lambda.Lexer
-import Lambda.Core.AST hiding (Expr(..), Definition(..))
+import Lambda.Core.AST.Literal
+import Lambda.Core.AST.Pattern
+import Lambda.Core.AST.Types
 import Lambda.Sugar
 
 }
@@ -111,7 +113,7 @@ Constraint : A { S.singleton $1 }
            | '(' Predicates ')' { $2 }
 
 Qualified : Ty { (S.empty, $1) }
-          | Predicates '=>' Ty { ($1, $3) }
+          | Constraint '=>' Ty { ($1, $3) }
 
 TypeScheme : Ty { Forall S.empty S.empty $1 }
            | forall Args '.' Qualified { uncurry (Forall (S.fromList $2)) $4 }

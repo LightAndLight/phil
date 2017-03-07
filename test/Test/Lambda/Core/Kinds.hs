@@ -7,11 +7,13 @@ import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Either
-import           Data.List.NonEmpty   (NonEmpty (..))
-import qualified Data.Map             as M
+import           Data.List.NonEmpty          (NonEmpty (..))
+import qualified Data.Map                    as M
 import           Data.Traversable
 
-import           Lambda.Core.AST
+import           Lambda.Core.AST.Definitions
+import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.Types
 import           Lambda.Core.Kinds
 
 import           Test.Hspec
@@ -35,7 +37,9 @@ runCheckDefinitionKinds
   -> [Identifier]
   -> NonEmpty ProdDecl
   -> Either KindError Kind
-runCheckDefinitionKinds name tyVars prods = flip evalState (TestState M.empty 0) . runExceptT $ checkDefinitionKinds name tyVars prods
+runCheckDefinitionKinds name tyVars prods
+  = let s = TestState M.empty 0
+    in evalStateT (runExceptT (checkDefinitionKinds name tyVars prods)) s s
 
 runInferKindTypeScheme :: [Identifier] -> Type -> Either KindError Kind
 runInferKindTypeScheme vars ty = flip evalState (KindInferenceState 0) . runExceptT $ do
