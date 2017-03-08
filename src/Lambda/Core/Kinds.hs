@@ -15,6 +15,7 @@ module Lambda.Core.Kinds
   , freshKindVar
   , inferKind
   , initialKindInferenceState
+  , lookupKind
   , runInferKind
   , unifyKinds
   , showKind
@@ -136,6 +137,11 @@ freshKindVar = do
   freshCount += 1
   pure . KindVar $ "k" ++ show count
 
+lookupKind :: (AsKindError e, MonadError e m) => Identifier -> Map Identifier Kind -> m Kind
+lookupKind name table = case M.lookup name table of
+  Nothing -> throwError $ _KNotDefined # name
+  Just kind -> pure kind
+
 inferKind
   :: ( HasFreshCount s
      , MonadState s m
@@ -147,10 +153,8 @@ inferKind
   => Type
   -> m (Map Identifier Kind, Kind)
 inferKind (TyVar var) = do
-  maybeKind <- views kindTable $ M.lookup var
-  case maybeKind of
-    Just kind -> pure (M.empty,kind)
-    Nothing -> throwError $ _KNotInScope # var
+  kind <- lookupKind var =<< view kindTable
+  pure (M.empty, kind)
 inferKind (TyApp con arg) = do
   (s1,conKind) <- inferKind con
   (s2,argKind) <- local (over kindTable $ subKindTable s1) $ inferKind arg
@@ -160,10 +164,8 @@ inferKind (TyApp con arg) = do
 inferKind (TyCon tyCon) = case tyCon of
   FunCon -> pure (M.empty,KindArrow Star $ KindArrow Star Star)
   TypeCon con -> do
-    maybeKind <- views kindTable $ M.lookup con
-    case maybeKind of
-      Just kind -> pure (M.empty,kind)
-      Nothing -> throwError $ _KNotDefined # con
+    kind <- lookupKind con =<< view kindTable
+    pure (M.empty, kind)
 inferKind (TyPrim _) = pure (M.empty,Star)
 
 runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m (Map Identifier Kind, Kind)

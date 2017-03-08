@@ -24,10 +24,18 @@ import           Data.Set             (Set)
 import qualified Data.Set             as S
 import           Data.Traversable
 
-import           Lambda.Core.AST
+import           Lambda.Core.AST.Binding
+import           Lambda.Core.AST.Definitions
+import           Lambda.Core.AST.Expr
+import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Lens
+import           Lambda.Core.AST.Literal
+import           Lambda.Core.AST.Types
+import           Lambda.Core.AST.Pattern
 import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
 import Lambda.Core.Kinds hiding (HasFreshCount(..))
+import Lambda.Core.Typeclasses
+import Lambda.Core.Typecheck.Substitution
 
 import Debug.Trace
 
@@ -125,37 +133,11 @@ freeInScheme (Forall vars _ ty) = freeInType ty `S.difference` vars
 free :: Map Identifier TypeScheme -> Set Identifier
 free = foldr (\scheme frees -> freeInScheme scheme `S.union` frees) S.empty
 
-type Substitution = Map Identifier Type
-
 generalize :: Map Identifier TypeScheme -> (Set Type, Type) -> TypeScheme
 generalize ctxt (cons,ty)
   | let frees = freeInType ty
   , frees /= S.empty = Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty cons) `S.difference` free ctxt) cons ty
   | otherwise = Base ty
-
-substitute :: Substitution -> Type -> Type
-substitute subs ty@(TyVar name) = fromMaybe ty $ M.lookup name subs
-substitute subs (TyApp from to) = TyApp (substitute subs from) (substitute subs to)
-substitute subs ty = ty
-
-rename :: Map Identifier Type -> TypeScheme -> TypeScheme
-rename subs (Forall vars cons ty)
-  = Forall
-      (S.map (\v -> fromMaybe v (subs ^. at v ^? _Just . _TyVar)) vars)
-      (S.map (substitute subs) cons) $
-      substitute (M.filterWithKey (\k a -> k `S.member` vars) subs) ty
-rename _ (Base ty) = Base ty
-
--- apply s1 to s2
-applySubs :: Substitution -> Substitution -> Substitution
-applySubs s1 = M.union s1 . fmap (substitute s1)
-
-subTypeScheme :: Substitution -> TypeScheme -> TypeScheme
-subTypeScheme subs (Base ty) = Base $ substitute subs ty
-subTypeScheme subs (Forall vars cons ty) = Forall vars cons $ substitute (foldr M.delete subs vars) ty
-
-subContext :: Substitution -> Map Identifier TypeScheme -> Map Identifier TypeScheme
-subContext subs = fmap (subTypeScheme subs)
 
 type Constraints = [(Type,Type)]
 
@@ -229,20 +211,24 @@ mgu (eq:eqs)
 findInstance :: (AsTypeError e, MonadError e m) => Type -> Type -> Map (Type,Type) Expr -> m ()
 findInstance ty cons instances = unless ((ty,cons) `M.member` instances) . throwError $ _NoInstanceFound # (ty,cons)
 
-kindPreservingSubstitution :: (AsKindError e, MonadError e m) => Substitution -> Map Identifier Kind -> m (Map Identifier Kind)
+kindPreservingSubstitution
+  :: ( AsKindError e
+     , MonadError e m
+     , HasKindTable r
+     , MonadReader r m
+     ) => Substitution -> m ()
 kindPreservingSubstitution subs = go (M.toList subs)
   where
-    go [] ktable = pure ktable
-    go ((name, value):rest) ktable =
-      case M.lookup name ktable of
-        Nothing -> throwError $ _KNotDefined # name
-        Just k -> case value of
-          TyVar name' -> case M.lookup name' ktable of
-            Nothing -> throwError $ _KNotDefined # name'
-            Just k' -> do
-              kSubs <- unifyKinds [(k, k')]
-              go rest . subKindTable kSubs $ M.delete name ktable
-          _ -> go rest ktable
+    go [] = pure ()
+    go ((name, targetType):rest) = do
+      table <- view kindTable
+      kind <- lookupKind name table
+      case targetType of
+        TyVar name' -> do
+          kind' <- lookupKind name' table
+          unifyKinds [(kind, kind')]
+          go rest
+        _ -> go rest
 
 -- Checks that the second argument is more special that the first
 special
@@ -273,9 +259,10 @@ special scheme scheme'
         (cons', ty') <- instantiate scheme'
         -- The entailment relationship will have to come into play here I think
         subs <- use kindTable >>= runReaderT (unifyTypes ty ty')
+        use kindTable >>= runReaderT (kindPreservingSubstitution subs)
         let newCons = S.map (substitute subs) cons
-        newKindtable <- kindPreservingSubstitution subs =<< use kindTable
-        kindTable .= newKindtable
+        -- entails newCons cons'
+        undefined
         -- For each variable in each constraint, check that the target of the substitution has an instance
         for_ (S.toList newCons) $ \(TyApp predicate value) -> findInstance value predicate M.empty -- Should pass for every non-qualified type
   | Forall{} <- scheme , Base ty' <- scheme' = do
@@ -359,9 +346,6 @@ patType (PatLit (LitChar p)) = return (M.empty,TyPrim Char)
 patType (PatLit (LitBool p)) = return (M.empty,TyPrim Bool)
 patType PatWildcard = (,) M.empty <$> fresh
 
-entails :: Set Type -> Set Type -> Bool
-entails = undefined
-
 w :: MonadW r s e m => Expr -> m TypeScheme
 w e = do
   (subs,cons,ty) <- w' e
@@ -443,9 +427,27 @@ checkDefinition ::
   )
   => Definition
   -> m (Map Identifier Expr)
+
+checkDefinition (Class constraints constructor params funcs) = do
+  freshVar <- freshKindVar
+  paramKinds <- for params (\param -> (,) param <$> freshKindVar)
+  kindTable %= M.insert constructor (KindArrow (foldl' KindArrow (snd $ head paramKinds) (snd <$> tail paramKinds)) Constraint)
+  table <- use kindTable
+  (subs, classKind) <- flip runReaderT (M.fromList paramKinds `M.union` table) $ do
+    subs <- checkConstraints constraints
+    local (subKindTable subs) $ inferKind (TyCon (TypeCon constructor))
+  kindTable %= subKindTable subs
+  for funcs $ \(name, ty) -> do
+    checkDefinition $ TypeSignature name ty
+    context %= M.insert name ty
+  pure M.empty
+
+checkDefinition (Instance constraints constructor params impls) = undefined
+
 checkDefinition (Data tyCon tyVars decls) = do
   freshCount .= 0
-  kind <- get >>= checkDefinitionKinds tyCon tyVars decls
+  table <- use kindTable
+  kind <- runReaderT (checkDefinitionKinds tyCon tyVars decls) table
   kindTable %= M.insert tyCon kind
   let tyVars' = fmap TyVar tyVars
   M.fromList <$> traverse (checkDataDecl tyCon tyVars') (N.toList decls)
@@ -484,23 +486,18 @@ checkDefinition (TypeSignature name ty) = do
       case ty of
         Forall vars cons ty -> do
           table <- use kindTable
-          subs <- validateConstraintKinds table $ S.toList cons
           void . flip runStateT (KindInferenceState 0) $ do
-            let vars' = S.toList $ S.map (\a -> (a,substituteKind subs $ KindVar a)) vars
-            flip runReaderT (M.fromList vars' `M.union` table) $ inferKind ty
+            kindVars <- for (S.toList vars) $ \var -> (,) var <$> freshKindVar
+            flip runReaderT (M.fromList kindVars `M.union` table) $ do
+              subs <- checkConstraints cons
+              res <- local (subKindTable subs) $ inferKind ty
+              pure res
         Base ty -> do
           table <- use kindTable
           void . flip runStateT (KindInferenceState 0) $ runReaderT (inferKind ty) table
       typesignatures %= M.insert name ty
     _ -> throwError $ _DuplicateTypeSignatures # name
   pure M.empty
-  where
-    validateConstraintKinds table [] = pure M.empty
-    validateConstraintKinds table (con:cons) = do
-      (subs,k) <- runInferKind con table
-      unifyKinds [(k,Constraint)]
-      subs' <- validateConstraintKinds (applyKindSubs subs table) cons
-      pure (applyKindSubs subs' subs)
 
 checkDefinitions ::
   ( HasFreshCount s
@@ -516,10 +513,14 @@ checkDefinitions ::
   => [Definition]
   -> m [Definition]
 checkDefinitions defs
-  = let (dataDefs,rest) = partition isDataDef defs
-        (typeSigs,bindings) = partition isTypeSignature rest
+  = let (classDefs, rest) = partition isClassDef defs
+        (classImpls, rest') = partition isClassImpl rest
+        (dataDefs, rest'') = partition isDataDef rest'
+        (typeSigs,bindings) = partition isTypeSignature rest''
     in do
       traverse_ checkDefinition dataDefs
+      traverse_ checkDefinition classDefs
+      traverse_ checkDefinition classImpls
       traverse_ checkDefinition typeSigs
       traverse_ checkDefinition bindings *> pure (dataDefs ++ bindings)
   where
@@ -528,3 +529,9 @@ checkDefinitions defs
 
     isDataDef Data{} = True
     isDataDef _ = False
+
+    isClassDef Class{} = True
+    isClassDef _ = False
+
+    isClassImpl Instance{} = True
+    isClassImpl _ = False
