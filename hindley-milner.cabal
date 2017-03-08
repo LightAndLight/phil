@@ -26,6 +26,7 @@ library
                      , Lambda.Core.Codegen
                      , Lambda.Core.Kinds
                      , Lambda.Core.Typecheck
+                     , Lambda.Core.Typecheck.Substitution
                      , Lambda.Core.Typeclasses
                      , Lambda.Lexer
                      , Lambda.Parser
@@ -88,6 +89,7 @@ test-suite hindley-milner-test
   other-modules:       Lambda.Test.Arbitrary
                      , Test.Lambda.Core.Kinds
                      , Test.Lambda.Core.Typecheck
+                     , Test.Lambda.Core.Typeclasses
   build-tools:         alex
                      , happy
 

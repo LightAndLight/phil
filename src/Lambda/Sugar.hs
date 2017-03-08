@@ -7,6 +7,7 @@ module Lambda.Sugar
   , FunctionDefinition(..)
   , SyntaxError(..)
   , C.ProdDecl(..)
+  , asClassDef
   , desugar
   , desugarExpr
   ) where
