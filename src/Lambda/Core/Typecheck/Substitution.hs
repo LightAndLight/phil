@@ -19,7 +19,6 @@ applySubs :: Substitution -> Substitution -> Substitution
 applySubs s1 = M.union s1 . fmap (substitute s1)
 
 subTypeScheme :: Substitution -> TypeScheme -> TypeScheme
-subTypeScheme subs (Base ty) = Base $ substitute subs ty
 subTypeScheme subs (Forall vars cons ty) = Forall vars cons $ substitute (foldr M.delete subs vars) ty
 
 subContext :: Substitution -> Map Identifier TypeScheme -> Map Identifier TypeScheme

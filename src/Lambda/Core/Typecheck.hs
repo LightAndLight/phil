@@ -132,7 +132,6 @@ freeInType (TyApp con arg) = freeInType con `S.union` freeInType arg
 freeInType _ = S.empty
 
 freeInScheme :: TypeScheme -> Set Identifier
-freeInScheme (Base ty) = freeInType ty
 freeInScheme (Forall vars _ ty) = freeInType ty `S.difference` vars
 
 free :: Map Identifier TypeScheme -> Set Identifier
@@ -140,9 +139,8 @@ free = foldr (\scheme frees -> freeInScheme scheme `S.union` frees) S.empty
 
 generalize :: Map Identifier TypeScheme -> (Set Type, Type) -> TypeScheme
 generalize ctxt (cons,ty)
-  | let frees = freeInType ty
-  , frees /= S.empty = Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty cons) `S.difference` free ctxt) cons ty
-  | otherwise = Base ty
+  = let frees = freeInType ty
+    in Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty cons) `S.difference` free ctxt) cons ty
 
 type Constraints = [(Type,Type)]
 
@@ -168,7 +166,6 @@ instantiate ::
   )
   => TypeScheme
   -> m (Set Type, Type)
-instantiate (Base ty) = pure (S.empty,ty)
 instantiate (Forall vars cons ty) = do
   subs <- M.fromList <$> for (S.toList vars) makeFreshVar
   pure (S.map (substitute subs) cons, substitute subs ty)
@@ -269,15 +266,6 @@ special scheme scheme'
             specialCons = cons' `S.union` newCons
         unless (entails tctxt generalCons specialCons) .
           throwError $ _CouldNotDeduce # (specialCons, generalCons)
-  | Forall{} <- scheme, Base ty' <- scheme' = do
-      (cons, ty) <- instantiate scheme
-      subs <- use kindTable >>= runReaderT (unifyTypes ty ty')
-      let newCons = S.map (substitute subs) cons
-      tctxt <- view tcContext
-      unless (entails tctxt newCons S.empty) $ error "Law defiled: P ||- {} forall P"
-  | Base ty <- scheme, Forall _ _ ty' <- scheme' =
-      use kindTable >>= void . runReaderT (unifyTypes ty ty')
-  | Base ty <- scheme, Base ty' <- scheme' = use kindTable >>= void . runReaderT (unifyTypes ty ty')
   where
     unifyTypes ty ty' = unifyTypes' ty ty' M.empty
       where
@@ -336,14 +324,14 @@ patType ::
   -> m (Map Identifier TypeScheme,Type)
 patType (PatId name) = do
   ty <- fresh
-  return (M.singleton name $ Base ty,ty)
+  return (M.singleton name $ Forall S.empty S.empty ty,ty)
 patType (PatCon conName args) = do
   (_,conTy) <- instantiate =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
       argsLen = length args
       argTysLen = length argTys
   when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
-  let boundVars = foldr (\(arg,argTy) -> M.insert arg (Base argTy)) M.empty $ zip args argTys
+  let boundVars = foldr (\(arg,argTy) -> M.insert arg (Forall S.empty S.empty argTy)) M.empty $ zip args argTys
   return (boundVars,retTy)
 patType (PatLit (LitInt p)) = return (M.empty,TyPrim Int)
 patType (PatLit (LitString p)) = return (M.empty,TyPrim String)
@@ -386,7 +374,7 @@ w e = do
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
-          (s1,cons,t1) <- local (over context $ M.insert x (Base b)) $ w' expr
+          (s1,cons,t1) <- local (over context $ M.insert x (Forall S.empty S.empty b)) $ w' expr
           return (s1,cons,TyFun (substitute s1 b) t1)
         (Let (Binding x e) e') -> do
           (s1,cons1,t1) <- w' e
@@ -395,7 +383,7 @@ w e = do
           return (applySubs s2 s1, S.union cons2 $ S.map (substitute s2) cons1, t2)
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
-          (s1,cons1,t1) <- local (over context . M.insert name $ Base freshVar) $ w' value
+          (s1,cons1,t1) <- local (over context . M.insert name $ Forall S.empty S.empty freshVar) $ w' value
           s2 <- use kindTable >>= runReaderT (mgu $ (t1,freshVar) : M.toList (M.mapKeys TyVar s1))
           let cons1' = S.map (substitute s2) cons1
           (s3,cons2,t2) <- local (over context $ \ctxt -> M.insert name (generalize ctxt (cons1', substitute s2 t1)) $ subContext s1 ctxt) $ w' rest
@@ -487,24 +475,19 @@ checkDefinition (Function (Binding name expr)) = do
       return $ M.singleton name expr
     _ -> throwError $ _AlreadyDefined # name
 
-checkDefinition (TypeSignature name ty) = do
+checkDefinition (TypeSignature name scheme@(Forall vars cons ty)) = do
   maybeSig <- use (typesignatures . at name)
   case maybeSig of
     Nothing -> do
-      case ty of
-        Forall vars cons ty -> do
-          table <- use kindTable
-          void $ do
-            kindVars <- for (S.toList vars) $ \var -> (,) var <$> freshKindVar
-            flip runReaderT (M.fromList kindVars `M.union` table) $ do
-              subs <- checkConstraints cons
-              t <- view kindTable
-              res <- local (subKindTable subs) $ inferKind ty
-              pure res
-        Base ty -> do
-          table <- use kindTable
-          void $ runReaderT (inferKind ty) table
-      typesignatures %= M.insert name ty
+      table <- use kindTable
+      void $ do
+        kindVars <- for (S.toList vars) $ \var -> (,) var <$> freshKindVar
+        flip runReaderT (M.fromList kindVars `M.union` table) $ do
+          subs <- checkConstraints cons
+          t <- view kindTable
+          res <- local (subKindTable subs) $ inferKind ty
+          pure res
+      typesignatures %= M.insert name scheme
     _ -> throwError $ _DuplicateTypeSignatures # name
   pure M.empty
 

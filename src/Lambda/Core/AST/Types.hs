@@ -26,10 +26,7 @@ data Type
 
 pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 
-data TypeScheme
-  = Base Type
-  | Forall (Set Identifier) (Set Type) Type
-  deriving (Eq, Show)
+data TypeScheme = Forall (Set Identifier) (Set Type) Type deriving (Eq, Show)
 
 nestedFunc :: Type -> String
 nestedFunc ty@(TyFun _ _) = "(" ++ showType ty ++ ")"
@@ -56,5 +53,4 @@ showConstraints cons
        else cons') ++ "=> "
 
 showTypeScheme :: TypeScheme -> String
-showTypeScheme (Base ty) = showType ty
 showTypeScheme (Forall vars cons ty) = unwords ("forall" : S.toList vars) ++ ". " ++ showConstraints cons ++ showType ty
