@@ -19,10 +19,10 @@ instance Arbitrary TyCon where
   arbitrary = oneof [pure FunCon, TypeCon <$> arbitrary]
 
 sizedType :: Int -> Gen Type
-sizedType 0 = oneof [TyPrim <$> arbitrary, TyVar <$> arbitrary, TyCon <$> arbitrary]
+sizedType 0 = oneof [TyPrim <$> arbitrary, TyVar <$> listOf1 (elements ['a'..'z']), TyCon <$> arbitrary]
 sizedType n = oneof
   [ TyPrim <$> arbitrary
-  , TyVar <$> arbitrary
+  , TyVar <$> listOf1 (elements ['a'..'z'])
   , TyCon <$> arbitrary
   , TyApp <$> sizedType (n-1) <*> sizedType (n-1)
   ]
@@ -87,6 +87,8 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
           [ TceClass S.empty (eq "a")
           , TceClass (S.fromList [eq "b"]) (ord "b")
           ]
+    it "P ||- {}" $
+      entails [] (S.fromList [ord "c"]) (S.empty) `shouldBe` True
     it "given `Eq a` and `Eq b => Ord b`, `Ord c` entails `Eq c`" $
       entails context (S.fromList [ord "c"]) (S.fromList [eq "c"]) `shouldBe` True
     it "given `Eq a` and `Eq b => Ord b`, `Ord c` entails `Ord c`" $
@@ -95,6 +97,15 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
       entails context (S.fromList [ord "c"]) (S.fromList [eq "d"]) `shouldBe` False
     it "given `Eq a` and `Eq b => Ord b`, `Ord c` does not entail `Num d`" $
       entails context (S.fromList [ord "c"]) (S.fromList [num "d"]) `shouldBe` False
+    let eq a = TyApp (TyCon $ TypeCon "Eq") a
+        ord a = TyApp (TyCon $ TypeCon "Ord") a
+        context' = context ++ [TceInst S.empty (eq $ TyPrim Int)]
+    it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` entails `Eq Int`" $
+      entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ TyPrim Int]) `shouldBe` True
+    it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Eq Bool`" $
+      entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ TyPrim Bool]) `shouldBe` False
+    it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
+      entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [ord $ TyPrim Int]) `shouldBe` False
     let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)

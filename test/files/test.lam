@@ -1,20 +1,5 @@
-data List a = Nil | Cons a (List a)
-
 class Eq a where {
   eq : a -> a -> Bool
-  }
-
-not : Bool -> Bool
-not b = case b of {
-  true -> false;
-  _ -> true
-  }
-
-instance Eq Bool where {
-  eq a b = case a of {
-    true -> b;
-    _ -> not b
-    }
   }
 
 data Ordering = LT | EQ | GT
@@ -23,18 +8,8 @@ class Eq a => Ord a where {
   ord : a -> a -> Ordering
   }
 
-class Category c where {
-  id : c a a;
-  compose : c b d -> c a b -> c a d
-  }
+id : forall a. Eq a => a -> a
+id = \x . x
 
-ifte : forall a. Bool -> a -> a -> a
-ifte cond a b = case cond of { true -> a; false -> b }
-
-filter : forall a. (a -> Bool) -> List a -> List a
-filter = rec filter' pred list = case list of {
-  Nil -> Nil;
-  Cons a rest -> ifte (pred a) (Cons a (filter' pred rest)) (filter' pred rest)
-  } in filter'
-
-test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
+id' : forall a. a -> a
+id' = id

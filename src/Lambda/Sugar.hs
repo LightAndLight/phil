@@ -63,7 +63,7 @@ desugar (TypeSignature name ty) = pure $ C.TypeSignature name ty
 desugar (Function def) = pure . C.Function $ translateDefinition def
 desugar (Class constraints classType classMembers) = do
   (className, tyVars) <- asClassDef classType
-  pure . C.Class constraints className tyVars $ fmap (second $ generalize constraints) classMembers
+  pure . C.Class constraints className tyVars $ fmap (second . generalize . S.singleton . foldl' TyApp (TyCon $ TypeCon className) $ TyVar <$> tyVars) classMembers
 desugar (Instance constraints classType classImpls) = do
   (className, tyArgs) <- asClassInstance classType
   pure . C.Instance constraints className tyArgs $ fmap translateDefinition classImpls

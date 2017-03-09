@@ -37,24 +37,26 @@ import Lambda.Core.Kinds hiding (HasFreshCount(..))
 import Lambda.Core.Typeclasses
 import Lambda.Core.Typecheck.Substitution
 
-import Debug.Trace
-
 data InferenceState
   = InferenceState
-    { _context    :: Map Identifier TypeScheme
-    , _typesignatures :: Map Identifier TypeScheme
-    , _kindTable  :: Map Identifier Kind
-    , _kindInferenceState :: KindInferenceState
-    , _freshCount :: Int
+    { _isContext    :: Map Identifier TypeScheme
+    , _isTypesignatures :: Map Identifier TypeScheme
+    , _isKindTable  :: Map Identifier Kind
+    , _isKindInferenceState :: KindInferenceState
+    , _isFreshCount :: Int
+    , _isTcContext :: [TypeclassEntry]
     }
+
+makeClassy ''InferenceState
 
 initialInferenceState
   = InferenceState
-  { _context = M.empty
-  , _typesignatures = M.empty
-  , _kindTable = M.empty
-  , _kindInferenceState = initialKindInferenceState
-  , _freshCount = 0
+  { _isContext = M.empty
+  , _isTypesignatures = M.empty
+  , _isKindTable = M.empty
+  , _isKindInferenceState = initialKindInferenceState
+  , _isFreshCount = 0
+  , _isTcContext = []
   }
 
 class HasContext s where
@@ -67,22 +69,25 @@ class HasFreshCount s where
   freshCount :: Lens' s Int
 
 instance HasContext InferenceState where
-  context = lens _context (\s c -> s { _context = c })
+  context = inferenceState . isContext
 
 instance HasTypesignatures InferenceState where
-  typesignatures = lens _typesignatures (\s c -> s { _typesignatures = c })
+  typesignatures = inferenceState . isTypesignatures
 
 instance HasKindTable InferenceState where
-  kindTable = lens _kindTable (\s t -> s { _kindTable = t })
+  kindTable = inferenceState . isKindTable
 
 instance HasFreshCount InferenceState where
-  freshCount = lens _freshCount (\s c -> s { _freshCount = c })
+  freshCount = inferenceState . isFreshCount
 
 instance HasKindInferenceState InferenceState where
-  kindInferenceState = lens _kindInferenceState (\s c -> s { _kindInferenceState = c })
+  kindInferenceState = inferenceState . isKindInferenceState
 
 instance K.HasFreshCount InferenceState where
-  freshCount = kindInferenceState . K.freshCount
+  freshCount = inferenceState . isKindInferenceState . K.freshCount
+
+instance HasTcContext InferenceState where
+  tcContext = inferenceState . isTcContext
 
 data TypeError
   = NotInScope [String]
@@ -95,7 +100,7 @@ data TypeError
   | NotDefined Identifier
   | DuplicateTypeSignatures Identifier
   | KindInferenceError KindError
-  | NoInstanceFound Type Type
+  | CouldNotDeduce (Set Type) (Set Type)
   deriving (Eq, Show)
 
 makeClassyPrisms ''TypeError
@@ -208,9 +213,6 @@ mgu (eq:eqs)
       (TyApp con arg,TyApp con' arg') -> mgu $ (con,con'):(arg,arg'):eqs
       (ty,ty') -> throwError $ _TypeMismatch # (ty,ty')
 
-findInstance :: (AsTypeError e, MonadError e m) => Type -> Type -> Map (Type,Type) Expr -> m ()
-findInstance ty cons instances = unless ((ty,cons) `M.member` instances) . throwError $ _NoInstanceFound # (ty,cons)
-
 kindPreservingSubstitution
   :: ( AsKindError e
      , MonadError e m
@@ -239,6 +241,7 @@ special
      , HasFreshCount s
      , K.HasFreshCount s
      , MonadState s m
+     , HasTcContext r
      , HasContext r
      , MonadReader r m
      ) => TypeScheme -> TypeScheme -> m ()
@@ -255,21 +258,23 @@ special scheme scheme'
         for_ (S.toList vars') $ \var -> do
           updateKindTable <- M.insertWith (flip const) var <$> freshKindVar
           kindTable %= updateKindTable
-        (cons, ty) <- instantiate scheme
-        (cons', ty') <- instantiate scheme'
-        -- The entailment relationship will have to come into play here I think
+        (cons, ty) <- instantiate scheme -- this would be the body's type
+        (cons', ty') <- instantiate scheme' -- this would be the signature
         subs <- use kindTable >>= runReaderT (unifyTypes ty ty')
         use kindTable >>= runReaderT (kindPreservingSubstitution subs)
-        let newCons = S.map (substitute subs) cons
-        -- entails newCons cons'
-        undefined
-        -- For each variable in each constraint, check that the target of the substitution has an instance
-        for_ (S.toList newCons) $ \(TyApp predicate value) -> findInstance value predicate M.empty -- Should pass for every non-qualified type
-  | Forall{} <- scheme , Base ty' <- scheme' = do
+        tctxt <- view tcContext
+        let newCons' = S.map (substitute subs) cons'
+            newCons = S.map (substitute subs) cons
+            generalCons = cons `S.union` newCons'
+            specialCons = cons' `S.union` newCons
+        unless (entails tctxt generalCons specialCons) .
+          throwError $ _CouldNotDeduce # (specialCons, generalCons)
+  | Forall{} <- scheme, Base ty' <- scheme' = do
       (cons, ty) <- instantiate scheme
       subs <- use kindTable >>= runReaderT (unifyTypes ty ty')
       let newCons = S.map (substitute subs) cons
-      for_ (S.toList newCons) $ \(TyApp predicate value) -> findInstance value predicate M.empty -- Should pass for every non-qualified type
+      tctxt <- view tcContext
+      unless (entails tctxt newCons S.empty) $ error "Law defiled: P ||- {} forall P"
   | Base ty <- scheme, Forall _ _ ty' <- scheme' =
       use kindTable >>= void . runReaderT (unifyTypes ty ty')
   | Base ty <- scheme, Base ty' <- scheme' = use kindTable >>= void . runReaderT (unifyTypes ty ty')
@@ -303,7 +308,7 @@ runWithContext
      ) => Map Identifier TypeScheme -> Expr -> m TypeScheme
 runWithContext ctxt
   = flip evalStateT initialInferenceState .
-    flip runReaderT initialInferenceState { _context = ctxt } . w
+    flip runReaderT initialInferenceState { _isContext = ctxt } . w
 
 type MonadW r s e m
   = ( HasFreshCount s
@@ -420,6 +425,7 @@ checkDefinition ::
   , HasContext s
   , HasTypesignatures s
   , K.HasFreshCount s
+  , HasTcContext s
   , MonadState s m
   , AsTypeError e
   , AsKindError e
@@ -428,18 +434,20 @@ checkDefinition ::
   => Definition
   -> m (Map Identifier Expr)
 
-checkDefinition (Class constraints constructor params funcs) = do
+checkDefinition (Class supers constructor params funcs) = do
   freshVar <- freshKindVar
   paramKinds <- for params (\param -> (,) param <$> freshKindVar)
-  kindTable %= M.insert constructor (KindArrow (foldl' KindArrow (snd $ head paramKinds) (snd <$> tail paramKinds)) Constraint)
+  kindTable %= M.insert constructor (foldr KindArrow Constraint $ snd <$> paramKinds)
   table <- use kindTable
   (subs, classKind) <- flip runReaderT (M.fromList paramKinds `M.union` table) $ do
-    subs <- checkConstraints constraints
+    subs <- checkConstraints supers
     local (subKindTable subs) $ inferKind (TyCon (TypeCon constructor))
   kindTable %= subKindTable subs
   for funcs $ \(name, ty) -> do
+    t <- use kindTable
     checkDefinition $ TypeSignature name ty
     context %= M.insert name ty
+  tcContext %= (TceClass supers (foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params) :)
   pure M.empty
 
 checkDefinition (Instance constraints constructor params impls) = undefined
@@ -486,15 +494,16 @@ checkDefinition (TypeSignature name ty) = do
       case ty of
         Forall vars cons ty -> do
           table <- use kindTable
-          void . flip runStateT (KindInferenceState 0) $ do
+          void $ do
             kindVars <- for (S.toList vars) $ \var -> (,) var <$> freshKindVar
             flip runReaderT (M.fromList kindVars `M.union` table) $ do
               subs <- checkConstraints cons
+              t <- view kindTable
               res <- local (subKindTable subs) $ inferKind ty
               pure res
         Base ty -> do
           table <- use kindTable
-          void . flip runStateT (KindInferenceState 0) $ runReaderT (inferKind ty) table
+          void $ runReaderT (inferKind ty) table
       typesignatures %= M.insert name ty
     _ -> throwError $ _DuplicateTypeSignatures # name
   pure M.empty
@@ -505,6 +514,7 @@ checkDefinitions ::
   , HasContext s
   , HasTypesignatures s
   , K.HasFreshCount s
+  , HasTcContext s
   , MonadState s m
   , AsTypeError e
   , AsKindError e

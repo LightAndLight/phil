@@ -43,8 +43,6 @@ import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Types
 
-import Debug.Trace
-
 data Kind
   = Star
   | KindArrow Kind Kind

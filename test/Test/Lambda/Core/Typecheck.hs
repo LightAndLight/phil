@@ -9,6 +9,7 @@ import           Control.Monad.State
 import           Data.Either
 import qualified Data.Map                   as M
 import           Data.Maybe
+import qualified Data.Set                   as S
 
 import           Lambda.Core.AST.Expr
 import           Lambda.Core.AST.Identifier
@@ -17,23 +18,35 @@ import           Lambda.Core.AST.Types
 import qualified Lambda.Core.Kinds          as K
 import           Lambda.Core.Typecheck      hiding (special)
 import qualified Lambda.Core.Typecheck      as T (special)
+import           Lambda.Core.Typeclasses
 
 import           Test.Hspec
 
-newtype TestContext = TestContext { getTestContext :: M.Map Identifier TypeScheme }
+data TestContexts
+  = TestContexts
+  { _testContext   :: M.Map Identifier TypeScheme
+  , _testTcContext :: [TypeclassEntry]
+  }
 
-instance HasContext TestContext where
-  context = lens getTestContext (const TestContext)
+emptyContexts = TestContexts M.empty []
 
-special :: TypeScheme -> TypeScheme -> Either TypeError ()
-special scheme scheme'
+makeClassy ''TestContexts
+
+instance HasContext TestContexts where
+  context = testContexts . testContext
+
+instance HasTcContext TestContexts where
+  tcContext = testContexts . testTcContext
+
+special :: TestContexts -> TypeScheme -> TypeScheme -> Either TypeError ()
+special ctxts scheme scheme'
   = flip evalState (TestState K.initialKindInferenceState M.empty 0) .
-    flip runReaderT (TestContext M.empty) .
+    flip runReaderT ctxts .
     runExceptT $
     T.special scheme scheme'
 
 hasType :: Expr -> TypeScheme -> Expectation
-hasType expr ty = runW expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special ty))
+hasType expr ty = runW expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
 
 data TestState
   = TestState
@@ -58,19 +71,19 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
     let idType = _Forall' ["a"] [] # _TyFun # (_TyVar # "a", _TyVar # "a")
     describe "success" $ do
       it "forall a. a -> a is more general than forall b. b -> b" $
-        special idType (_Forall' ["b"] [] # _TyFun # (_TyVar # "b", _TyVar # "b")) `shouldSatisfy` has _Right
+        special emptyContexts idType (_Forall' ["b"] [] # _TyFun # (_TyVar # "b", _TyVar # "b")) `shouldSatisfy` has _Right
 
       it "forall a. a -> a is more general than forall a b. b -> b" $
-        special idType (_Forall' ["a","b"] [] # _TyFun # (_TyVar # "b", _TyVar # "b")) `shouldSatisfy` has _Right
+        special emptyContexts idType (_Forall' ["a","b"] [] # _TyFun # (_TyVar # "b", _TyVar # "b")) `shouldSatisfy` has _Right
 
       it "forall a. a -> a is more general than forall a b. Int -> Int" $
-        special idType (_Forall' ["a","b"] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) `shouldSatisfy` has _Right
+        special emptyContexts idType (_Forall' ["a","b"] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) `shouldSatisfy` has _Right
 
       it "forall a. a -> a is more general than Int -> Int" $
-        special idType (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) `shouldSatisfy` has _Right
+        special emptyContexts idType (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) `shouldSatisfy` has _Right
 
       it "forall a. a -> a is more general than forall b c. (b -> c) -> (b -> c)" $
-        special idType
+        special emptyContexts idType
           (_Forall' ["b", "c"] []
             # _TyFun
               # ( _TyFun # (_TyVar # "b", _TyVar # "c")
@@ -79,10 +92,10 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
 
     describe "failure" $ do
       it "forall a. a -> a does not unify with forall b c. b -> c" $
-        special idType (_Forall' ["b", "c"] [] # _TyFun # (_TyVar # "b", _TyVar # "c")) `shouldSatisfy` has (_Left . _TypeMismatch)
+        special emptyContexts idType (_Forall' ["b", "c"] [] # _TyFun # (_TyVar # "b", _TyVar # "c")) `shouldSatisfy` has (_Left . _TypeMismatch)
 
       it "forall a. a -> a does not unify with forall b c d. (b -> c) -> (b -> d)" $
-        special idType
+        special emptyContexts idType
           (_Forall' ["b", "c", "d"] []
             # _TyFun
               # ( _TyFun # (_TyVar # "b", _TyVar # "c")
@@ -90,7 +103,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
           ) `shouldSatisfy` has (_Left . _TypeMismatch)
 
       it "forall a. a -> a does not unify with forall a b f. f a -> f b" $
-        special idType
+        special emptyContexts idType
           (_Forall' ["a", "b", "f"] []
             # _TyFun
               # ( _TyApp # (_TyVar # "f", _TyVar # "a")
@@ -99,16 +112,41 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
           ) `shouldSatisfy` has (_Left . _TypeMismatch)
 
       it "Int -> Int is less general than forall a. a -> a" $
-        special (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) idType `shouldSatisfy` has (_Left . _TypeMismatch)
+        special emptyContexts (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) idType `shouldSatisfy` has (_Left . _TypeMismatch)
 
   describe "typeclass" $ do
-    let constrainedId = _Forall' ["a"] [TyApp (TyVar "Constraint") (TyVar "a")] # _TyFun # (_TyVar # "a", _TyVar # "a")
+    let constrainedId = _Forall' ["a"] [TyApp (TyCon $ TypeCon "Constraint") (TyVar "a")] # _TyFun # (_TyVar # "a", _TyVar # "a")
+        regularId = _Forall' ["a"] [] # _TyFun # (_TyVar # "a", _TyVar # "a")
+        intToInt = _Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)
     describe "success" $ do
-      it "forall a. a -> a is more general than forall a. Constraint a => a -> a" $
-        special (_Forall' ["a"] [] # _TyFun # (_TyVar # "a", _TyVar # "a")) constrainedId `shouldSatisfy` has _Right
+      it "forall a. a -> a [>=] forall a. Constraint a => a -> a" $
+        special emptyContexts regularId constrainedId `shouldSatisfy` has _Right
+      let ctxt = emptyContexts
+            { _testTcContext =
+              [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")
+              , TceInst S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)
+              ]
+            }
+      it "instance Constraint Int where ... ==> forall a. Constraint a => a -> a [>=] Int -> Int" $
+        special ctxt constrainedId intToInt `shouldSatisfy` has _Right
     describe "failure" $ do
-      it "forall a. Constraint a => a -> a ~ Int -> Int but there is no instance Constraint Int" $
-        special constrainedId (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) `shouldSatisfy` has (_Left . _NoInstanceFound)
+      let ctxt = emptyContexts { _testTcContext = [TceClass S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")] }
+      it "forall a. Constraint a => a -> a [>=] Int -> Int but there is no instance Constraint Int" $
+        special ctxt constrainedId intToInt `shouldSatisfy` has (_Left . _CouldNotDeduce)
+      let constrainedId = _Forall'
+            ["a"]
+            [ TyApp (TyCon $ TypeCon "Constraint") (TyVar "a")
+            , TyApp (TyCon $ TypeCon "Other") (TyVar "a")
+            ]
+            # _TyFun # (_TyVar # "a", _TyVar # "a")
+          ctxt = emptyContexts
+            { _testTcContext =
+              [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")
+              , TceInst S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)
+              ]
+            }
+      it "instance Constraint Int where ... => forall a. (Constraint a, Other a) => a -> a [>=] Int -> Int but there is no class `Other`" $
+        special ctxt constrainedId intToInt `shouldSatisfy` has (_Left . _CouldNotDeduce)
 
   describe "w" $ do
     describe "success" $ do

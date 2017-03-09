@@ -32,6 +32,7 @@ import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
 import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
 import Lambda.Sugar (AsSyntaxError(..), SyntaxError)
 import Lambda.Core.Typecheck
+import Lambda.Core.Typeclasses
 import Lambda.Lexer
 import Lambda.Parser
 
@@ -54,6 +55,7 @@ data InterpreterState
     , _interpContext :: Map Identifier TypeScheme
     , _interpKindInferenceState :: KindInferenceState
     , _interpFreshCount :: Int
+    , _interpTcContext :: [TypeclassEntry]
     }
 
 makeClassy ''InterpreterState
@@ -66,6 +68,7 @@ initialInterpreterState
   , _interpContext = M.empty
   , _interpKindInferenceState = initialKindInferenceState
   , _interpFreshCount = 0
+  , _interpTcContext = []
   }
 
 instance HasSymbolTable InterpreterState where
@@ -88,6 +91,9 @@ instance HasKindInferenceState InterpreterState where
 
 instance K.HasFreshCount InterpreterState where
   freshCount = kindInferenceState . K.freshCount
+
+instance HasTcContext InterpreterState where
+  tcContext = interpreterState . interpTcContext
 
 data InterpreterError
   = NotBound String
@@ -224,6 +230,7 @@ define ::
   , HasFreshCount s
   , HasContext s
   , HasTypesignatures s
+  , HasTcContext s
   , K.HasFreshCount s
   , AsInterpreterError e
   , AsTypeError e
@@ -285,6 +292,7 @@ repl ::
   , HasSymbolTable s
   , HasFreshCount s
   , K.HasFreshCount s
+  , HasTcContext s
   , MonadFree ReplF m
   , Show e
   , AsLexError e

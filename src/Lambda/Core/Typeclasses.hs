@@ -1,6 +1,7 @@
 {-# language FlexibleContexts #-}
 module Lambda.Core.Typeclasses
-  ( TypeclassEntry(..)
+  ( HasTcContext(..)
+  , TypeclassEntry(..)
   , checkConstraints
   , equalUpToRenaming
   , elementUpToRenaming
@@ -28,11 +29,13 @@ import           Lambda.Core.Kinds
 import Lambda.Core.Typecheck.Substitution
 import Lambda.Sugar (AsSyntaxError(..), asClassDef)
 
-newtype Dictionary = Dictionary { getDict :: [(NonEmpty Type, [Binding Expr])] }
-
 data TypeclassEntry
   = TceInst (Set Type) Type
   | TceClass (Set Type) Type
+  deriving (Eq, Show)
+
+class HasTcContext s where
+  tcContext :: Lens' s [TypeclassEntry]
 
 -- forall a : Type, b : Type
 -- case equalUpToRenaming a b of
@@ -72,50 +75,15 @@ subsetUpToRenaming sub super = go (S.toList sub) super M.empty
       | otherwise = Nothing
 
 entails :: [TypeclassEntry] -> Set Type -> Set Type -> Bool
-entails context p pis = pis `S.isSubsetOf` p || all (entails' context p) pis
+entails ctxt p pis = pis `S.isSubsetOf` p || all (entails' ctxt p) pis
   where
     entails' [] _ _ = False
     entails' (TceClass p' pi:context) p pi'
-      | Just subs <- pi' `elementUpToRenaming` p' = entails context p (S.singleton $ substitute (TyVar <$> subs) pi)
+      | Just subs <- pi' `elementUpToRenaming` p', entails context p (S.singleton $ substitute (TyVar <$> subs) pi) = True
       | otherwise = entails' context p pi'
     entails' (TceInst p' pi:context) p pi'
-      | Just subs <- pi' `equalUpToRenaming` pi = entails context p (S.map (substitute $ TyVar <$> subs) p')
+      | Just subs <- pi `equalUpToRenaming` pi', entails context p (S.map (substitute $ TyVar <$> subs) p') = True
       | otherwise = entails' context p pi'
-
-class HasClasses s where
-  classes :: Lens' s (Map Identifier ([Identifier], Set Type))
-
-getImpl :: NonEmpty Type -> Dictionary -> [Binding Expr]
-getImpl tys (Dictionary dict) = fromMaybe [] $ lookup tys dict
-
-addImpl :: NonEmpty Type -> [Binding Expr] -> Dictionary -> Dictionary
-addImpl tys impls (Dictionary dict) = Dictionary $ (tys, impls):dict
-
--- | Entailment relation: first ||- second
--- | i.e. The second set can be deduced from the first set
-{-
-entails
-  :: ( HasClasses r
-     , HasDictionaries r
-     , MonadReader r m
-     , AsSyntaxError e
-     , MonadError e m
-     ) => Set Type -> Set Type -> m ()
-entails subs supers = for (S.toList subs) $ \sub -> do
-  (subClassName, subClassArgs) <- asClassDef sub
-  maybeClassDetails <- uses $ M.lookup subClassName
-  case maybeClassDetails of
-    Nothing -> _
-    Just (args, superClasses)
-      | length args == length subClassArgs -> do
-          -- Assumption: the kinds of subClassArgs are correct match the kinds of args
-          let subs = M.fromList (zip subClassArgs args)
-          let (tyVarPredicates, rest) = partition isTyVarPredicate . S.toList $ S.map (substitute subs) superClasses
-          where
-            isTyVarPredicate (TyApp (TyCon _) (TyVar _)) = True
-            isTyVarPredicate _ = False
-      | otherwise -> error "entailment error: constructor had incorrect number of arguments"
-      -}
 
 checkConstraints
   :: ( AsKindError e
@@ -136,5 +104,3 @@ checkConstraints = go . S.toList
       subs <- go [con]
       subs' <- local (over kindTable $ subKindTable subs) $ go rest
       pure $ applyKindSubs subs' subs
-
-checkClassInstance constraints constructor params impls = undefined
