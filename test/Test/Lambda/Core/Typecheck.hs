@@ -38,22 +38,14 @@ instance HasContext TestContexts where
 instance HasTcContext TestContexts where
   tcContext = testContexts . testTcContext
 
-special :: TestContexts -> TypeScheme -> TypeScheme -> Either TypeError ()
-special ctxts scheme scheme'
-  = flip evalState (TestState K.initialKindInferenceState M.empty 0) .
-    flip runReaderT ctxts .
-    runExceptT $
-    T.special scheme scheme'
-
-hasType :: Expr -> TypeScheme -> Expectation
-hasType expr ty = runW expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
-
 data TestState
   = TestState
   { _tdInferenceState :: K.KindInferenceState
   , _tdKindTable      :: M.Map Identifier K.Kind
   , _tdFreshCount     :: Int
   }
+
+initialTestState = TestState K.initialKindInferenceState M.empty 0
 
 makeLenses ''TestState
 
@@ -65,6 +57,22 @@ instance K.HasKindTable TestState where
 
 instance HasFreshCount TestState where
   freshCount = tdFreshCount
+
+special :: TestContexts -> TypeScheme -> TypeScheme -> Either TypeError ()
+special ctxts scheme scheme'
+  = flip evalState (TestState K.initialKindInferenceState M.empty 0) .
+    flip runReaderT ctxts .
+    runExceptT $
+    T.special scheme scheme'
+
+hasType :: Expr -> TypeScheme -> Expectation
+hasType expr ty = runW expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
+
+typeOf :: TestContexts -> TestState -> Expr -> Either TypeError TypeScheme
+typeOf ctxt st expr
+  = flip runReader ctxt .
+    flip evalStateT st .
+    runExceptT $ w expr
 
 typecheckSpec = describe "Lambda.Core.Typecheck" $ do
   describe "special" $ do
@@ -118,6 +126,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
     let constrainedId = _Forall' ["a"] [TyApp (TyCon $ TypeCon "Constraint") (TyVar "a")] # _TyFun # (_TyVar # "a", _TyVar # "a")
         regularId = _Forall' ["a"] [] # _TyFun # (_TyVar # "a", _TyVar # "a")
         intToInt = _Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)
+
     describe "success" $ do
       it "forall a. a -> a [>=] forall a. Constraint a => a -> a" $
         special emptyContexts regularId constrainedId `shouldSatisfy` has _Right
@@ -129,6 +138,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
             }
       it "instance Constraint Int where ... ==> forall a. Constraint a => a -> a [>=] Int -> Int" $
         special ctxt constrainedId intToInt `shouldSatisfy` has _Right
+
     describe "failure" $ do
       let ctxt = emptyContexts { _testTcContext = [TceClass S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")] }
       it "forall a. Constraint a => a -> a [>=] Int -> Int but there is no instance Constraint Int" $
@@ -158,6 +168,77 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
       it "rec fix f x = f (fix f) x in rec : forall a. (a -> a) -> a" $
         (_Rec # (_Binding' "fix" # _Abs' "f" # _App # (_Id # "f", _App # (_Id # "fix", _Id # "f")), _Id # "fix"))
           `hasType` (_Forall' ["t4"] [] # _TyFun # (_TyFun # (_TyVar # "t4", _TyVar # "t4"), _TyVar # "t4"))
+
     describe "failure" $ do
       it "\\x. x x" $
         runW (_Abs' "x" # _App # (_Id # "x", _Id # "x")) `shouldSatisfy` has (_Left . _OccursError)
+
+    describe "typeclasses" $ do
+      Test.Hspec.context "class Eq a where eq : a -> a -> Bool where ..." $ do
+        let ctxt = emptyContexts
+              { _testContext = M.singleton "eq" $
+                  _Forall'
+                    ["a"]
+                    [TyApp (TyCon $ TypeCon "Eq") $ TyVar "a"]
+                    # _TyFun # (_TyVar # "a", _TyFun # (_TyVar # "a", _TyPrim # Bool))
+              , _testTcContext =
+                  [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Eq") $ TyVar "a"]
+              }
+        it "\\x. \\y. eq y x : forall a. Eq a => a -> a -> Bool" $ do
+          typeOf ctxt initialTestState (_Abs' "x" # _Abs' "y" # _App # (_App # (_Id # "eq", _Id # "y"), _Id # "x"))
+            `shouldBe` (Right $
+              Forall
+                (S.singleton "t2")
+                (S.singleton $ TyApp (TyCon $ TypeCon "Eq") (TyVar "t2"))
+                (TyFun (TyVar "t2") $ TyFun (TyVar "t2") (TyPrim Bool)))
+        it "\\x. eq x x : forall a. Eq a => a -> Bool" $ do
+          typeOf ctxt initialTestState (_Abs' "x" # _App # (_App # (_Id # "eq", _Id # "x"), _Id # "x"))
+            `shouldBe` (Right $
+              Forall
+                (S.singleton "t1")
+                (S.singleton $ TyApp (TyCon $ TypeCon "Eq") (TyVar "t1"))
+                (TyFun (TyVar "t1") (TyPrim Bool)))
+        Test.Hspec.context "and : Bool -> Bool -> Bool" $ do
+          let ctxtWithAnd = ctxt & over testContext
+                ( M.insert "and" $
+                    _Forall'
+                      ["a"]
+                      []
+                      # _TyFun # (_TyPrim # Bool, _TyFun # (_TyPrim # Bool, _TyPrim # Bool))
+                )
+          it "\\x y. and (eq x x) (eq y y) : forall a a1. (Eq a, Eq a1) => a -> a1 -> Bool" $ do
+            let eqxx = _App # (_App # (_Id # "eq", _Id # "x"), _Id # "x")
+                eqyy = _App # (_App # (_Id # "eq", _Id # "y"), _Id # "y")
+            typeOf ctxtWithAnd initialTestState (_Abs' "x" # _Abs' "y" # _App # (_App # (_Id # "and", eqxx), eqyy))
+              `shouldBe` (Right $
+                Forall
+                  (S.fromList ["t3", "t7"])
+                  (S.fromList
+                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t3")
+                    , TyApp (TyCon $ TypeCon "Eq") (TyVar "t7")
+                    ]
+                  )
+                  (TyFun (TyVar "t3") $ TyFun (TyVar "t7") $ TyPrim Bool))
+          Test.Hspec.context "class Gt a where gt : a -> a -> Bool" $ do
+            let ctxtWithGt = ctxtWithAnd
+                  & testTcContext <>~ [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Gt") (TyVar "a") ]
+                  & over testContext
+                    ( M.insert "gt" $
+                        _Forall'
+                          ["a"]
+                          [TyApp (TyCon $ TypeCon "Gt") (TyVar "a")]
+                          # _TyFun # (_TyVar # "a", _TyFun # (_TyVar # "a", _TyPrim # Bool))
+                    )
+            it "\\x. and (eq x x) (gt x x) : forall a. (Eq a, Gt a) => a -> Bool" $ do
+              let eqxx = _App # (_App # (_Id # "eq", _Id # "x"), _Id # "x")
+                  gtxx = _App # (_App # (_Id # "gt", _Id # "x"), _Id # "x")
+              typeOf ctxtWithGt initialTestState (_Abs' "x" # _App # (_App # (_Id # "and", eqxx), gtxx))
+                `shouldBe` (Right $
+                  Forall
+                    (S.singleton "t6")
+                    (S.fromList
+                      [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t6")
+                      , TyApp (TyCon $ TypeCon "Gt") (TyVar "t6")
+                      ]
+                    )
+                    (TyFun (TyVar "t6") $ TyPrim Bool))
