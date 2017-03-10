@@ -84,8 +84,8 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         ord a = TyApp (TyCon $ TypeCon "Ord") (TyVar a)
         num a = TyApp (TyCon $ TypeCon "Num") (TyVar a)
         context =
-          [ TceClass S.empty (eq "a")
-          , TceClass (S.fromList [eq "b"]) (ord "b")
+          [ TceClass S.empty (eq "a") undefined
+          , TceClass (S.fromList [eq "b"]) (ord "b") undefined
           ]
     it "P ||- {}" $
       entails [] (S.fromList [ord "c"]) (S.empty) `shouldBe` True
@@ -110,9 +110,9 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)
         context =
-          [ TceClass S.empty (functor "a")
-          , TceClass (S.fromList [functor "b"]) (applicative "b")
-          , TceClass (S.fromList [applicative "c"]) (monad "c")
+          [ TceClass S.empty (functor "a") undefined
+          , TceClass (S.fromList [functor "b"]) (applicative "b") undefined
+          , TceClass (S.fromList [applicative "c"]) (monad "c") undefined
           ]
     it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Monad d` entails `Functor d, Applicative d`" $
       entails context (S.fromList [monad "d"]) (S.fromList [applicative "d", functor "d"]) `shouldBe` True

@@ -101,6 +101,9 @@ data TypeError
   | DuplicateTypeSignatures Identifier
   | KindInferenceError KindError
   | CouldNotDeduce (Set Type) (Set Type)
+  | NoSuchClass Identifier
+  | NonClassFunctions Identifier [Type] (Set Identifier)
+  | MissingClassFunction Identifier [Type] Identifier
   deriving (Eq, Show)
 
 makeClassyPrisms ''TypeError
@@ -125,14 +128,6 @@ lookupId name = do
 conArgTypes :: Type -> (Type,[Type])
 conArgTypes (TyFun from to) = (from :) <$> conArgTypes to
 conArgTypes ty = (ty,[])
-
-freeInType :: Type -> Set Identifier
-freeInType (TyVar name) = S.singleton name
-freeInType (TyApp con arg) = freeInType con `S.union` freeInType arg
-freeInType _ = S.empty
-
-freeInScheme :: TypeScheme -> Set Identifier
-freeInScheme (Forall vars _ ty) = freeInType ty `S.difference` vars
 
 free :: Map Identifier TypeScheme -> Set Identifier
 free = foldr (\scheme frees -> freeInScheme scheme `S.union` frees) S.empty
@@ -260,12 +255,12 @@ special scheme scheme'
         subs <- use kindTable >>= runReaderT (unifyTypes ty ty')
         use kindTable >>= runReaderT (kindPreservingSubstitution subs)
         tctxt <- view tcContext
-        let newCons' = S.map (substitute subs) cons'
-            newCons = S.map (substitute subs) cons
+        let newCons' = S.map (substitute subs) cons' -- more special
+            newCons = S.map (substitute subs) cons -- more general
             generalCons = cons `S.union` newCons'
             specialCons = cons' `S.union` newCons
         unless (entails tctxt generalCons specialCons) .
-          throwError $ _CouldNotDeduce # (specialCons, generalCons)
+          throwError $ _CouldNotDeduce # (specialCons, newCons')
   where
     unifyTypes ty ty' = unifyTypes' ty ty' M.empty
       where
@@ -435,10 +430,26 @@ checkDefinition (Class supers constructor params funcs) = do
     t <- use kindTable
     checkDefinition $ TypeSignature name ty
     context %= M.insert name ty
-  tcContext %= (TceClass supers (foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params) :)
+  tcContext %= (TceClass supers (foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params) (M.fromList funcs) :)
   pure M.empty
 
-checkDefinition (Instance constraints constructor params impls) = undefined
+checkDefinition (Instance supers constructor params impls) = do
+  -- 1. check all members are implemented
+  -- 2. check that each member's type signature is correct
+  --    i.e. the implementation's type is more general than the specification's signature
+  -- 3. somehow register the implementations
+  entry <- uses tcContext $ getClass constructor
+  case entry of
+    Nothing -> throwError $ _NoSuchClass # constructor
+    Just (TceClass supers ty members)
+      | let nonClassMembers = S.fromList (fmap bindingName impls) `S.difference` M.keysSet members
+      , nonClassMembers /= S.empty -> throwError $ _NonClassFunctions # (constructor, params, nonClassMembers)
+      | otherwise -> for impls $ \(Binding implName impl) -> do
+          case M.lookup implName members of
+            Nothing -> throwError $ _MissingClassFunction # (constructor, params, implName)
+            Just implTy -> get >>= runReaderT (w impl >>= special implTy)
+  tcContext %= (TceInst supers (foldl' TyApp (TyCon $ TypeCon constructor) params) :)
+  pure M.empty
 
 checkDefinition (Data tyCon tyVars decls) = do
   freshCount .= 0
@@ -467,11 +478,11 @@ checkDefinition (Function (Binding name expr)) = do
       ty <- get >>= runReaderT (w expr)
       maybeSig <- use (typesignatures . at name)
       case maybeSig of
-        Nothing -> pure ()
+        Nothing -> context %= M.insert name ty
         Just expected -> do
           K.freshCount .= 0
           get >>= runReaderT (special ty expected)
-      context %= M.insert name ty
+          context %= M.insert name expected
       return $ M.singleton name expr
     _ -> throwError $ _AlreadyDefined # name
 

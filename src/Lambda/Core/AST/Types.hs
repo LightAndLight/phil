@@ -24,9 +24,23 @@ data Type
   | TyPrim Prim
   deriving (Eq, Show, Ord)
 
+-- | Gets the C from a type of format: C a_1 a_2 .. a_n
+getConstructor :: Type -> Maybe TyCon
+getConstructor (TyCon con) = Just con
+getConstructor (TyApp con _) = getConstructor con
+getConstructor _ = Nothing
+
 pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 
 data TypeScheme = Forall (Set Identifier) (Set Type) Type deriving (Eq, Show)
+
+freeInType :: Type -> Set Identifier
+freeInType (TyVar name) = S.singleton name
+freeInType (TyApp con arg) = freeInType con `S.union` freeInType arg
+freeInType _ = S.empty
+
+freeInScheme :: TypeScheme -> Set Identifier
+freeInScheme (Forall vars _ ty) = freeInType ty `S.difference` vars
 
 nestedFunc :: Type -> String
 nestedFunc ty@(TyFun _ _) = "(" ++ showType ty ++ ")"

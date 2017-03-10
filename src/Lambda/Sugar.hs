@@ -66,7 +66,11 @@ desugar (Class constraints classType classMembers) = do
   pure . C.Class constraints className tyVars $ fmap (second . generalize . S.singleton . foldl' TyApp (TyCon $ TypeCon className) $ TyVar <$> tyVars) classMembers
 desugar (Instance constraints classType classImpls) = do
   (className, tyArgs) <- asClassInstance classType
+  unless (all (sameConstructor className) constraints) . throwError $ _MalformedHead # classType
   pure . C.Instance constraints className tyArgs $ fmap translateDefinition classImpls
+  where
+    sameConstructor name (TyApp (TyCon (TypeCon name')) _) = name == name'
+    sameConstructor _ _ = False
 
 desugarExpr :: Expr -> C.Expr
 desugarExpr (Id n) = C.Id n

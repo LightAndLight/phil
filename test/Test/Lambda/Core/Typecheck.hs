@@ -128,19 +128,21 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
         intToInt = _Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)
 
     describe "success" $ do
-      it "forall a. a -> a [>=] forall a. Constraint a => a -> a" $
-        special emptyContexts regularId constrainedId `shouldSatisfy` has _Right
       let ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")
+              [ TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
               , TceInst S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)
               ]
             }
+      it "forall a. a -> a [>=] forall a. Constraint a => a -> a" $
+        special emptyContexts regularId constrainedId `shouldSatisfy` has _Right
+      it "forall a. Constraint a => a -> a not [>=] forall a. a -> a" $
+        special emptyContexts constrainedId regularId `shouldSatisfy` has _Left
       it "instance Constraint Int where ... ==> forall a. Constraint a => a -> a [>=] Int -> Int" $
         special ctxt constrainedId intToInt `shouldSatisfy` has _Right
 
     describe "failure" $ do
-      let ctxt = emptyContexts { _testTcContext = [TceClass S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")] }
+      let ctxt = emptyContexts { _testTcContext = [TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined] }
       it "forall a. Constraint a => a -> a [>=] Int -> Int but there is no instance Constraint Int" $
         special ctxt constrainedId intToInt `shouldSatisfy` has (_Left . _CouldNotDeduce)
       let constrainedId = _Forall'
@@ -151,7 +153,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
             # _TyFun # (_TyVar # "a", _TyVar # "a")
           ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")
+              [ TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
               , TceInst S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)
               ]
             }
@@ -182,7 +184,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
                     [TyApp (TyCon $ TypeCon "Eq") $ TyVar "a"]
                     # _TyFun # (_TyVar # "a", _TyFun # (_TyVar # "a", _TyPrim # Bool))
               , _testTcContext =
-                  [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Eq") $ TyVar "a"]
+                  [ TceClass S.empty (TyApp (TyCon $ TypeCon "Eq") $ TyVar "a") undefined]
               }
         it "\\x. \\y. eq y x : forall a. Eq a => a -> a -> Bool" $ do
           typeOf ctxt initialTestState (_Abs' "x" # _Abs' "y" # _App # (_App # (_Id # "eq", _Id # "y"), _Id # "x"))
@@ -221,7 +223,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
                   (TyFun (TyVar "t3") $ TyFun (TyVar "t7") $ TyPrim Bool))
           Test.Hspec.context "class Gt a where gt : a -> a -> Bool" $ do
             let ctxtWithGt = ctxtWithAnd
-                  & testTcContext <>~ [ TceClass S.empty $ TyApp (TyCon $ TypeCon "Gt") (TyVar "a") ]
+                  & testTcContext <>~ [ TceClass S.empty (TyApp (TyCon $ TypeCon "Gt") $ TyVar "a") undefined ]
                   & over testContext
                     ( M.insert "gt" $
                         _Forall'

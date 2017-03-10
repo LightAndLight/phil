@@ -8,8 +8,14 @@ class Eq a => Ord a where {
   ord : a -> a -> Ordering
   }
 
-id : forall a. Eq a => a -> a
-id = \x . x
+and : Bool -> Bool -> Bool
+and a b = case a of {
+  true -> b;
+  _ -> false
+  }
 
-id' : forall a. a -> a
-id' = id
+thing : forall a b. (Eq a, Eq b) => a -> b -> Bool
+thing a b = and (eq a a) (eq b b)
+
+thing2 : forall a. Eq a => a -> Bool
+thing2 a = thing a a

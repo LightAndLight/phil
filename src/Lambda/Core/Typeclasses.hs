@@ -5,6 +5,7 @@ module Lambda.Core.Typeclasses
   , checkConstraints
   , equalUpToRenaming
   , elementUpToRenaming
+  , getClass
   , subsetUpToRenaming
   , entails
   ) where
@@ -31,8 +32,15 @@ import Lambda.Sugar (AsSyntaxError(..), asClassDef)
 
 data TypeclassEntry
   = TceInst (Set Type) Type
-  | TceClass (Set Type) Type
+  | TceClass (Set Type) Type (Map Identifier TypeScheme)
   deriving (Eq, Show)
+
+getClass :: Identifier -> [TypeclassEntry] -> Maybe TypeclassEntry
+getClass _ [] = Nothing
+getClass className (entry@(TceClass _ clsTy _):rest)
+  | Just (TypeCon className') <- getConstructor clsTy
+  , className == className' = Just entry
+  | otherwise = getClass className rest
 
 class HasTcContext s where
   tcContext :: Lens' s [TypeclassEntry]
@@ -45,10 +53,11 @@ equalUpToRenaming :: Type -> Type -> Maybe (Map Identifier Identifier)
 equalUpToRenaming (TyVar name) (TyVar name')
   | name == name' = Just M.empty
   | otherwise = Just $ M.singleton name' name
-equalUpToRenaming (TyApp con arg) (TyApp con' arg')
+equalUpToRenaming ty@(TyApp con arg) ty'@(TyApp con' arg')
   | Just conSubs <- equalUpToRenaming con con'
   , Just argSubs <- equalUpToRenaming arg arg'
-  , and (M.intersectionWith (==) conSubs argSubs) = Just $ conSubs `M.union` argSubs
+  , and (M.intersectionWith (==) conSubs argSubs)
+  , freeInType ty `S.intersection` freeInType ty' == S.empty = Just $ conSubs `M.union` argSubs
   | otherwise = Nothing
 equalUpToRenaming ty ty'
   | ty == ty' = Just M.empty
@@ -78,7 +87,7 @@ entails :: [TypeclassEntry] -> Set Type -> Set Type -> Bool
 entails ctxt p pis = pis `S.isSubsetOf` p || all (entails' ctxt p) pis
   where
     entails' [] _ _ = False
-    entails' (TceClass p' pi:context) p pi'
+    entails' (TceClass p' pi _ : context) p pi'
       | Just subs <- pi' `elementUpToRenaming` p', entails context p (S.singleton $ substitute (TyVar <$> subs) pi) = True
       | otherwise = entails' context p pi'
     entails' (TceInst p' pi:context) p pi'
