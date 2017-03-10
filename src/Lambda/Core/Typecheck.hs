@@ -102,8 +102,8 @@ data TypeError
   | KindInferenceError KindError
   | CouldNotDeduce (Set Type) (Set Type)
   | NoSuchClass Identifier
-  | NonClassFunctions Identifier [Type] (Set Identifier)
-  | MissingClassFunction Identifier [Type] Identifier
+  | NonClassFunction Identifier [Type] Identifier
+  | MissingClassFunctions Identifier [Type] (Set Identifier)
   deriving (Eq, Show)
 
 makeClassyPrisms ''TypeError
@@ -422,33 +422,50 @@ checkDefinition (Class supers constructor params funcs) = do
   paramKinds <- for params (\param -> (,) param <$> freshKindVar)
   kindTable %= M.insert constructor (foldr KindArrow Constraint $ snd <$> paramKinds)
   table <- use kindTable
+  let constructorTy= foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params
   (subs, classKind) <- flip runReaderT (M.fromList paramKinds `M.union` table) $ do
     subs <- checkConstraints supers
-    local (subKindTable subs) $ inferKind (TyCon (TypeCon constructor))
+    local (subKindTable subs) $ do
+      let freeVars = foldMap freeInType (fmap snd funcs) `S.difference` foldMap freeInType (supers `S.union` S.singleton constructorTy)
+      varsWithKinds <- fmap M.fromList . for (S.toList freeVars) $ \var -> (,) var <$> freshKindVar
+      local (M.union varsWithKinds) $ do
+        subs' <- checkSignatures $ fmap snd funcs
+        (subs'', kind) <- local (subKindTable subs') $ inferKind (TyCon (TypeCon constructor))
+        pure (applyKindSubs subs'' $ applyKindSubs subs' subs, kind)
   kindTable %= subKindTable subs
-  for funcs $ \(name, ty) -> do
-    t <- use kindTable
-    checkDefinition $ TypeSignature name ty
-    context %= M.insert name ty
-  tcContext %= (TceClass supers (foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params) (M.fromList funcs) :)
+  checkedFuncs <- for funcs $ \(name, ty) -> do
+    ctxt <- use context
+    let checkedFunc = generalize ctxt (S.singleton constructorTy, ty)
+    context %= M.insert name checkedFunc
+    pure (name, checkedFunc)
+  tcContext %= (TceClass supers constructorTy (M.fromList checkedFuncs) :)
   pure M.empty
+  where
+    checkSignatures [] = pure M.empty
+    checkSignatures (sig:rest) = do
+      (subs, _) <- inferKind sig
+      subs' <- checkSignatures rest
+      pure $ applyKindSubs subs' subs
 
 checkDefinition (Instance supers constructor params impls) = do
-  -- 1. check all members are implemented
-  -- 2. check that each member's type signature is correct
-  --    i.e. the implementation's type is more general than the specification's signature
-  -- 3. somehow register the implementations
   entry <- uses tcContext $ getClass constructor
+  let constructorTy = foldl' TyApp (TyCon $ TypeCon constructor) params
+  get >>= runReaderT (inferKind constructorTy)
+  let inst = TceInst supers constructorTy
   case entry of
     Nothing -> throwError $ _NoSuchClass # constructor
     Just (TceClass supers ty members)
-      | let nonClassMembers = S.fromList (fmap bindingName impls) `S.difference` M.keysSet members
-      , nonClassMembers /= S.empty -> throwError $ _NonClassFunctions # (constructor, params, nonClassMembers)
-      | otherwise -> for impls $ \(Binding implName impl) -> do
+      | let implNames = S.fromList (fmap bindingName impls)
+      , let memberNames = M.keysSet members
+      , let notImplemented = memberNames `S.difference` implNames
+      , notImplemented /= S.empty -> throwError $ _MissingClassFunctions # (constructor, params, notImplemented)
+      | otherwise -> for impls $ \(Binding implName impl) ->
           case M.lookup implName members of
-            Nothing -> throwError $ _MissingClassFunction # (constructor, params, implName)
-            Just implTy -> get >>= runReaderT (w impl >>= special implTy)
-  tcContext %= (TceInst supers (foldl' TyApp (TyCon $ TypeCon constructor) params) :)
+            Nothing -> throwError $ _NonClassFunction # (constructor, params, implName)
+            Just implTy -> do
+              st <- get
+              flip runReaderT st $ local (over tcContext (inst :)) (w impl >>= special implTy)
+  tcContext %= (inst :)
   pure M.empty
 
 checkDefinition (Data tyCon tyVars decls) = do
@@ -516,26 +533,6 @@ checkDefinitions ::
   )
   => [Definition]
   -> m [Definition]
-checkDefinitions defs
-  = let (classDefs, rest) = partition isClassDef defs
-        (classImpls, rest') = partition isClassImpl rest
-        (dataDefs, rest'') = partition isDataDef rest'
-        (typeSigs,bindings) = partition isTypeSignature rest''
-    in do
-      traverse_ checkDefinition dataDefs
-      traverse_ checkDefinition classDefs
-      traverse_ checkDefinition classImpls
-      traverse_ checkDefinition typeSigs
-      traverse_ checkDefinition bindings *> pure (dataDefs ++ bindings)
-  where
-    isTypeSignature TypeSignature{} = True
-    isTypeSignature _ = False
-
-    isDataDef Data{} = True
-    isDataDef _ = False
-
-    isClassDef Class{} = True
-    isClassDef _ = False
-
-    isClassImpl Instance{} = True
-    isClassImpl _ = False
+checkDefinitions defs = do
+  traverse_ checkDefinition defs
+  pure defs

@@ -1,6 +1,6 @@
 class Eq a where {
   eq : a -> a -> Bool
-  }
+    }
 
 data Ordering = LT | EQ | GT
 
@@ -8,14 +8,50 @@ class Eq a => Ord a where {
   ord : a -> a -> Ordering
   }
 
+not : Bool -> Bool
+not b = case b of {
+  true -> false;
+  _ -> true
+  }
+
+instance Eq Bool where {
+  eq a b = case a of {
+    true -> b;
+    false -> not b
+    }
+}
+
 and : Bool -> Bool -> Bool
 and a b = case a of {
   true -> b;
   _ -> false
   }
 
+class Functor f where {
+  fmap : (a -> b) -> f a -> f b
+}
+
+data List a = Nil | Cons a (List a)
+
+instance Eq a => Eq (List a) where {
+  eq = rec eqList list list' = case list of {
+    Nil -> case list' of { Nil -> true; _ -> false };
+    Cons a rest -> case list' of { Nil -> false; Cons a' rest' -> and (eq a a') (eqList rest rest') }
+  } in eqList
+}
+
+instance Functor List where {
+  fmap = rec fmapList f' list' = case list' of {
+    Nil -> Nil;
+    Cons a rest -> Cons (f' a) (fmapList f' rest)
+  } in fmapList
+}
+
 thing : forall a b. (Eq a, Eq b) => a -> b -> Bool
 thing a b = and (eq a a) (eq b b)
+
+test : forall a. Eq a => List a -> List a -> Bool
+test l l' = eq l l'
 
 thing2 : forall a. Eq a => a -> Bool
 thing2 a = thing a a

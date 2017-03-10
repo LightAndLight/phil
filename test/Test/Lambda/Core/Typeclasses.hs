@@ -100,12 +100,16 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
     let eq a = TyApp (TyCon $ TypeCon "Eq") a
         ord a = TyApp (TyCon $ TypeCon "Ord") a
         context' = context ++ [TceInst S.empty (eq $ TyPrim Int)]
+        list a = TyApp (TyCon $ TypeCon "List") a
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` entails `Eq Int`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ TyPrim Int]) `shouldBe` True
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Eq Bool`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ TyPrim Bool]) `shouldBe` False
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [ord $ TyPrim Int]) `shouldBe` False
+    let context' = context ++ [TceInst (S.singleton . eq $ TyVar "b") (eq . list $ TyVar "b")]
+    it "given `Eq a`, and `Eq b => Eq (List b)`, `Eq c` entails `Eq (List c)`" $
+      entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ (TyApp (TyCon $ TypeCon "List")) (TyVar "c")]) `shouldBe` True
     let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)

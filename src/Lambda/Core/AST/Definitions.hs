@@ -22,6 +22,6 @@ data Definition
   -- | Function definition
   | Function (Binding Expr)
   -- | Class definition: constraints, class name, type variables, class members
-  | Class (Set Type) Identifier [Identifier] [(Identifier, TypeScheme)]
+  | Class (Set Type) Identifier [Identifier] [(Identifier, Type)]
   -- | Classs instance definition: constraints, class name, type arguments, member implementations
   | Instance (Set Type) Identifier [Type] [Binding Expr]

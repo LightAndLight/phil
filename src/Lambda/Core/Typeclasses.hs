@@ -41,6 +41,7 @@ getClass className (entry@(TceClass _ clsTy _):rest)
   | Just (TypeCon className') <- getConstructor clsTy
   , className == className' = Just entry
   | otherwise = getClass className rest
+getClass className (_:rest) = getClass className rest
 
 class HasTcContext s where
   tcContext :: Lens' s [TypeclassEntry]
@@ -84,14 +85,14 @@ subsetUpToRenaming sub super = go (S.toList sub) super M.empty
       | otherwise = Nothing
 
 entails :: [TypeclassEntry] -> Set Type -> Set Type -> Bool
-entails ctxt p pis = pis `S.isSubsetOf` p || all (entails' ctxt p) pis
+entails ctxt bigp pis = pis `S.isSubsetOf` bigp || all (entails' ctxt bigp) pis
   where
-    entails' [] _ _ = False
+    entails' [] p pi = pi `S.member` p
     entails' (TceClass p' pi _ : context) p pi'
-      | Just subs <- pi' `elementUpToRenaming` p', entails context p (S.singleton $ substitute (TyVar <$> subs) pi) = True
+      | Just subs <- pi' `elementUpToRenaming` p', entails ctxt p (S.singleton $ substitute (TyVar <$> subs) pi) = True
       | otherwise = entails' context p pi'
-    entails' (TceInst p' pi:context) p pi'
-      | Just subs <- pi `equalUpToRenaming` pi', entails context p (S.map (substitute $ TyVar <$> subs) p') = True
+    entails' (TceInst p' pi : context) p pi'
+      | Just subs <- pi' `equalUpToRenaming` pi, entails ctxt p (S.map (substitute $ TyVar <$> subs) p') = True
       | otherwise = entails' context p pi'
 
 checkConstraints
