@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Lambda.Core.AST.Binding
                      , Lambda.Core.AST.Definitions
+                     , Lambda.Core.AST.Evidence
                      , Lambda.Core.AST.Expr
                      , Lambda.Core.AST.Identifier
                      , Lambda.Core.AST.Types
