@@ -99,7 +99,7 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
       entails context (S.fromList [ord "c"]) (S.fromList [num "d"]) `shouldBe` False
     let eq a = TyApp (TyCon $ TypeCon "Eq") a
         ord a = TyApp (TyCon $ TypeCon "Ord") a
-        context' = context ++ [TceInst S.empty (eq $ TyPrim Int)]
+        context' = context ++ [TceInst S.empty (eq $ TyPrim Int) undefined]
         list a = TyApp (TyCon $ TypeCon "List") a
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` entails `Eq Int`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ TyPrim Int]) `shouldBe` True
@@ -107,7 +107,7 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ TyPrim Bool]) `shouldBe` False
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [ord $ TyPrim Int]) `shouldBe` False
-    let context' = context ++ [TceInst (S.singleton . eq $ TyVar "b") (eq . list $ TyVar "b")]
+    let context' = context ++ [TceInst (S.singleton . eq $ TyVar "b") (eq . list $ TyVar "b") undefined]
     it "given `Eq a`, and `Eq b => Eq (List b)`, `Eq c` entails `Eq (List c)`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ (TyApp (TyCon $ TypeCon "List")) (TyVar "c")]) `shouldBe` True
     let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)

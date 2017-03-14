@@ -11,6 +11,7 @@ import qualified Data.Map                   as M
 import           Data.Maybe
 import qualified Data.Set                   as S
 
+import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Expr
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Lens
@@ -43,9 +44,11 @@ data TestState
   { _tdInferenceState :: K.KindInferenceState
   , _tdKindTable      :: M.Map Identifier K.Kind
   , _tdFreshCount     :: Int
+  , _tdEVarCount      :: Int
+  , _tdTcContext      :: [TypeclassEntry]
   }
 
-initialTestState = TestState K.initialKindInferenceState M.empty 0
+initialTestState = TestState K.initialKindInferenceState M.empty 0 0 []
 
 makeLenses ''TestState
 
@@ -58,21 +61,27 @@ instance K.HasKindTable TestState where
 instance HasFreshCount TestState where
   freshCount = tdFreshCount
 
+instance HasEVarCount TestState where
+  eVarCount = tdEVarCount
+
+instance HasTcContext TestState where
+  tcContext = tdTcContext
+
 special :: TestContexts -> TypeScheme -> TypeScheme -> Either TypeError ()
 special ctxts scheme scheme'
-  = flip evalState (TestState K.initialKindInferenceState M.empty 0) .
+  = flip evalState initialTestState .
     flip runReaderT ctxts .
     runExceptT $
     T.special scheme scheme'
 
 hasType :: Expr -> TypeScheme -> Expectation
-hasType expr ty = runW expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
+hasType expr ty = snd <$> runW expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
 
 typeOf :: TestContexts -> TestState -> Expr -> Either TypeError TypeScheme
 typeOf ctxt st expr
   = flip runReader ctxt .
     flip evalStateT st .
-    runExceptT $ w expr
+    runExceptT $ snd <$> w expr
 
 typecheckSpec = describe "Lambda.Core.Typecheck" $ do
   describe "special" $ do
@@ -131,7 +140,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
       let ctxt = emptyContexts
             { _testTcContext =
               [ TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
-              , TceInst S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)
+              , TceInst S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)) undefined
               ]
             }
       it "forall a. a -> a [>=] forall a. Constraint a => a -> a" $
@@ -154,7 +163,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
           ctxt = emptyContexts
             { _testTcContext =
               [ TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
-              , TceInst S.empty $ TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)
+              , TceInst S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)) undefined
               ]
             }
       it "instance Constraint Int where ... => forall a. (Constraint a, Other a) => a -> a [>=] Int -> Int but there is no class `Other`" $

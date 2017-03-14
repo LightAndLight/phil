@@ -8,6 +8,7 @@ module Lambda.Sugar
   , SyntaxError(..)
   , C.ProdDecl(..)
   , asClassDef
+  , asClassInstance
   , desugar
   , desugarExpr
   ) where

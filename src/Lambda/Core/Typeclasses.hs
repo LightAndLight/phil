@@ -6,6 +6,7 @@ module Lambda.Core.Typeclasses
   , equalUpToRenaming
   , elementUpToRenaming
   , getClass
+  , getInst
   , subsetUpToRenaming
   , entails
   ) where
@@ -31,7 +32,7 @@ import Lambda.Core.Typecheck.Substitution
 import Lambda.Sugar (AsSyntaxError(..), asClassDef)
 
 data TypeclassEntry
-  = TceInst (Set Type) Type
+  = TceInst (Set Type) Type (Map Identifier Expr)
   | TceClass (Set Type) Type (Map Identifier TypeScheme)
   deriving (Eq, Show)
 
@@ -42,6 +43,13 @@ getClass className (entry@(TceClass _ clsTy _):rest)
   , className == className' = Just entry
   | otherwise = getClass className rest
 getClass className (_:rest) = getClass className rest
+
+getInst :: Type -> [TypeclassEntry] -> Maybe TypeclassEntry
+getInst _ [] = Nothing
+getInst inst (entry@(TceInst _ instTy _) : rest)
+  | inst == instTy = Just entry
+  | otherwise = getInst inst rest
+getInst inst (_ : rest) = getInst inst rest
 
 class HasTcContext s where
   tcContext :: Lens' s [TypeclassEntry]
@@ -91,7 +99,7 @@ entails ctxt bigp pis = pis `S.isSubsetOf` bigp || all (entails' ctxt bigp) pis
     entails' (TceClass p' pi _ : context) p pi'
       | Just subs <- pi' `elementUpToRenaming` p', entails ctxt p (S.singleton $ substitute (TyVar <$> subs) pi) = True
       | otherwise = entails' context p pi'
-    entails' (TceInst p' pi : context) p pi'
+    entails' (TceInst p' pi _ : context) p pi'
       | Just subs <- pi' `equalUpToRenaming` pi, entails ctxt p (S.map (substitute $ TyVar <$> subs) p') = True
       | otherwise = entails' context p pi'
 

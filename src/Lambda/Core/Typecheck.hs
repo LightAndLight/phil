@@ -27,6 +27,7 @@ import           Data.Traversable
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Expr
+import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Lens
 import           Lambda.Core.AST.Literal
@@ -45,6 +46,7 @@ data InferenceState
     , _isKindInferenceState :: KindInferenceState
     , _isFreshCount :: Int
     , _isTcContext :: [TypeclassEntry]
+    , _isEVarCount :: Int
     }
 
 makeClassy ''InferenceState
@@ -57,6 +59,7 @@ initialInferenceState
   , _isKindInferenceState = initialKindInferenceState
   , _isFreshCount = 0
   , _isTcContext = []
+  , _isEVarCount = 0
   }
 
 class HasContext s where
@@ -88,6 +91,9 @@ instance K.HasFreshCount InferenceState where
 
 instance HasTcContext InferenceState where
   tcContext = inferenceState . isTcContext
+
+instance HasEVarCount InferenceState where
+  eVarCount = inferenceState . isEVarCount
 
 data TypeError
   = NotInScope [String]
@@ -132,10 +138,23 @@ conArgTypes ty = (ty,[])
 free :: Map Identifier TypeScheme -> Set Identifier
 free = foldr (\scheme frees -> freeInScheme scheme `S.union` frees) S.empty
 
-generalize :: Map Identifier TypeScheme -> (Set Type, Type) -> TypeScheme
-generalize ctxt (cons,ty)
-  = let frees = freeInType ty
-    in Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty cons) `S.difference` free ctxt) cons ty
+generalize
+  :: ( HasContext r
+     , MonadReader r m
+     , HasTcContext env
+     , HasEVarCount s
+     , MonadState s m
+     ) => env -> Expr -> [(EVar, Type)] -> Type -> m (Expr, TypeScheme)
+generalize env expr cons ty = do
+  ctxt <- view context
+  let frees = freeInType ty
+  let expr' = foldr (uncurry replaceDictionaries) expr cons
+  let cons' = filter (\(_, ty) -> freeInType ty /= S.empty) cons
+  let expr'' = foldr DictAbs expr' $ fst <$> cons'
+  pure
+    ( expr''
+    , Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty (snd <$> cons')) `S.difference` free ctxt) (S.fromList $ snd <$> cons') ty
+    )
 
 type Constraints = [(Type,Type)]
 
@@ -281,14 +300,14 @@ special scheme scheme'
       = checkEquality con con' >> checkEquality arg arg'
     checkEquality ty ty' = unless (ty == ty') . throwError $ _TypeMismatch # (ty, ty')
 
-runW :: Expr -> Either TypeError TypeScheme
+runW :: Expr -> Either TypeError (Expr, TypeScheme)
 runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
 
 runWithContext
   :: ( AsTypeError e
      , AsKindError e
      , MonadError e m
-     ) => Map Identifier TypeScheme -> Expr -> m TypeScheme
+     ) => Map Identifier TypeScheme -> Expr -> m (Expr, TypeScheme)
 runWithContext ctxt
   = flip evalStateT initialInferenceState .
     flip runReaderT initialInferenceState { _isContext = ctxt } . w
@@ -334,63 +353,122 @@ patType (PatLit (LitChar p)) = return (M.empty,TyPrim Char)
 patType (PatLit (LitBool p)) = return (M.empty,TyPrim Bool)
 patType PatWildcard = (,) M.empty <$> fresh
 
-w :: MonadW r s e m => Expr -> m TypeScheme
+passDictionaries :: (HasEVarCount s, HasTcContext r, MonadReader r m, MonadState s m) => [(EVar, Type)] -> Expr -> m ([(EVar, Type)], Expr)
+passDictionaries [] expr = pure ([], expr)
+passDictionaries ((eVar, con):rest) expr = do
+  ctxt <- view tcContext
+  (cons, expr') <- passDictionaries rest expr
+  case getInst con ctxt of
+    Just (TceInst supers _ impls) -> pure (cons, DictApp expr' $ Dict con)
+    Nothing -> pure ((eVar, con):cons, DictApp expr' $ Variable eVar)
+
+replaceDictionaries :: EVar -> Type -> Expr -> Expr
+replaceDictionaries eVar ty expr
+  | freeInType ty /= S.empty = expr
+  | otherwise = case expr of
+      Prod cons exprs -> Prod cons $ fmap (replaceDictionaries eVar ty) exprs
+      App f x -> App (replaceDictionaries eVar ty f) (replaceDictionaries eVar ty x)
+      Abs name body -> Abs name (replaceDictionaries eVar ty body)
+      DictAbs eVar' body
+        | eVar /= eVar' -> DictAbs eVar' (replaceDictionaries eVar ty body)
+        | otherwise -> expr
+      DictApp expr' evidence ->
+        let newExpr = replaceDictionaries eVar ty expr'
+          in case evidence of
+            Variable eVar'
+              | eVar == eVar' -> DictApp newExpr (Dict ty)
+              | otherwise -> DictApp newExpr evidence
+      DictSel name (Variable eVar')
+        | eVar == eVar' -> DictSel name (Dict ty)
+        | otherwise -> expr
+      Let (Binding name value) rest -> Let (Binding name $ replaceDictionaries eVar ty value) (replaceDictionaries eVar ty rest)
+      Rec (Binding name value) rest -> Rec (Binding name $ replaceDictionaries eVar ty value) (replaceDictionaries eVar ty rest)
+      Case input branches -> Case (replaceDictionaries eVar ty input) $ fmap (second $ replaceDictionaries eVar ty) branches
+      _ -> expr
+
+w :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => Expr -> m (Expr, TypeScheme)
 w e = do
-  (subs,cons,ty) <- w' e
-  ctxt <- view context
-  return $ generalize ctxt (S.map (substitute subs) cons, substitute subs ty)
+  (subs, cons, ty, e') <- w' e
+  env <- get
+  (e'', ty') <- generalize env e' cons $ substitute subs ty
+  return (e'', ty')
   where
-    inferBranches :: MonadW r s e m => NonEmpty (Pattern,Expr) -> m (Substitution, [(Type,Set Type,Type)])
+    inferBranches :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => NonEmpty (Pattern,Expr) -> m (Substitution, [(Type, [(EVar, Type)], Type, Expr)])
     inferBranches = foldrM inferBranch (M.empty,[])
       where
         inferBranch (pat,branch) (subs,bTypes) = do
           (boundVars,patternType) <- patType pat
           local (over context $ M.union boundVars) $ do
-            (branchSubs,preds,branchType) <- w' branch
-            pure (applySubs branchSubs subs, (patternType,preds,branchType):bTypes)
+            (branchSubs,preds,branchType,branch') <- w' branch
+            (preds', branch'') <- get >>= runReaderT (passDictionaries preds branch')
+            pure (applySubs branchSubs subs, (patternType, preds', branchType, branch''):bTypes)
 
-    w' :: MonadW r s e m => Expr -> m (Substitution, Set Type, Type)
+    w' :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => Expr -> m (Substitution, [(EVar, Type)], Type, Expr)
     w' e = case e of
-        (Error _) -> (,,) M.empty S.empty <$> fresh
+        (Error _) -> (,,,) M.empty [] <$> fresh <*> pure e
         (Id name) -> do
           (cons,ty) <- lookupId name >>= instantiate
-          pure (M.empty,cons,ty)
-        (Lit (LitInt e)) -> return (M.empty,S.empty,TyPrim Int)
-        (Lit (LitString e)) -> return (M.empty,S.empty,TyPrim String)
-        (Lit (LitChar e)) -> return (M.empty,S.empty,TyPrim Char)
-        (Lit (LitBool e)) -> return (M.empty,S.empty,TyPrim Bool)
+          cons' <- for (S.toList cons) $ \c -> (,) <$> freshEVar <*> pure c
+          (cons'', e') <- get >>= runReaderT (passDictionaries cons' e)
+          pure (M.empty, cons'', ty, e')
+        (Lit (LitInt _)) -> return (M.empty, [], TyPrim Int, e)
+        (Lit (LitString _)) -> return (M.empty, [], TyPrim String, e)
+        (Lit (LitChar _)) -> return (M.empty, [], TyPrim Char, e)
+        (Lit (LitBool _)) -> return (M.empty, [], TyPrim Bool, e)
         (App f x) -> do
-          (s1,cons1,t1) <- w' f
-          (s2,cons2,t2) <- local (over context $ subContext s1) $ w' x
+          (s1, cons1, t1, f') <- w' f
+          (s2, cons2, t2, x') <- local (over context $ subContext s1) $ w' x
           b <- fresh
           s3 <- use kindTable >>= runReaderT (mgu [(TyFun t2 b,substitute s2 t1)])
-          let cons3 = S.map (substitute $ applySubs s3 s2) cons1 `S.union` S.map (substitute s3) cons2
-          return (applySubs s3 $ applySubs s2 s1, cons3, substitute s3 b)
+          let cons3 = fmap (second . substitute $ applySubs s3 s2) $ cons1 ++ cons2
+          let cons3set = S.fromList $ snd <$> cons3
+              cons12set = S.fromList $ substitute s2 . snd <$> (cons1 ++ cons2)
+          tctxt <- use tcContext
+          unless (entails tctxt cons12set cons3set) . throwError $ _CouldNotDeduce # (cons3set, cons12set)
+          return (applySubs s3 $ applySubs s2 s1, cons3, substitute s3 b, App f' x')
         (Abs x expr) -> do
           ctxt <- get
           b <- fresh
-          (s1,cons,t1) <- local (over context $ M.insert x (Forall S.empty S.empty b)) $ w' expr
-          return (s1,cons,TyFun (substitute s1 b) t1)
+          (s1, cons, t1, expr') <- local (over context $ M.insert x (Forall S.empty S.empty b)) $ w' expr
+          return (s1, cons, TyFun (substitute s1 b) t1, Abs x expr')
         (Let (Binding x e) e') -> do
-          (s1,cons1,t1) <- w' e
-          let addVar ctxt = let ctxt' = subContext s1 ctxt in M.insert x (generalize ctxt' (cons1,t1)) ctxt'
-          (s2,cons2,t2) <- local (over context addVar) $ w' e'
-          return (applySubs s2 s1, S.union cons2 $ S.map (substitute s2) cons1, t2)
+          (s1, cons1, t1, e1) <- w' e
+          (s2, cons2, t2, e2) <- local (over context $ subContext s1) $ do
+            env <- get
+            (e1', t1') <- generalize env e1 cons1 t1
+            local (over context $ M.insert x t1') $ w' e'
+          let cons3 = fmap (second $ substitute s2) cons1 ++ cons2
+          (cons3', e') <- get >>= runReaderT (passDictionaries cons3 $ Let (Binding x e1) e2)
+          return (applySubs s2 s1, cons3', t2, e')
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
-          (s1,cons1,t1) <- local (over context . M.insert name $ Forall S.empty S.empty freshVar) $ w' value
+          (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty S.empty freshVar) $ w' value
           s2 <- use kindTable >>= runReaderT (mgu $ (t1,freshVar) : M.toList (M.mapKeys TyVar s1))
-          let cons1' = S.map (substitute s2) cons1
-          (s3,cons2,t2) <- local (over context $ \ctxt -> M.insert name (generalize ctxt (cons1', substitute s2 t1)) $ subContext s1 ctxt) $ w' rest
-          pure (applySubs s3 s1,S.map (substitute s3) $ cons1' `S.union` cons2, t2)
+          let cons1' = fmap (second $ substitute s2) cons1
+          (s3, cons2, t2, rest') <- local (over context $ subContext s1) $ do
+            env <- get
+            (value'', t1') <- generalize env value' cons1' (substitute s2 t1)
+            local (over context $ M.insert name t1') $ w' rest
+          let cons3 = fmap (second $ substitute s3) $ cons1' ++ cons2
+          (cons3', e') <- get >>= runReaderT (passDictionaries cons3 $ Rec (Binding name value') rest')
+          pure (applySubs s3 s1, cons3', t2, e')
         (Case input bs) -> do
-          (s1,cons,inputType) <- w' input
+          (s1, cons, inputType, input') <- w' input
+          (cons', input'') <- get >>= runReaderT (passDictionaries cons input')
           (bSubs,bs') <- inferBranches bs
           outputType <- fresh
-          let equations = foldr (\(p,_,b) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
+          let equations = foldr (\(p,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
           subs <- use kindTable >>= runReaderT (mgu equations)
-          let constraints = foldr (\(_,c,_) constrs -> S.map (substitute subs) c `S.union` constrs) S.empty bs'
-          pure (applySubs subs $ applySubs bSubs s1,constraints,substitute subs outputType)
+          newBsWithCons <- for bs' $ \(_,cs,_,b) -> get >>= runReaderT (passDictionaries cs b)
+          let cons'' = fmap (second $ substitute subs) $ cons' ++ join (fst <$> newBsWithCons)
+          let bs'' = snd <$> newBsWithCons
+          (cons''', e') <- get >>= runReaderT (passDictionaries cons'' . Case input'' $ N.zip (fst <$> bs) (N.fromList bs''))
+          pure
+            ( applySubs subs $ applySubs bSubs s1
+            , cons'''
+            , substitute subs outputType
+            , e'
+            )
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
@@ -409,20 +487,21 @@ checkDefinition ::
   , HasTypesignatures s
   , K.HasFreshCount s
   , HasTcContext s
+  , HasEVarCount s
   , MonadState s m
   , AsTypeError e
   , AsKindError e
   , MonadError e m
   )
   => Definition
-  -> m (Map Identifier Expr)
+  -> m (Map Identifier Expr, Definition)
 
-checkDefinition (Class supers constructor params funcs) = do
+checkDefinition def@(Class supers constructor params funcs) = do
   freshVar <- freshKindVar
   paramKinds <- for params (\param -> (,) param <$> freshKindVar)
   kindTable %= M.insert constructor (foldr KindArrow Constraint $ snd <$> paramKinds)
   table <- use kindTable
-  let constructorTy= foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params
+  let constructorTy = foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params
   (subs, classKind) <- flip runReaderT (M.fromList paramKinds `M.union` table) $ do
     subs <- checkConstraints supers
     local (subKindTable subs) $ do
@@ -434,12 +513,14 @@ checkDefinition (Class supers constructor params funcs) = do
         pure (applyKindSubs subs'' $ applyKindSubs subs' subs, kind)
   kindTable %= subKindTable subs
   checkedFuncs <- for funcs $ \(name, ty) -> do
-    ctxt <- use context
-    let checkedFunc = generalize ctxt (S.singleton constructorTy, ty)
-    context %= M.insert name checkedFunc
-    pure (name, checkedFunc)
-  tcContext %= (TceClass supers constructorTy (M.fromList checkedFuncs) :)
-  pure M.empty
+    eVar <- freshEVar
+    env <- get
+    (expr, checkedFuncTy) <- get >>= runReaderT (generalize env (DictAbs eVar $ DictSel name (Variable eVar)) [(eVar, constructorTy)] ty)
+    context %= M.insert name checkedFuncTy
+    pure (name, checkedFuncTy, expr)
+  tcContext %= (TceClass supers constructorTy (M.fromList $ fmap (\(name, ty, _) -> (name, ty)) checkedFuncs) :)
+  eVar <- freshEVar
+  pure (M.fromList $ fmap (\(name, _, expr) -> (name, expr)) checkedFuncs, def)
   where
     checkSignatures [] = pure M.empty
     checkSignatures (sig:rest) = do
@@ -451,8 +532,7 @@ checkDefinition (Instance supers constructor params impls) = do
   entry <- uses tcContext $ getClass constructor
   let constructorTy = foldl' TyApp (TyCon $ TypeCon constructor) params
   get >>= runReaderT (inferKind constructorTy)
-  let inst = TceInst supers constructorTy
-  case entry of
+  impls' <- case entry of
     Nothing -> throwError $ _NoSuchClass # constructor
     Just (TceClass supers ty members)
       | let implNames = S.fromList (fmap bindingName impls)
@@ -463,28 +543,36 @@ checkDefinition (Instance supers constructor params impls) = do
           case M.lookup implName members of
             Nothing -> throwError $ _NonClassFunction # (constructor, params, implName)
             Just implTy -> do
+              let inst = TceInst supers constructorTy undefined
               st <- get
-              flip runReaderT st $ local (over tcContext (inst :)) (w impl >>= special implTy)
+              flip runReaderT st . local (over tcContext (inst :)) $ do
+                (impl', ty) <- w impl
+                special implTy ty
+                pure $ Binding implName impl'
+  let inst = TceInst supers constructorTy . M.fromList $ fmap (\(Binding name expr) -> (name, expr)) impls'
   tcContext %= (inst :)
-  pure M.empty
+  pure (M.empty, Instance supers constructor params impls')
 
-checkDefinition (Data tyCon tyVars decls) = do
+checkDefinition def@(Data tyCon tyVars decls) = do
   freshCount .= 0
   table <- use kindTable
   kind <- runReaderT (checkDefinitionKinds tyCon tyVars decls) table
   kindTable %= M.insert tyCon kind
   let tyVars' = fmap TyVar tyVars
-  M.fromList <$> traverse (checkDataDecl tyCon tyVars') (N.toList decls)
+  liftA2 (,) (M.fromList <$> traverse (checkDataDecl tyCon tyVars') (N.toList decls)) $ pure def
   where
     checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
       maybeCon <- use (context . at dataCon)
       case maybeCon of
         Just _ -> throwError $ _AlreadyDefined # dataCon
         Nothing -> do
-          let conFun = flip (foldr TyFun) argTys $ foldl' TyApp (TyCon $ TypeCon tyCon) tyVars
+          let conTy = flip (foldr TyFun) argTys $ foldl' TyApp (TyCon $ TypeCon tyCon) tyVars
           ctxt <- use context
-          context %= M.insert dataCon (generalize ctxt (S.empty,conFun))
-          return (dataCon, buildDataCon p)
+          let conExpr = buildDataCon p
+          env <- get
+          (conExpr', conTy') <- get >>= runReaderT (generalize env conExpr [] conTy)
+          context %= M.insert dataCon conTy'
+          return (dataCon, conExpr')
 
 checkDefinition (Function (Binding name expr)) = do
   freshCount .= 0
@@ -492,7 +580,7 @@ checkDefinition (Function (Binding name expr)) = do
   case maybeVar of
     Nothing -> do
       ctxt <- use context
-      ty <- get >>= runReaderT (w expr)
+      (expr', ty) <- get >>= runReaderT (w expr)
       maybeSig <- use (typesignatures . at name)
       case maybeSig of
         Nothing -> context %= M.insert name ty
@@ -500,10 +588,10 @@ checkDefinition (Function (Binding name expr)) = do
           K.freshCount .= 0
           get >>= runReaderT (special ty expected)
           context %= M.insert name expected
-      return $ M.singleton name expr
+      return (M.singleton name expr', Function $ Binding name expr')
     _ -> throwError $ _AlreadyDefined # name
 
-checkDefinition (TypeSignature name scheme@(Forall vars cons ty)) = do
+checkDefinition def@(TypeSignature name scheme@(Forall vars cons ty)) = do
   maybeSig <- use (typesignatures . at name)
   case maybeSig of
     Nothing -> do
@@ -517,7 +605,7 @@ checkDefinition (TypeSignature name scheme@(Forall vars cons ty)) = do
           pure res
       typesignatures %= M.insert name scheme
     _ -> throwError $ _DuplicateTypeSignatures # name
-  pure M.empty
+  pure (M.empty, def)
 
 checkDefinitions ::
   ( HasFreshCount s
@@ -526,6 +614,7 @@ checkDefinitions ::
   , HasTypesignatures s
   , K.HasFreshCount s
   , HasTcContext s
+  , HasEVarCount s
   , MonadState s m
   , AsTypeError e
   , AsKindError e
@@ -533,6 +622,4 @@ checkDefinitions ::
   )
   => [Definition]
   -> m [Definition]
-checkDefinitions defs = do
-  traverse_ checkDefinition defs
-  pure defs
+checkDefinitions defs = fmap snd <$> traverse checkDefinition defs

@@ -22,6 +22,7 @@ import System.FilePath
 import System.IO
 
 import Lambda.Core.AST.Binding
+import Lambda.Core.AST.Evidence
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Identifier
 import qualified Lambda.Core.AST.Expr as C
@@ -56,6 +57,7 @@ data InterpreterState
     , _interpKindInferenceState :: KindInferenceState
     , _interpFreshCount :: Int
     , _interpTcContext :: [TypeclassEntry]
+    , _interpEVarCount :: Int
     }
 
 makeClassy ''InterpreterState
@@ -69,6 +71,7 @@ initialInterpreterState
   , _interpKindInferenceState = initialKindInferenceState
   , _interpFreshCount = 0
   , _interpTcContext = []
+  , _interpEVarCount = 0
   }
 
 instance HasSymbolTable InterpreterState where
@@ -94,6 +97,9 @@ instance K.HasFreshCount InterpreterState where
 
 instance HasTcContext InterpreterState where
   tcContext = interpreterState . interpTcContext
+
+instance HasEVarCount InterpreterState where
+  eVarCount = interpreterState . interpEVarCount
 
 data InterpreterError
   = NotBound String
@@ -231,6 +237,7 @@ define ::
   , HasContext s
   , HasTypesignatures s
   , HasTcContext s
+  , HasEVarCount s
   , K.HasFreshCount s
   , AsInterpreterError e
   , AsTypeError e
@@ -242,7 +249,7 @@ define ::
   => S.Definition
   -> m ()
 define def = do
-  exprs <- checkDefinition =<< S.desugar def
+  (exprs, _) <- checkDefinition =<< S.desugar def
   exprs' <- runReaderT (traverse eval exprs) =<< use symbolTable
   symbolTable %= M.union exprs'
 
@@ -260,7 +267,7 @@ typeCheck ::
 typeCheck expr = do
   freshCount .= 0
   ctxt <- use context
-  runWithContext ctxt expr
+  snd <$> runWithContext ctxt expr
 
 kindOf ::
   ( HasKindTable s
@@ -293,6 +300,7 @@ repl ::
   , HasFreshCount s
   , K.HasFreshCount s
   , HasTcContext s
+  , HasEVarCount s
   , MonadFree ReplF m
   , Show e
   , AsLexError e
