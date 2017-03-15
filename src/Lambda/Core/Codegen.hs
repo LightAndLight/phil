@@ -105,7 +105,7 @@ genTypeName (TyApp con arg) = genTypeName con ++ genTypeName arg
 genTypeName (TyCon (TypeCon name)) = name
 genTypeName (TyCon FunCon) = "Function"
 genTypeName (TyPrim p) = show p
-genTypeName e = error $ "genTypeName called with: " ++ show e
+genTypeName e = ""
 
 genInstName :: Identifier -> [Type] -> PHPId
 genInstName name args = phpId $ fmap toLower name ++ join (fmap genTypeName args)
