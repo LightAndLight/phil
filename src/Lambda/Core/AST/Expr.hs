@@ -10,11 +10,6 @@ import           Lambda.Core.AST.Literal
 import           Lambda.Core.AST.Pattern
 import           Lambda.Core.AST.Types
 
-data Evidence
-  = Variable EVar
-  | Dict Type
-  deriving (Eq, Show)
-
 data Expr
   = Id Identifier
   | Lit Literal
@@ -22,8 +17,8 @@ data Expr
   | App Expr Expr
   | Abs Identifier Expr
   | DictAbs EVar Expr
-  | DictApp Expr Evidence
-  | DictSel Identifier Evidence
+  | DictApp Expr Dictionary
+  | DictSel Identifier Dictionary
   | Let (Binding Expr) Expr
   | Rec (Binding Expr) Expr
   | Case Expr (NonEmpty (Pattern,Expr))

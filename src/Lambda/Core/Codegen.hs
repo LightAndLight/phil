@@ -105,7 +105,7 @@ genTypeName (TyApp con arg) = genTypeName con ++ genTypeName arg
 genTypeName (TyCon (TypeCon name)) = name
 genTypeName (TyCon FunCon) = "Function"
 genTypeName (TyPrim p) = show p
-genTypeName e = error $ "genTypeName called with: " ++ show e
+genTypeName e = ""
 
 genInstName :: Identifier -> [Type] -> PHPId
 genInstName name args = phpId $ fmap toLower name ++ join (fmap genTypeName args)
@@ -142,13 +142,14 @@ genPHPLiteral (LitBool b) = PHPBool b
 genPHPEVar :: EVar -> PHPId
 genPHPEVar (EVar n) = phpId $ "ev" ++ show n
 
-genEvidence :: (HasScope s, MonadState s m) => Evidence -> m PHPExpr
-genEvidence (Variable eVar) = pure . PHPExprVar $ genPHPEVar eVar
-genEvidence (Dict ty) = do
+genDictionary :: (HasScope s, MonadState s m) => Dictionary -> m PHPExpr
+genDictionary (Variable eVar) = pure . PHPExprVar $ genPHPEVar eVar
+genDictionary (Dict ty) = do
   let Right (name, args) = asClassInstance ty :: Either SyntaxError (Identifier, [Type])
   let tyName = genInstName name args
   scope %= M.insertWith (flip const) tyName Value
   pure $ PHPExprVar tyName
+genDictionary _ = error "genDictionary: not implemented"
 
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
 genPHPExpr (Id name) = do
@@ -228,10 +229,10 @@ genPHPExpr (DictAbs eVar body) = do
   pure $ PHPExprFunction [PHPArgValue name] (scopeToArgs sc) [PHPStatementReturn body']
 genPHPExpr (DictApp expr evidence) = do
   expr' <- genPHPExpr expr
-  evidence' <- genEvidence evidence
+  evidence' <- genDictionary evidence
   pure $ PHPExprFunctionCall expr' [evidence']
 genPHPExpr (DictSel member evidence) = do
-  evidence' <- genEvidence evidence
+  evidence' <- genDictionary evidence
   pure $ PHPExprClassAccess evidence' (phpId member) Nothing
 
 genPHPAssignment :: (HasScope s, MonadState s m) => Binding Expr -> m PHPStatement

@@ -353,15 +353,6 @@ patType (PatLit (LitChar p)) = return (M.empty,TyPrim Char)
 patType (PatLit (LitBool p)) = return (M.empty,TyPrim Bool)
 patType PatWildcard = (,) M.empty <$> fresh
 
-passDictionaries :: (HasEVarCount s, HasTcContext r, MonadReader r m, MonadState s m) => [(EVar, Type)] -> Expr -> m ([(EVar, Type)], Expr)
-passDictionaries [] expr = pure ([], expr)
-passDictionaries ((eVar, con):rest) expr = do
-  ctxt <- view tcContext
-  (cons, expr') <- passDictionaries rest expr
-  case getInst con ctxt of
-    Just (TceInst supers _ impls) -> pure (cons, DictApp expr' $ Dict con)
-    Nothing -> pure ((eVar, con):cons, DictApp expr' $ Variable eVar)
-
 replaceDictionaries :: EVar -> Type -> Expr -> Expr
 replaceDictionaries eVar ty expr
   | freeInType ty /= S.empty = expr
@@ -400,8 +391,7 @@ w e = do
           (boundVars,patternType) <- patType pat
           local (over context $ M.union boundVars) $ do
             (branchSubs,preds,branchType,branch') <- w' branch
-            (preds', branch'') <- get >>= runReaderT (passDictionaries preds branch')
-            pure (applySubs branchSubs subs, (patternType, preds', branchType, branch''):bTypes)
+            pure (applySubs branchSubs subs, (patternType, preds, branchType, branch'):bTypes)
 
     w' :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => Expr -> m (Substitution, [(EVar, Type)], Type, Expr)
     w' e = case e of
@@ -409,8 +399,7 @@ w e = do
         (Id name) -> do
           (cons,ty) <- lookupId name >>= instantiate
           cons' <- for (S.toList cons) $ \c -> (,) <$> freshEVar <*> pure c
-          (cons'', e') <- get >>= runReaderT (passDictionaries cons' e)
-          pure (M.empty, cons'', ty, e')
+          pure (M.empty, cons', ty, foldl' DictApp e (Variable . fst <$> cons'))
         (Lit (LitInt _)) -> return (M.empty, [], TyPrim Int, e)
         (Lit (LitString _)) -> return (M.empty, [], TyPrim String, e)
         (Lit (LitChar _)) -> return (M.empty, [], TyPrim Char, e)
@@ -437,9 +426,7 @@ w e = do
             env <- get
             (e1', t1') <- generalize env e1 cons1 t1
             local (over context $ M.insert x t1') $ w' e'
-          let cons3 = fmap (second $ substitute s2) cons1 ++ cons2
-          (cons3', e') <- get >>= runReaderT (passDictionaries cons3 $ Let (Binding x e1) e2)
-          return (applySubs s2 s1, cons3', t2, e')
+          return (applySubs s2 s1, cons2, t2, Let (Binding x $ foldr DictAbs e1 (fst <$> cons1)) e2)
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
           (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty S.empty freshVar) $ w' value
@@ -449,25 +436,19 @@ w e = do
             env <- get
             (value'', t1') <- generalize env value' cons1' (substitute s2 t1)
             local (over context $ M.insert name t1') $ w' rest
-          let cons3 = fmap (second $ substitute s3) $ cons1' ++ cons2
-          (cons3', e') <- get >>= runReaderT (passDictionaries cons3 $ Rec (Binding name value') rest')
-          pure (applySubs s3 s1, cons3', t2, e')
+          pure (applySubs s3 s1, cons2, t2, Rec (Binding name $ foldr DictAbs value' (fst <$> cons1)) rest')
         (Case input bs) -> do
           (s1, cons, inputType, input') <- w' input
-          (cons', input'') <- get >>= runReaderT (passDictionaries cons input')
           (bSubs,bs') <- inferBranches bs
           outputType <- fresh
           let equations = foldr (\(p,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
           subs <- use kindTable >>= runReaderT (mgu equations)
-          newBsWithCons <- for bs' $ \(_,cs,_,b) -> get >>= runReaderT (passDictionaries cs b)
-          let cons'' = fmap (second $ substitute subs) $ cons' ++ join (fst <$> newBsWithCons)
-          let bs'' = snd <$> newBsWithCons
-          (cons''', e') <- get >>= runReaderT (passDictionaries cons'' . Case input'' $ N.zip (fst <$> bs) (N.fromList bs''))
+          let cons' = fmap (second $ substitute subs) $ cons ++ join (fmap (\(_, c, _, _) -> c) bs')
           pure
             ( applySubs subs $ applySubs bSubs s1
-            , cons'''
+            , cons'
             , substitute subs outputType
-            , e'
+            , e
             )
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
