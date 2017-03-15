@@ -65,19 +65,19 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
     describe "forall a : Type, b : Type. Just subs <- equalUpToRenaming a b" $
       prop "subs(b) = a, subs(a) = a" $
         \(EqualUpToRenaming a b) ->
-          let res = fmap TyVar <$> equalUpToRenaming a b
+          let res = equalUpToRenaming a b
           in substitute (fromJust res) b == a && substitute (fromJust res) a == a
   describe "elementUpToRenaming" $
     describe "forall a : Type, b : Set Type. Just subs <- elementUpToRenaming a b" $
       prop "a in subs(b), subs(a) = a" $
         \(ElementUpToRenaming a b) ->
-          let res = fmap TyVar <$> elementUpToRenaming a b
+          let res = elementUpToRenaming a b
           in a `S.member` S.map (substitute $ fromJust res) b && substitute (fromJust res) a == a
   describe "subsetUpToRenaming" $
     describe "forall a : Set Type, b : Set Type. Just subs <- subsetUpToRenaming a b" $
       prop "a subset subs(b), subs(a) = a" $
         \(SubsetUpToRenaming a b) ->
-          let res = fmap TyVar <$> subsetUpToRenaming a b
+          let res = subsetUpToRenaming a b
           in a `S.isSubsetOf` S.map (substitute $ fromJust res) b && S.map (substitute $ fromJust res) a == a
   describe "entails" $ do
     let eq a = TyApp (TyCon $ TypeCon "Eq") (TyVar a)
@@ -107,9 +107,14 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ TyPrim Bool]) `shouldBe` False
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [ord $ TyPrim Int]) `shouldBe` False
-    let context' = context ++ [TceInst (S.singleton . eq $ TyVar "b") (eq . list $ TyVar "b") undefined]
+    let context' = context ++
+          [ TceInst (S.singleton . eq $ TyVar "b") (eq . list $ TyVar "b") undefined
+          , TceInst S.empty (eq $ TyPrim Int) undefined
+          ]
     it "given `Eq a`, and `Eq b => Eq (List b)`, `Eq c` entails `Eq (List c)`" $
       entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ (TyApp (TyCon $ TypeCon "List")) (TyVar "c")]) `shouldBe` True
+    it "given `Eq a`, `Eq b => Eq (List b)`, and `Eq Int`, `Eq c` entails `Eq (List Int)`" $
+      entails context' (S.fromList [eq $ TyVar "c"]) (S.fromList [eq $ (TyApp (TyCon $ TypeCon "List")) (TyPrim Int)]) `shouldBe` True
     let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)

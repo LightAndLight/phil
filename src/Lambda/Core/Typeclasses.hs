@@ -58,10 +58,8 @@ class HasTcContext s where
 -- case equalUpToRenaming a b of
 --   Just subs => substitute subs b = a, substitute subs a = a
 --   Nothing => true
-equalUpToRenaming :: Type -> Type -> Maybe (Map Identifier Identifier)
-equalUpToRenaming (TyVar name) (TyVar name')
-  | name == name' = Just M.empty
-  | otherwise = Just $ M.singleton name' name
+equalUpToRenaming :: Type -> Type -> Maybe (Map Identifier Type)
+equalUpToRenaming ty (TyVar name) = Just $ M.singleton name ty
 equalUpToRenaming ty@(TyApp con arg) ty'@(TyApp con' arg')
   | Just conSubs <- equalUpToRenaming con con'
   , Just argSubs <- equalUpToRenaming arg arg'
@@ -76,14 +74,14 @@ equalUpToRenaming ty ty'
 -- case elementUpToRenaming a b of
 --   Just subs => a `S.member` S.map (substitute subs) b, substitute subs a = a
 --   Nothing => true
-elementUpToRenaming :: Type -> Set Type -> Maybe (Map Identifier Identifier)
+elementUpToRenaming :: Type -> Set Type -> Maybe (Map Identifier Type)
 elementUpToRenaming ty tys = asum . fmap (equalUpToRenaming ty) $ S.toList tys
 
 -- forall a : Set Type, b : Set Type
 -- case subsetUpToRenaming a b of
 --   Just subs => a `S.isSubsetOf` S.map (substitute subs) b, S.map (substitute subs) a = a
 --   Nothing => true
-subsetUpToRenaming :: Set Type -> Set Type -> Maybe (Map Identifier Identifier)
+subsetUpToRenaming :: Set Type -> Set Type -> Maybe (Map Identifier Type)
 subsetUpToRenaming sub super = go (S.toList sub) super M.empty
   where
     go [] super renamings = Just renamings
@@ -97,10 +95,10 @@ entails ctxt bigp pis = pis `S.isSubsetOf` bigp || all (entails' ctxt bigp) pis
   where
     entails' [] p pi = pi `S.member` p
     entails' (TceClass p' pi _ : context) p pi'
-      | Just subs <- pi' `elementUpToRenaming` p', entails ctxt p (S.singleton $ substitute (TyVar <$> subs) pi) = True
+      | Just subs <- pi' `elementUpToRenaming` p', entails ctxt p (S.singleton $ substitute subs pi) = True
       | otherwise = entails' context p pi'
     entails' (TceInst p' pi _ : context) p pi'
-      | Just subs <- pi' `equalUpToRenaming` pi, entails ctxt p (S.map (substitute $ TyVar <$> subs) p') = True
+      | Just subs <- pi' `equalUpToRenaming` pi, entails ctxt p (S.map (substitute subs) p') = True
       | otherwise = entails' context p pi'
 
 checkConstraints
