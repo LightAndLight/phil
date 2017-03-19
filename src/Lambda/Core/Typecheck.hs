@@ -5,6 +5,8 @@
 
 module Lambda.Core.Typecheck where
 
+import Debug.Trace
+
 import           Control.Applicative
 import Control.Arrow ((***))
 import           Control.Lens
@@ -36,7 +38,7 @@ import           Lambda.Core.AST.Pattern
 import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
 import Lambda.Core.Kinds hiding (HasFreshCount(..))
 import Lambda.Core.Typeclasses
-import Lambda.Core.Typecheck.Substitution
+import Lambda.Core.Typecheck.Unification
 
 data InferenceState
   = InferenceState
@@ -97,9 +99,7 @@ instance HasEVarCount InferenceState where
 
 data TypeError
   = NotInScope [String]
-  | TypeMismatch Type Type
   | PatternArgMismatch Int Int
-  | OccursError Identifier Type
   | AlreadyDefined Identifier
   | TooManyArguments TypeScheme
   | WrongArity [Type]
@@ -110,6 +110,7 @@ data TypeError
   | NoSuchClass Identifier
   | NonClassFunction Identifier [Type] Identifier
   | MissingClassFunctions Identifier [Type] (Set Identifier)
+  | TUnificationError (UnificationError Type)
   deriving (Eq, Show)
 
 makeClassyPrisms ''TypeError
@@ -156,11 +157,6 @@ generalize env expr cons ty = do
     , Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty (snd <$> cons')) `S.difference` free ctxt) (S.fromList $ snd <$> cons') ty
     )
 
-type Constraints = [(Type,Type)]
-
-substituteConstraint :: Substitution -> Constraints -> Constraints
-substituteConstraint subs = fmap (substitute subs *** substitute subs)
-
 fresh :: (HasFreshCount s, HasKindTable s, K.HasFreshCount s, MonadState s m) => m Type
 fresh = do
   n <- use freshCount
@@ -181,7 +177,7 @@ instantiate ::
   => TypeScheme
   -> m (Set Type, Type)
 instantiate (Forall vars cons ty) = do
-  subs <- M.fromList <$> for (S.toList vars) makeFreshVar
+  subs <- Substitution <$> for (S.toList vars) makeFreshVar
   pure (S.map (substitute subs) cons, substitute subs ty)
   where
     makeFreshVar var = do
@@ -190,47 +186,13 @@ instantiate (Forall vars cons ty) = do
         then makeFreshVar var
         else pure (var, var')
 
-occurs :: Identifier -> Type -> Bool
-occurs name ty = name `S.member` freeInType ty
-
-mgu
-  :: ( AsTypeError e
-     , AsKindError e
-     , MonadError e m
-     , K.HasFreshCount s
-     , MonadState s m
-     , HasKindTable r
-     , MonadReader r m
-     ) => Constraints -> m Substitution
-mgu [] = pure M.empty
-mgu (eq:eqs)
-  | uncurry (==) eq = mgu eqs
-  | otherwise = case eq of
-      (TyVar name,ty)
-        | occurs name ty -> throwError $ _OccursError # (name,ty)
-        | otherwise -> do
-            (kindSubs, kind) <- inferKind ty
-            local (over kindTable $ subKindTable kindSubs) $ do
-              kindInTable <- views kindTable $ M.lookup name
-              updateKindTable <- case kindInTable of
-                Just kind' -> do
-                  kindSubs <- unifyKinds [(kind, kind')]
-                  pure $ subKindTable kindSubs
-                Nothing -> pure $ M.insert name kind
-              let sub = M.singleton name ty
-              subs <- local (over kindTable updateKindTable) (mgu $ substituteConstraint sub eqs)
-              pure $ applySubs sub subs
-      (ty,TyVar name) -> mgu $ (TyVar name,ty):eqs
-      (TyApp con arg,TyApp con' arg') -> mgu $ (con,con'):(arg,arg'):eqs
-      (ty,ty') -> throwError $ _TypeMismatch # (ty,ty')
-
 kindPreservingSubstitution
   :: ( AsKindError e
      , MonadError e m
      , HasKindTable r
      , MonadReader r m
-     ) => Substitution -> m ()
-kindPreservingSubstitution subs = go (M.toList subs)
+     ) => Substitution Type -> m ()
+kindPreservingSubstitution subs = go $ getSubstitution subs
   where
     go [] = pure ()
     go ((name, targetType):rest) = do
@@ -239,8 +201,7 @@ kindPreservingSubstitution subs = go (M.toList subs)
       case targetType of
         TyVar name' -> do
           kind' <- lookupKind name' table
-          unifyKinds [(kind, kind')]
-          go rest
+          either (throwError . review _KUnificationError) (const $ go rest) $ unify [(kind, kind')]
         _ -> go rest
 
 -- Checks that the second argument is more special that the first
@@ -271,14 +232,14 @@ special scheme scheme'
           kindTable %= updateKindTable
         (cons, ty) <- instantiate scheme -- this would be the body's type
         (cons', ty') <- instantiate scheme' -- this would be the signature
-        subs <- use kindTable >>= runReaderT (unifyTypes ty ty')
+        subs <- Substitution . M.toList <$> (use kindTable >>= runReaderT (unifyTypes ty ty'))
         use kindTable >>= runReaderT (kindPreservingSubstitution subs)
         tctxt <- view tcContext
         let newCons' = S.map (substitute subs) cons' -- more special
             newCons = S.map (substitute subs) cons -- more general
             generalCons = cons `S.union` newCons'
             specialCons = cons' `S.union` newCons
-        unless (entails tctxt generalCons specialCons) .
+        unless (all (entails tctxt generalCons) specialCons) .
           throwError $ _CouldNotDeduce # (specialCons, newCons')
   where
     unifyTypes ty ty' = unifyTypes' ty ty' M.empty
@@ -294,11 +255,11 @@ special scheme scheme'
           | TyApp con arg <- ty, TyApp con' arg' <- ty' = do
               ctxt' <- unifyTypes' con con' ctxt
               unifyTypes' arg arg' ctxt'
-          | otherwise = throwError $ _TypeMismatch # (ty,ty')
+          | otherwise = throwError $ _TUnificationError # CannotUnify ty ty'
 
     checkEquality (TyApp con arg) (TyApp con' arg')
       = checkEquality con con' >> checkEquality arg arg'
-    checkEquality ty ty' = unless (ty == ty') . throwError $ _TypeMismatch # (ty, ty')
+    checkEquality ty ty' = unless (ty == ty') . throwError $ _TUnificationError # CannotUnify ty ty'
 
 runW :: Expr -> Either TypeError (Expr, TypeScheme)
 runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
@@ -384,68 +345,68 @@ w e = do
   (e'', ty') <- generalize env e' cons $ substitute subs ty
   return (e'', ty')
   where
-    inferBranches :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => NonEmpty (Pattern,Expr) -> m (Substitution, [(Type, [(EVar, Type)], Type, Expr)])
-    inferBranches = foldrM inferBranch (M.empty,[])
+    inferBranches :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => NonEmpty (Pattern,Expr) -> m (Substitution Type, [(Type, [(EVar, Type)], Type, Expr)])
+    inferBranches = foldrM inferBranch (mempty,[])
       where
         inferBranch (pat,branch) (subs,bTypes) = do
           (boundVars,patternType) <- patType pat
           local (over context $ M.union boundVars) $ do
             (branchSubs,preds,branchType,branch') <- w' branch
-            pure (applySubs branchSubs subs, (patternType, preds, branchType, branch'):bTypes)
+            pure (branchSubs <> subs, (patternType, preds, branchType, branch'):bTypes)
 
-    w' :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => Expr -> m (Substitution, [(EVar, Type)], Type, Expr)
+    w' :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => Expr -> m (Substitution Type, [(EVar, Type)], Type, Expr)
     w' e = case e of
-        (Error _) -> (,,,) M.empty [] <$> fresh <*> pure e
+        (Error _) -> (,,,) mempty [] <$> fresh <*> pure e
         (Id name) -> do
           (cons,ty) <- lookupId name >>= instantiate
           cons' <- for (S.toList cons) $ \c -> (,) <$> freshEVar <*> pure c
-          pure (M.empty, cons', ty, foldl' DictApp e (Variable . fst <$> cons'))
-        (Lit (LitInt _)) -> return (M.empty, [], TyPrim Int, e)
-        (Lit (LitString _)) -> return (M.empty, [], TyPrim String, e)
-        (Lit (LitChar _)) -> return (M.empty, [], TyPrim Char, e)
-        (Lit (LitBool _)) -> return (M.empty, [], TyPrim Bool, e)
+          pure (mempty, cons', ty, foldl' DictApp e (Variable . fst <$> cons'))
+        (Lit (LitInt _)) -> return (mempty, [], TyPrim Int, e)
+        (Lit (LitString _)) -> return (mempty, [], TyPrim String, e)
+        (Lit (LitChar _)) -> return (mempty, [], TyPrim Char, e)
+        (Lit (LitBool _)) -> return (mempty, [], TyPrim Bool, e)
         (App f x) -> do
           (s1, cons1, t1, f') <- w' f
-          (s2, cons2, t2, x') <- local (over context $ subContext s1) $ w' x
+          (s2, cons2, t2, x') <- local (over context $ fmap (subTypeScheme s1)) $ w' x
           b <- fresh
-          s3 <- use kindTable >>= runReaderT (mgu [(TyFun t2 b,substitute s2 t1)])
-          let cons3 = fmap (second . substitute $ applySubs s3 s2) $ cons1 ++ cons2
-          let cons3set = S.fromList $ snd <$> cons3
-              cons12set = S.fromList $ substitute s2 . snd <$> (cons1 ++ cons2)
+          s3 <- either (throwError . review _TUnificationError) pure $ unify [(TyFun t2 b,substitute s2 t1)]
           tctxt <- use tcContext
-          unless (entails tctxt cons12set cons3set) . throwError $ _CouldNotDeduce # (cons3set, cons12set)
-          return (applySubs s3 $ applySubs s2 s1, cons3, substitute s3 b, App f' x')
+          return
+            ( s3 <> s2 <> s1
+            , fmap (second $ substitute s3) (fmap (second $ substitute s2) cons1 ++ cons2)
+            , substitute s3 b
+            , App f' x'
+            )
         (Abs x expr) -> do
-          ctxt <- get
           b <- fresh
           (s1, cons, t1, expr') <- local (over context $ M.insert x (Forall S.empty S.empty b)) $ w' expr
           return (s1, cons, TyFun (substitute s1 b) t1, Abs x expr')
         (Let (Binding x e) e') -> do
           (s1, cons1, t1, e1) <- w' e
-          (s2, cons2, t2, e2) <- local (over context $ subContext s1) $ do
+          (s2, cons2, t2, e2) <- local (over context $ fmap (subTypeScheme s1)) $ do
             env <- get
             (e1', t1') <- generalize env e1 cons1 t1
             local (over context $ M.insert x t1') $ w' e'
-          return (applySubs s2 s1, cons2, t2, Let (Binding x $ foldr DictAbs e1 (fst <$> cons1)) e2)
+          return (s2 <> s1, cons2, t2, Let (Binding x $ foldr DictAbs e1 (fst <$> cons1)) e2)
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
           (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty S.empty freshVar) $ w' value
-          s2 <- use kindTable >>= runReaderT (mgu $ (t1,freshVar) : M.toList (M.mapKeys TyVar s1))
+          s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
           let cons1' = fmap (second $ substitute s2) cons1
-          (s3, cons2, t2, rest') <- local (over context $ subContext s1) $ do
+          (s3, cons2, t2, rest') <- local (over context $ fmap (subTypeScheme s1)) $ do
             env <- get
             (value'', t1') <- generalize env value' cons1' (substitute s2 t1)
             local (over context $ M.insert name t1') $ w' rest
-          pure (applySubs s3 s1, cons2, t2, Rec (Binding name $ foldr DictAbs value' (fst <$> cons1)) rest')
+          pure (s3 <> s1, cons2, t2, Rec (Binding name $ foldr DictAbs value' (fst <$> cons1)) rest')
         (Case input bs) -> do
           (s1, cons, inputType, input') <- w' input
           (bSubs,bs') <- inferBranches bs
           outputType <- fresh
           let equations = foldr (\(p,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
-          subs <- use kindTable >>= runReaderT (mgu equations)
+          subs <- either (throwError . review _TUnificationError) pure $ unify equations
           let cons' = fmap (second $ substitute subs) $ cons ++ join (fmap (\(_, c, _, _) -> c) bs')
           pure
-            ( applySubs subs $ applySubs bSubs s1
+            ( subs <> bSubs <> s1
             , cons'
             , substitute subs outputType
             , e
@@ -490,8 +451,8 @@ checkDefinition def@(Class supers constructor params funcs) = do
       varsWithKinds <- fmap M.fromList . for (S.toList freeVars) $ \var -> (,) var <$> freshKindVar
       local (M.union varsWithKinds) $ do
         subs' <- checkSignatures $ fmap snd funcs
-        (subs'', kind) <- local (subKindTable subs') $ inferKind (TyCon (TypeCon constructor))
-        pure (applyKindSubs subs'' $ applyKindSubs subs' subs, kind)
+        (subs'', kind) <- local (fmap $ substitute subs') $ inferKind (TyCon (TypeCon constructor))
+        pure (subs'' <> subs' <> subs, kind)
   kindTable %= subKindTable subs
   checkedFuncs <- for funcs $ \(name, ty) -> do
     eVar <- freshEVar
@@ -503,11 +464,11 @@ checkDefinition def@(Class supers constructor params funcs) = do
   eVar <- freshEVar
   pure (M.fromList $ fmap (\(name, _, expr) -> (name, expr)) checkedFuncs, def)
   where
-    checkSignatures [] = pure M.empty
+    checkSignatures [] = pure mempty
     checkSignatures (sig:rest) = do
       (subs, _) <- inferKind sig
       subs' <- checkSignatures rest
-      pure $ applyKindSubs subs' subs
+      pure $ subs' <> subs
 
 checkDefinition (Instance supers constructor params impls) = do
   entry <- uses tcContext $ getClass constructor

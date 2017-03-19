@@ -1,6 +1,7 @@
 {-# language TemplateHaskell #-}
 {-# language FlexibleContexts #-}
 {-# language FlexibleInstances #-}
+{-# language TypeFamilies #-}
 
 module Lambda.Core.Kinds
   ( KindError(..)
@@ -10,24 +11,23 @@ module Lambda.Core.Kinds
   , HasFreshCount(..)
   , HasKindTable(..)
   , AsKindError(..)
-  , applyKindSubs
   , checkDefinitionKinds
   , freshKindVar
   , inferKind
   , initialKindInferenceState
   , lookupKind
   , runInferKind
-  , unifyKinds
   , showKind
-  , substituteKind
   , subKindTable
   )
   where
 
 import Control.Lens
+import Control.Applicative
 import Data.Foldable
 import Data.Traversable
 import Data.Functor
+import Data.Monoid
 import qualified Data.Set as S
 import Control.Monad.State
 import Control.Monad.Reader
@@ -42,6 +42,7 @@ import qualified Data.Map as M
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Types
+import           Lambda.Core.Typecheck.Unification
 
 data Kind
   = Star
@@ -49,6 +50,33 @@ data Kind
   | KindVar Identifier
   | Constraint
   deriving (Eq, Show, Ord)
+
+instance Unify Kind where
+  type Variable Kind = Identifier
+
+  substitute (Substitution []) k = k
+  substitute subs (KindArrow k1 k2) = KindArrow (substitute subs k1) (substitute subs k2)
+  substitute (Substitution ((var, t') : rest)) t@(KindVar var')
+    | var == var' = t'
+    | otherwise = substitute (Substitution rest) t
+  substitute _ t = t
+
+  implications (k@KindVar{}, k') = [(k, k')]
+  implications (k, k'@KindVar{}) = [(k', k)]
+  implications (KindArrow k1 k2, KindArrow k1' k2')
+    = let i1 = implications (k1, k1')
+          i2 = implications (k2, k2')
+      in if null i1 || null i2 then [] else i1 ++ i2
+  implications c@(k, k')
+    | k == k' = [c]
+    | otherwise = []
+
+  occurs name (KindVar name') = name == name'
+  occurs name (KindArrow k1 k2) = occurs name k1 || occurs name k2
+  occurs _ _ = False
+
+  toVariable (KindVar name) = Just name
+  toVariable _ = Nothing
 
 showKind :: Kind -> String
 showKind Star = "*"
@@ -61,54 +89,17 @@ showKind (KindVar name) = name
 
 data KindError
   = KNotDefined Identifier
-  | KOccurs Identifier
-  | KCannotUnify Kind Kind
   | KNotInScope Identifier
+  | KUnificationError (UnificationError Kind)
   deriving (Eq, Show)
 
 makeClassyPrisms ''KindError
-
-substituteKind :: Map Identifier Kind -> Kind -> Kind
-substituteKind subs (KindArrow k1 k2) = KindArrow (substituteKind subs k1) (substituteKind subs k2)
-substituteKind subs (KindVar name) = fromMaybe (KindVar name) $ M.lookup name subs
-substituteKind subs k = k
 
 -- If we don't instantiate the result of kind inference then we have Kind Polymorphism
 instantiate :: Kind -> Kind
 instantiate (KindArrow k1 k2) = KindArrow (instantiate k1) (instantiate k2)
 instantiate Constraint = Constraint
 instantiate _ = Star
-
--- Apply s1 to s2
-applyKindSubs :: Map Identifier Kind -> Map Identifier Kind -> Map Identifier Kind
-applyKindSubs s1 = M.union s1 . fmap (substituteKind s1)
-
-subKindTable :: Map Identifier Kind -> Map Identifier Kind -> Map Identifier Kind
-subKindTable s1 = fmap (substituteKind s1)
-
-occurs :: Identifier -> Kind -> Bool
-occurs name (KindArrow k1 k2) = occurs name k1 || occurs name k2
-occurs name (KindVar name') = name == name'
-occurs name _ = False
-
-subEquations :: Map Identifier Kind -> [(Kind,Kind)] -> [(Kind,Kind)]
-subEquations subs = let f = substituteKind subs in fmap (bimap f f)
-
-unifyKinds :: (AsKindError e, MonadError e m) => [(Kind,Kind)] -> m (Map Identifier Kind)
-unifyKinds = unifyKinds'
-  where
-    unifyKinds' [] = pure M.empty
-    unifyKinds' (eq:rest)
-      | uncurry (==) eq = unifyKinds' rest
-      | otherwise = case eq of
-          (KindVar name,k)
-            | not $ occurs name k -> do
-                let sub = M.singleton name k
-                M.union sub <$> unifyKinds' (subEquations sub $ eq : rest)
-            | otherwise -> throwError $ _KOccurs # name
-          (k,KindVar name) -> unifyKinds' $ (KindVar name,k):rest
-          (KindArrow k1 k2,KindArrow k1' k2') -> unifyKinds' $ [(k1,k1'),(k2,k2')] ++ rest
-          (k1,k2) -> throwError $ _KCannotUnify # (k1,k2)
 
 newtype KindInferenceState = KindInferenceState { _kindFreshCount :: Int }
 
@@ -140,6 +131,8 @@ lookupKind name table = case M.lookup name table of
   Nothing -> throwError $ _KNotDefined # name
   Just kind -> pure kind
 
+subKindTable subs = fmap (substitute subs)
+
 inferKind
   :: ( HasFreshCount s
      , MonadState s m
@@ -149,24 +142,25 @@ inferKind
      , MonadError e m
      )
   => Type
-  -> m (Map Identifier Kind, Kind)
+  -> m (Substitution Kind, Kind)
 inferKind (TyVar var) = do
   kind <- lookupKind var =<< view kindTable
-  pure (M.empty, kind)
+  pure (mempty, kind)
 inferKind (TyApp con arg) = do
   (s1,conKind) <- inferKind con
-  (s2,argKind) <- local (over kindTable $ subKindTable s1) $ inferKind arg
+  (s2,argKind) <- local (over kindTable $ fmap (substitute s1)) $ inferKind arg
   returnKind <- freshKindVar
-  s3 <- unifyKinds [(substituteKind s2 conKind,KindArrow argKind returnKind)]
-  pure (applyKindSubs s3 $ applyKindSubs s2 s1,substituteKind s3 returnKind)
+  case unify [(substitute s2 conKind,KindArrow argKind returnKind)] of
+    Right s3 -> pure (s3 <> s2 <> s1, substitute s3 returnKind)
+    Left err -> throwError $ _KUnificationError # err
 inferKind (TyCon tyCon) = case tyCon of
-  FunCon -> pure (M.empty,KindArrow Star $ KindArrow Star Star)
+  FunCon -> pure (mempty, KindArrow Star $ KindArrow Star Star)
   TypeCon con -> do
     kind <- lookupKind con =<< view kindTable
-    pure (M.empty, kind)
-inferKind (TyPrim _) = pure (M.empty,Star)
+    pure (mempty, kind)
+inferKind (TyPrim _) = pure (mempty, Star)
 
-runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m (Map Identifier Kind, Kind)
+runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m (Substitution Kind, Kind)
 runInferKind ty = flip evalStateT initialKindInferenceState . runReaderT (inferKind ty)
 
 checkDefinitionKinds
@@ -186,16 +180,18 @@ checkDefinitionKinds tyCon tyVars prods = do
   let constructorKind = foldr KindArrow Star kinds
   let update = M.insert tyCon constructorKind . M.union (M.fromList $ zip tyVars kinds)
   subs <- local (over kindTable update) . checkConstructors $ N.toList prods
-  pure . instantiate $ substituteKind subs constructorKind
+  pure . instantiate $ substitute subs constructorKind
   where
-    checkConstructors [] = pure M.empty
+    checkConstructors [] = pure mempty
     checkConstructors (ProdDecl _ argTys:rest) = do
       subs <- checkArgs argTys
-      applyKindSubs <$> local (over kindTable $ subKindTable subs) (checkConstructors rest) <*> pure subs
+      liftA2 (<>) (local (over kindTable $ fmap (substitute subs)) (checkConstructors rest)) (pure subs)
 
-    checkArgs [] = pure M.empty
+    checkArgs [] = pure mempty
     checkArgs (argTy:rest) = do
       (subs, kind) <- inferKind argTy
-      subs' <- local (over kindTable $ subKindTable subs) $ unifyKinds [(kind, Star)]
-      let subs'' = applyKindSubs subs' subs
-      applyKindSubs <$> local (over kindTable $ subKindTable subs'') (checkArgs rest) <*> pure subs''
+      case unify [(kind, Star)] of
+        Right subs' -> do
+          let subs'' = subs' <> subs
+          liftA2 (<>) (local (over kindTable $ fmap (substitute subs'')) (checkArgs rest)) (pure subs'')
+        Left err -> throwError $ _KUnificationError # err

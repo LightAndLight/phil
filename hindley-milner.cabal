@@ -27,7 +27,7 @@ library
                      , Lambda.Core.Codegen
                      , Lambda.Core.Kinds
                      , Lambda.Core.Typecheck
-                     , Lambda.Core.Typecheck.Substitution
+                     , Lambda.Core.Typecheck.Unification
                      , Lambda.Core.Typeclasses
                      , Lambda.Lexer
                      , Lambda.Parser

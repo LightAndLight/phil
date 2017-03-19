@@ -12,8 +12,11 @@ module Lambda.Core.Typeclasses
   ) where
 
 import Control.Lens
+import Control.Applicative
+import Data.Bifunctor
 import Control.Monad.Except
 import Control.Monad.Reader
+import Data.Monoid
 import Control.Monad.State
 import Data.Foldable
 import qualified Data.Set as S
@@ -28,8 +31,8 @@ import           Lambda.Core.AST.Expr
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Types
 import           Lambda.Core.Kinds
-import Lambda.Core.Typecheck.Substitution
 import Lambda.Sugar (AsSyntaxError(..), asClassDef)
+import Lambda.Core.Typecheck.Unification
 
 data TypeclassEntry
   = TceInst (Set Type) Type (Map Identifier Expr)
@@ -56,50 +59,48 @@ class HasTcContext s where
 
 -- forall a : Type, b : Type
 -- case equalUpToRenaming a b of
---   Just subs => substitute subs b = a, substitute subs a = a
+--   Just subs => substitute subs b = substitute subs a
 --   Nothing => true
-equalUpToRenaming :: Type -> Type -> Maybe (Map Identifier Type)
-equalUpToRenaming ty (TyVar name) = Just $ M.singleton name ty
-equalUpToRenaming ty@(TyApp con arg) ty'@(TyApp con' arg')
-  | Just conSubs <- equalUpToRenaming con con'
-  , Just argSubs <- equalUpToRenaming arg arg'
-  , and (M.intersectionWith (==) conSubs argSubs)
-  , freeInType ty `S.intersection` freeInType ty' == S.empty = Just $ conSubs `M.union` argSubs
-  | otherwise = Nothing
-equalUpToRenaming ty ty'
-  | ty == ty' = Just M.empty
-  | otherwise = Nothing
+equalUpToRenaming :: Type -> Type -> Maybe (Substitution Type)
+equalUpToRenaming ty ty' = either (const Nothing) Just $ unify [(ty, ty')]
 
 -- forall a : Type, b : Set Type
 -- case elementUpToRenaming a b of
---   Just subs => a `S.member` S.map (substitute subs) b, substitute subs a = a
+--   Just subs => substitute subs a `S.member` S.map (substitute subs) b
 --   Nothing => true
-elementUpToRenaming :: Type -> Set Type -> Maybe (Map Identifier Type)
+elementUpToRenaming :: Type -> Set Type -> Maybe (Substitution Type)
 elementUpToRenaming ty tys = asum . fmap (equalUpToRenaming ty) $ S.toList tys
 
 -- forall a : Set Type, b : Set Type
 -- case subsetUpToRenaming a b of
---   Just subs => a `S.isSubsetOf` S.map (substitute subs) b, S.map (substitute subs) a = a
+--   Just subs => S.map (substitute subs a) `S.isSubsetOf` S.map (substitute subs) b
 --   Nothing => true
-subsetUpToRenaming :: Set Type -> Set Type -> Maybe (Map Identifier Type)
-subsetUpToRenaming sub super = go (S.toList sub) super M.empty
+subsetUpToRenaming :: Set Type -> Set Type -> Maybe (Substitution Type)
+subsetUpToRenaming sub = go mempty (S.toList sub)
   where
-    go [] super renamings = Just renamings
-    go (ty:rest) super renamings
-      | Just subs <- elementUpToRenaming ty super
-      , and (M.intersectionWith (==) renamings subs) = go rest super (M.union renamings subs)
-      | otherwise = Nothing
+    go :: Substitution Type -> [Type] -> Set Type -> Maybe (Substitution Type)
+    go subs [] super = Just subs
+    go subs (ty:rest) super = do
+      let super' = S.map (substitute subs) super
+      subs' <- elementUpToRenaming (substitute subs ty) super'
+      liftA2 (<>) (go (subs' <> subs) rest super') $ pure subs'
 
-entails :: [TypeclassEntry] -> Set Type -> Set Type -> Bool
-entails ctxt bigp pis = pis `S.isSubsetOf` bigp || all (entails' ctxt bigp) pis
+entails :: [TypeclassEntry] -> Set Type -> Type -> Bool
+entails ctxt p pi = entails' ctxt p pi
   where
-    entails' [] p pi = pi `S.member` p
-    entails' (TceClass p' pi _ : context) p pi'
-      | Just subs <- pi' `elementUpToRenaming` p', entails ctxt p (S.singleton $ substitute subs pi) = True
-      | otherwise = entails' context p pi'
-    entails' (TceInst p' pi _ : context) p pi'
-      | Just subs <- pi' `equalUpToRenaming` pi, entails ctxt p (S.map (substitute subs) p') = True
-      | otherwise = entails' context p pi'
+    entails' tctxt p pi'
+      | S.member pi' p = True
+      | otherwise = case tctxt of
+          [] -> False
+          (TceClass p' pi _ : context)
+            | Just subs <- elementUpToRenaming pi' p'
+            , entails' ctxt (S.map (substitute subs) p) (substitute subs pi) -> True
+            | otherwise -> entails' context p pi'
+          (TceInst p' pi _ : context)
+            | Just subs <- equalUpToRenaming pi' pi
+            , all (entails' ctxt $ S.map (substitute subs) p) (S.map (substitute subs) p')
+            -> True
+            | otherwise -> entails' context p pi'
 
 checkConstraints
   :: ( AsKindError e
@@ -108,15 +109,14 @@ checkConstraints
      , MonadReader r m
      , HasFreshCount s
      , MonadState s m
-     ) => S.Set Type -> m (M.Map Identifier Kind)
+     ) => S.Set Type -> m (Substitution Kind)
 checkConstraints = go . S.toList
   where
-    go [] = pure M.empty
+    go [] = pure mempty
     go [con] = do
       (subs, k) <- inferKind con
-      unifyKinds [(k, Constraint)]
-      pure subs
+      either (throwError . review _KUnificationError) (const $ pure subs) $ unify [(k, Constraint)]
     go (con:rest) = do
       subs <- go [con]
       subs' <- local (over kindTable $ subKindTable subs) $ go rest
-      pure $ applyKindSubs subs' subs
+      pure $ subs' <> subs

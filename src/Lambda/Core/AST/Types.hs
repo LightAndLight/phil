@@ -1,12 +1,14 @@
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE TypeFamilies    #-}
 
 module Lambda.Core.AST.Types where
 
-import           Data.List                  (intercalate)
-import           Data.Set                   (Set)
-import qualified Data.Set                   as S
+import           Data.List                         (intercalate)
+import           Data.Set                          (Set)
+import qualified Data.Set                          as S
 
 import           Lambda.Core.AST.Identifier
+import           Lambda.Core.Typecheck.Unification
 
 data Prim
   = Int
@@ -18,11 +20,48 @@ data Prim
 data TyCon = FunCon | TypeCon Identifier deriving (Eq, Show, Ord)
 
 data Type
-  = TyVar String
+  = TyVar Identifier
   | TyApp Type Type
   | TyCon TyCon
   | TyPrim Prim
   deriving (Eq, Show, Ord)
+
+instance Unify Type where
+  type Variable Type = Identifier
+
+  substitute (Substitution []) t = t
+  substitute subs (TyApp t1 t2) = TyApp (substitute subs t1) (substitute subs t2)
+  substitute (Substitution ((var, t') : rest)) t@(TyVar var')
+    | var == var' = substitute (Substitution rest) t'
+    | otherwise = substitute (Substitution rest) t
+  substitute _ t = t
+
+  implications (ty@TyVar{}, ty') = [(ty, ty')]
+  implications (ty, ty'@TyVar{}) = [(ty', ty)]
+  implications (TyApp t1 t2, TyApp t1' t2')
+    = let t1i = implications (t1, t1')
+          t2i = implications (t2, t2')
+      in if null t1i || null t2i then [] else t1i ++ t2i
+  implications c@(t1, t2)
+    | t1 == t2 = [c]
+    | otherwise = []
+
+  occurs name (TyVar name') = name == name'
+  occurs name (TyApp t1 t2) = occurs name t1 || occurs name t2
+  occurs _ _ = False
+
+  toVariable (TyVar name) = Just name
+  toVariable _ = Nothing
+
+subTypeScheme :: Substitution Type -> TypeScheme -> TypeScheme
+subTypeScheme (Substitution subs) scheme = go (freeInScheme scheme) subs scheme
+  where
+    go frees [] scheme = scheme
+    go frees (sub@(var, _):rest) scheme
+      | not (var `S.member` frees) = go frees rest scheme
+      | Forall vars cons ty <- scheme
+      , let runSub = substitute (Substitution [sub])
+      = go frees rest (Forall vars (S.map runSub cons) $ runSub ty)
 
 -- | Gets the C from a type of format: C a_1 a_2 .. a_n
 getConstructor :: Type -> Maybe TyCon

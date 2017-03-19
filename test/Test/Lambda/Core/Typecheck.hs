@@ -109,7 +109,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
 
     describe "failure" $ do
       it "forall a. a -> a does not unify with forall b c. b -> c" $
-        special emptyContexts idType (_Forall' ["b", "c"] [] # _TyFun # (_TyVar # "b", _TyVar # "c")) `shouldSatisfy` has (_Left . _TypeMismatch)
+        special emptyContexts idType (_Forall' ["b", "c"] [] # _TyFun # (_TyVar # "b", _TyVar # "c")) `shouldSatisfy` has (_Left . _TUnificationError)
 
       it "forall a. a -> a does not unify with forall b c d. (b -> c) -> (b -> d)" $
         special emptyContexts idType
@@ -117,7 +117,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
             # _TyFun
               # ( _TyFun # (_TyVar # "b", _TyVar # "c")
                 , _TyFun # (_TyVar # "b", _TyVar # "d"))
-          ) `shouldSatisfy` has (_Left . _TypeMismatch)
+          ) `shouldSatisfy` has (_Left . _TUnificationError)
 
       it "forall a. a -> a does not unify with forall a b f. f a -> f b" $
         special emptyContexts idType
@@ -126,10 +126,10 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
               # ( _TyApp # (_TyVar # "f", _TyVar # "a")
                 , _TyApp # (_TyVar # "f", _TyVar # "b")
                 )
-          ) `shouldSatisfy` has (_Left . _TypeMismatch)
+          ) `shouldSatisfy` has (_Left . _TUnificationError)
 
       it "Int -> Int is less general than forall a. a -> a" $
-        special emptyContexts (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) idType `shouldSatisfy` has (_Left . _TypeMismatch)
+        special emptyContexts (_Forall' [] [] # _TyFun # (_TyPrim # Int, _TyPrim # Int)) idType `shouldSatisfy` has (_Left . _TUnificationError)
 
   describe "typeclass" $ do
     let constrainedId = _Forall' ["a"] [TyApp (TyCon $ TypeCon "Constraint") (TyVar "a")] # _TyFun # (_TyVar # "a", _TyVar # "a")
@@ -182,7 +182,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
 
     describe "failure" $ do
       it "\\x. x x" $
-        runW (_Abs' "x" # _App # (_Id # "x", _Id # "x")) `shouldSatisfy` has (_Left . _OccursError)
+        runW (_Abs' "x" # _App # (_Id # "x", _Id # "x")) `shouldSatisfy` has (_Left . _TUnificationError)
 
     describe "typeclasses" $ do
       Test.Hspec.context "class Eq a where eq : a -> a -> Bool where ..." $ do
@@ -212,9 +212,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
         Test.Hspec.context "and : Bool -> Bool -> Bool" $ do
           let ctxtWithAnd = ctxt & over testContext
                 ( M.insert "and" $
-                    _Forall'
-                      ["a"]
-                      []
+                    _Forall' [] []
                       # _TyFun # (_TyPrim # Bool, _TyFun # (_TyPrim # Bool, _TyPrim # Bool))
                 )
           it "\\x y. and (eq x x) (eq y y) : forall a a1. (Eq a, Eq a1) => a -> a1 -> Bool" $ do
@@ -223,13 +221,13 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
             typeOf ctxtWithAnd initialTestState (_Abs' "x" # _Abs' "y" # _App # (_App # (_Id # "and", eqxx), eqyy))
               `shouldBe` (Right $
                 Forall
-                  (S.fromList ["t3", "t7"])
+                  (S.fromList ["t2", "t6"])
                   (S.fromList
-                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t3")
-                    , TyApp (TyCon $ TypeCon "Eq") (TyVar "t7")
+                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t2")
+                    , TyApp (TyCon $ TypeCon "Eq") (TyVar "t6")
                     ]
                   )
-                  (TyFun (TyVar "t3") $ TyFun (TyVar "t7") $ TyPrim Bool))
+                  (TyFun (TyVar "t2") $ TyFun (TyVar "t6") $ TyPrim Bool))
           Test.Hspec.context "class Gt a where gt : a -> a -> Bool" $ do
             let ctxtWithGt = ctxtWithAnd
                   & testTcContext <>~ [ TceClass S.empty (TyApp (TyCon $ TypeCon "Gt") $ TyVar "a") undefined ]
@@ -246,10 +244,10 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
               typeOf ctxtWithGt initialTestState (_Abs' "x" # _App # (_App # (_Id # "and", eqxx), gtxx))
                 `shouldBe` (Right $
                   Forall
-                    (S.singleton "t6")
+                    (S.singleton "t5")
                     (S.fromList
-                      [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t6")
-                      , TyApp (TyCon $ TypeCon "Gt") (TyVar "t6")
+                      [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t5")
+                      , TyApp (TyCon $ TypeCon "Gt") (TyVar "t5")
                       ]
                     )
-                    (TyFun (TyVar "t6") $ TyPrim Bool))
+                    (TyFun (TyVar "t5") $ TyPrim Bool))
