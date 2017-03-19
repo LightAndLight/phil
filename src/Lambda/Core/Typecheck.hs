@@ -370,7 +370,6 @@ w e = do
           (s2, cons2, t2, x') <- local (over context $ fmap (subTypeScheme s1)) $ w' x
           b <- fresh
           s3 <- either (throwError . review _TUnificationError) pure $ unify [(TyFun t2 b,substitute s2 t1)]
-          tctxt <- use tcContext
           return
             ( s3 <> s2 <> s1
             , fmap (second $ substitute s3) (fmap (second $ substitute s2) cons1 ++ cons2)
@@ -393,11 +392,14 @@ w e = do
           (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty S.empty freshVar) $ w' value
           s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
           let cons1' = fmap (second $ substitute s2) cons1
-          (s3, cons2, t2, rest') <- local (over context $ fmap (subTypeScheme s1)) $ do
+          (s3, cons2, t2, rest', cons1'', value'') <- local (over context $ fmap (subTypeScheme s1)) $ do
             env <- get
-            (value'', t1') <- generalize env value' cons1' (substitute s2 t1)
-            local (over context $ M.insert name t1') $ w' rest
-          pure (s3 <> s1, cons2, t2, Rec (Binding name $ foldr DictAbs value' (fst <$> cons1)) rest')
+            (_, t1') <- generalize env value' cons1' (substitute s2 t1)
+            local (over context $ M.insert name t1') $ do
+              (sub, cons, ty, rest') <- w' rest
+              (_, cons1'', _, value'') <- w' value
+              pure (sub, cons, ty, rest', cons1'', value'')
+          pure (s3 <> s1, cons2, t2, Rec (Binding name $ foldr DictAbs value'' (fst <$> cons1'')) rest')
         (Case input bs) -> do
           (s1, cons, inputType, input') <- w' input
           (bSubs,bs') <- inferBranches bs
@@ -405,11 +407,12 @@ w e = do
           let equations = foldr (\(p,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
           subs <- either (throwError . review _TUnificationError) pure $ unify equations
           let cons' = fmap (second $ substitute subs) $ cons ++ join (fmap (\(_, c, _, _) -> c) bs')
+          let bs'' = N.zip (fst <$> bs) ((\(_, _, _, b) -> b) <$> N.fromList bs')
           pure
             ( subs <> bSubs <> s1
             , cons'
             , substitute subs outputType
-            , e
+            , Case input' bs''
             )
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))

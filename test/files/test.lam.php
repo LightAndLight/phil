@@ -74,31 +74,33 @@ $and = function($a) {
 
 $eqList = new Eq(function($ev5) use ($and, $eq) {
     return (function() use ($and, $eq, $ev5) {
-        $eqPrime = function($ev4) use ($and, $eq, &$eqPrime, $ev5) {
-            return function($la) use ($and, $eq, &$eqPrime, $ev4, $ev5) {
-                return function($lb) use ($and, $eq, &$eqPrime, $ev4, $ev5, $la) {
-                    return (function() use ($and, $eq, &$eqPrime, $ev4, $ev5, $la, $lb) {
-                        if ($la instanceof NilCon) {
-                            return (function() use (&$eqPrime, $ev4, $ev5, $la, $lb) {
-                                if ($lb instanceof NilCon) {
-                                    return true;
-                                }
-                                return false;
-                            })();
-                        }
-                        if ($la instanceof ConsCon) {
-                            $a = $la->values[0];
-                            $resta = $la->values[1];
-                            return (function() use ($a, $and, $eq, &$eqPrime, $ev4, $ev5, $la, $lb, $resta) {
-                                if ($lb instanceof ConsCon) {
-                                    $b = $lb->values[0];
-                                    $restb = $lb->values[1];
-                                    return $and($eq($a)($b))($eqPrime($resta)($restb));
-                                }
-                                return false;
-                            })();
-                        }
-                    })();
+        $eqPrime = function($ev6) use ($and, $eq, &$eqPrime, $ev5) {
+            return function($ev7) use ($and, $eq, &$eqPrime, $ev5, $ev6) {
+                return function($la) use ($and, $eq, &$eqPrime, $ev5, $ev6, $ev7) {
+                    return function($lb) use ($and, $eq, &$eqPrime, $ev5, $ev6, $ev7, $la) {
+                        return (function() use ($and, $eq, &$eqPrime, $ev5, $ev6, $ev7, $la, $lb) {
+                            if ($la instanceof NilCon) {
+                                return (function() use (&$eqPrime, $ev5, $ev6, $ev7, $la, $lb) {
+                                    if ($lb instanceof NilCon) {
+                                        return true;
+                                    }
+                                    return false;
+                                })();
+                            }
+                            if ($la instanceof ConsCon) {
+                                $a = $la->values[0];
+                                $resta = $la->values[1];
+                                return (function() use ($a, $and, $eq, &$eqPrime, $ev5, $ev6, $ev7, $la, $lb, $resta) {
+                                    if ($lb instanceof ConsCon) {
+                                        $b = $lb->values[0];
+                                        $restb = $lb->values[1];
+                                        return $and($eq($ev6)($a)($b))($eqPrime($ev7)($resta)($restb));
+                                    }
+                                    return false;
+                                })();
+                            }
+                        })();
+                    };
                 };
             };
         };
