@@ -2,15 +2,18 @@
 
 module Lambda.Core.Typecheck.Entailment where
 
-import           Control.Applicative
-import           Control.Monad.State
-import           Data.Map                          (Map)
+import Control.Applicative
+import Control.Monad.State
+import Data.Bifunctor
+import Data.Either
+import Data.Map (Map)
+import Data.Maybe
+import Data.Set (Set)
+
 import qualified Data.Map                          as M
-import           Data.Maybe
-import           Data.Set                          (Set)
 import qualified Data.Set                          as S
 
-import           Lambda.Core.Typecheck.Unification
+import Lambda.Core.Typecheck.Unification
 
 data Statement a
   = Or (Statement a) (Statement a)
@@ -78,8 +81,6 @@ cnfList sts = sts >>= conjAsList . cnf
 -- | the statements can be merged and that predicate can be discarded
 -- |
 -- | The `Ord` constraint is required for easy `Set` operations
-
-
 resolution :: Ord a => Statement a -> Statement a -> Maybe (Statement a)
 resolution as bs
   = let aSet = S.fromList (distAsList as)
@@ -96,7 +97,8 @@ resolution as bs
 
 -- | Search-based entailment
 -- |
--- | Super slow
+-- | Basically tries to find counter-examples by iterating over the truth
+-- | table.
 -- |
 -- | The `Ord` constraint is needed for easy `Set` operations
 entailsSearch :: Ord a => [Statement a] -> Statement a -> Bool
@@ -207,27 +209,76 @@ vars (Apply' a b) = vars a `S.union` foldMap vars b
 vars (Variable' a) = S.singleton a
 vars _ = S.empty
 
-entailsForward :: Eq a => [Statement' a] -> Statement' a -> Bool
-entailsForward kb q = loop (initCounters kb) kb
+initCounters [] = ([], [])
+initCounters (clause : rest) = case clause of
+  Implies' (And' ps) q -> first ((ps, q) :) $ initCounters rest
+  Implies' p q -> first (([p], q) :) $ initCounters rest
+  _ -> second (clause :) $ initCounters rest
+
+-- | Forward Chaining
+-- |
+-- | Forward chaining is based on the extended modus ponens, which states
+-- | that:
+-- @
+--   (p_1 ^ p_2 ^ ... ^ p_n) => q ,  (p_1 ^ p_2 ^ ... ^ p_n)
+--   -------------------------------------------------------
+--                             q
+-- @
+-- | A clause in the form '(p_1 ^ p_2 ^ ... ^ p_n) => q', where 'p_i' and
+-- | 'q' are atomic (i.e. are symbols, variables, or some combination of
+-- | the two) is known as a horn clause.
+-- |
+-- | So if we have many horn clauses (unknowns), plus some other atomic
+-- | clauses (knowns), forward chaining just repeatedly asks:
+-- |
+-- | "Is the goal an element of the things that I know?"
+-- |
+-- | If the answer is yes, then the entailment succeeds.
+-- |
+-- | If not, it then tries to infer new knowledge by using the generalized
+-- | modus ponens. If new knowledge can be inferred, the process repeats.
+-- | If no new knowledge can be inferred then the entailment fails.
+entailsForward :: (Show a, Eq a) => [Statement' a] -> Statement' a -> Bool
+entailsForward kb g
+  = let (unknowns, knowns) = initCounters kb
+    in loop [] [] unknowns knowns
   where
-    initCounters [] = []
-    initCounters (clause : rest) = case clause of
-      Implies' (And' ps) q -> (length ps, ps, q) : initCounters rest
-      _ -> (0, [], clause) : initCounters rest
+    -- Repeatedly loop over the 'unknowns'
+    --
+    -- Once we get to the end, check whether we deduced anything new
+    loop new seen [] knowns
+      -- If nothing new was deduced, then our goal is required to exist
+      -- our 'knowns'
+      | null new = any (isRight . unify) (pure . (,) g <$> knowns)
+      -- If we did, start again
+      | otherwise = loop [] [] seen knowns
+    loop new seen (unknown : rest) knowns
+      -- Attempt to apply the generalized modus ponens
+      = case reduce unknown knowns of
+          -- If the entire left side has been eliminated, then q is a new
+          -- deduction
+          ([], q) -> loop (q : new) seen rest (q : knowns)
+          unknown' -> loop new (unknown' : seen) rest knowns
 
-    loop toInfer [] = False
-    loop toInfer (s : rest)
-      = let (toInfer', kb') = updateKnowledge s counters
-        in isJust (unify [(q, s)]) || loop counters' (kb' ++ rest)
+    -- Attempt to reduce the left side of an unknown
+    reduce unknown [] = unknown
+    reduce (ps, q) (known : rest) = case ps of
+      [] -> ([], q)
+      _ -> case firstToUnify ps known of
+        Nothing -> reduce (ps, q) rest
+        Just (sub, ps') ->
+          reduce (substitute sub <$> ps', substitute sub q) rest
 
-    updateKnowledge s [] = ([], [])
-    updateKnowledge s ((ps, q) : rest) = case unifyWith s ps of
-      Nothing -> first ((ps, q) :) $ updateKnowledge s rest
-      Just (sub, ps')
-        | null ps' -> second (substitute sub q :) $ updateKnowledge s rest
-        | otherwise -> first ((ps, substitute sub q) :) updateKnowledge s rest
-
-    unify
+    -- Finds the first statement in a list that unifies with a fact,
+    -- and returns the unifying substitution along with the list minus the
+    -- unifying element
+    firstToUnify = go []
+      where
+        go _ [] fact = Nothing
+        go seen (p:ps) fact = case unify [(p, fact)] of
+          Left _ -> go (p:seen) ps fact
+          Right sub -> Just (sub, seen ++ ps)
+    
 
 a = Apply'
 s = Symbol'
@@ -237,10 +288,30 @@ i = Implies'
 test = entailsForward
   [ i (And' [s "American" `a` [v "x"], s "Weapon" `a` [v "y"], s "Sells" `a` [v "x", v "y", v "z"], s "Hostile" `a` [v "z"]]) (s "Criminal" `a` [v "x"])
   , s "Owns" `a` [s "Nono", s "M1"]
-  , s "Missle" `a` [s "M1"]
-  , i (And' [s "Owns" `a` [s "Nono", v "x"], s "Missle" `a` [v "x"]]) (s "Sells" `a` [s "West", v "x", s "Nono"])
-  , i (s "Missle" `a` [v "x"]) (s "Weapon" `a` [v "x"])
+  , s "Missile" `a` [s "M1"]
+  , i (And' [s "Owns" `a` [s "Nono", v "x"], s "Missile" `a` [v "x"]]) (s "Sells" `a` [s "West", v "x", s "Nono"])
+  , i (s "Missile" `a` [v "x"]) (s "Weapon" `a` [v "x"])
   , i (s "Enemy" `a` [v "x", s "America"]) (s "Hostile" `a` [v "x"])
   , s "American" `a` [s "West"]
   , s "Enemy" `a` [s "Nono", s "America"]
   ] (Apply' (Symbol' "Criminal") [Symbol' "West"])
+
+kb1 = [ i (s "A" `a` [v "x"]) (s "B" `a` [v "x"])
+  , i (s "B" `a` [v "y"]) (s "C" `a` [v "y"])
+  , s "A" `a` [s "hello"]
+  ]
+
+test1 = entailsForward kb1 (s "C" `a` [s "hello"])
+
+test2 = entailsForward
+  [ i (s "A" `a` [v "x"]) (s "B" `a` [v "x"])
+  , i (s "B" `a` [v "y"]) (s "C" `a` [v "y"])
+  , s "C" `a` [s "hello"]
+  ] (s "A" `a` [s "hello"])
+
+test3 = entailsForward
+  [ i (And' [s "A" `a` [v "x"], s "B" `a` [v "x"]]) (s "C" `a` [v "x"])
+  , s "A" `a` [s "hello"]
+  , s "B" `a` [s "hello"]
+  ] (s "C" `a` [s "hello"])
+
