@@ -31,10 +31,10 @@ _TyFun' ty ty' = only $ TyFun ty ty'
 makePrisms ''TypeScheme
 
 _Forall' :: [Identifier] -> [Type] -> Prism' TypeScheme Type
-_Forall' vars cons = prism' (Forall (S.fromList vars) (S.fromList cons)) $
+_Forall' vars cons = prism' (Forall (S.fromList vars) cons) $
   \scheme -> case scheme of
     Forall vars' cons' ty
-      | S.fromList vars == vars' && S.fromList cons == cons' -> Just ty
+      | S.fromList vars == vars' && cons == cons' -> Just ty
       | otherwise -> Nothing
     _ -> Nothing
 

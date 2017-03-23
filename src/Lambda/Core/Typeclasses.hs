@@ -2,12 +2,12 @@
 module Lambda.Core.Typeclasses
   ( HasTcContext(..)
   , TypeclassEntry(..)
+  , buildDictionary
   , checkConstraints
   , equalUpToRenaming
   , elementUpToRenaming
   , getClass
   , getInst
-  , subsetUpToRenaming
   , entails
   ) where
 
@@ -16,6 +16,7 @@ import Control.Applicative
 import Data.Bifunctor
 import Control.Monad.Except
 import Control.Monad.Reader
+import Data.Traversable
 import Data.Monoid
 import Control.Monad.State
 import Data.Foldable
@@ -28,6 +29,7 @@ import Data.Set (Set)
 
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Expr
+import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Types
 import           Lambda.Core.Kinds
@@ -35,8 +37,8 @@ import Lambda.Sugar (AsSyntaxError(..), asClassDef)
 import Lambda.Core.Typecheck.Unification
 
 data TypeclassEntry
-  = TceInst (Set Type) Type (Map Identifier Expr)
-  | TceClass (Set Type) Type (Map Identifier TypeScheme)
+  = TceInst [Type] Type (Map Identifier Expr)
+  | TceClass [Type] Type (Map Identifier TypeScheme)
   deriving (Eq, Show)
 
 getClass :: Identifier -> [TypeclassEntry] -> Maybe TypeclassEntry
@@ -68,39 +70,60 @@ equalUpToRenaming ty ty' = either (const Nothing) Just $ unify [(ty, ty')]
 -- case elementUpToRenaming a b of
 --   Just subs => substitute subs a `S.member` S.map (substitute subs) b
 --   Nothing => true
-elementUpToRenaming :: Type -> Set Type -> Maybe (Substitution Type)
-elementUpToRenaming ty tys = asum . fmap (equalUpToRenaming ty) $ S.toList tys
+elementUpToRenaming :: Type -> [Type] -> Maybe (Substitution Type)
+elementUpToRenaming ty tys = asum $ fmap (equalUpToRenaming ty) tys
 
--- forall a : Set Type, b : Set Type
--- case subsetUpToRenaming a b of
---   Just subs => S.map (substitute subs a) `S.isSubsetOf` S.map (substitute subs) b
---   Nothing => true
-subsetUpToRenaming :: Set Type -> Set Type -> Maybe (Substitution Type)
-subsetUpToRenaming sub = go mempty (S.toList sub)
+entails
+  :: (HasEVarCount s, MonadState s m)
+  => [TypeclassEntry]
+  -> [(EVar, Type)]
+  -> (EVar, Type)
+  -> m (Maybe Dictionary)
+entails ctxt p pi
+  | fst pi `S.member` S.fromList (fst <$> p) = fmap fst <$> entails' ctxt (first Variable <$> p) pi
+  | otherwise = pure Nothing
   where
-    go :: Substitution Type -> [Type] -> Set Type -> Maybe (Substitution Type)
-    go subs [] super = Just subs
-    go subs (ty:rest) super = do
-      let super' = S.map (substitute subs) super
-      subs' <- elementUpToRenaming (substitute subs ty) super'
-      liftA2 (<>) (go (subs' <> subs) rest super') $ pure subs'
+    findPred :: (EVar, Type) -> [(Dictionary, Type)] -> Maybe (Dictionary, [(EVar, Dictionary)])
+    findPred (var, ty) = go
+      where
+        go [] = Nothing
+        go ((dict, ty') : rest)
+          | ty == ty' = Just (dict, [(var, dict)])
+          | otherwise = go rest
 
-entails :: [TypeclassEntry] -> Set Type -> Type -> Bool
-entails ctxt p pi = entails' ctxt p pi
-  where
-    entails' tctxt p pi'
-      | S.member pi' p = True
-      | otherwise = case tctxt of
-          [] -> False
+    entails' :: (HasEVarCount s, MonadState s m) => [TypeclassEntry] -> [(Dictionary, Type)] -> (EVar, Type) -> m (Maybe (Dictionary, [(EVar, Dictionary)]))
+    entails' tctxt p pi' = case tctxt of
+          [] -> pure $ findPred pi' p
           (TceClass p' pi _ : context)
-            | Just subs <- elementUpToRenaming pi' p'
-            , entails' ctxt (S.map (substitute subs) p) (substitute subs pi) -> True
+            | Just subs <- elementUpToRenaming (snd pi') p' -> do
+                let newPi = substitute subs pi
+                eVar <- freshEVar
+                res <- entails' ctxt (fmap (second $ substitute subs) p) (eVar, newPi)
+                case res of
+                  Just (dict, dSubs) -> pure $ Just (Select dict (snd pi'), dSubs)
+                  Nothing -> entails' context p pi'
             | otherwise -> entails' context p pi'
           (TceInst p' pi _ : context)
-            | Just subs <- equalUpToRenaming pi' pi
-            , all (entails' ctxt $ S.map (substitute subs) p) (S.map (substitute subs) p')
-            -> True
+            | Just subs <- equalUpToRenaming (snd pi') pi -> do
+                p'eVars <- for p' $ \p -> (,) <$> freshEVar <*> pure p
+                res <- traverse
+                  (entails' ctxt $ fmap (second $ substitute subs) p)
+                  (fmap (second $ substitute subs) p'eVars)
+                case sequence res of
+                  Just dicts -> do
+                    let dSubs = join $ fmap snd dicts
+                    let runSubs d = foldr subDict d dSubs
+                    pure $ Just (Construct (Dict . substitute subs $ snd pi') $ fmap (runSubs . fst) dicts, dSubs)
+                  Nothing -> entails' context p pi'
             | otherwise -> entails' context p pi'
+
+buildDictionary
+  :: (HasEVarCount s, MonadState s m)
+  => [TypeclassEntry]
+  -> [(EVar, Type)]
+  -> (EVar, Type)
+  -> m (Maybe (EVar, Dictionary))
+buildDictionary tctxt cons ty = fmap ((,) $ fst ty) <$> entails tctxt cons ty
 
 checkConstraints
   :: ( AsKindError e
@@ -109,14 +132,12 @@ checkConstraints
      , MonadReader r m
      , HasFreshCount s
      , MonadState s m
-     ) => S.Set Type -> m (Substitution Kind)
-checkConstraints = go . S.toList
-  where
-    go [] = pure mempty
-    go [con] = do
-      (subs, k) <- inferKind con
-      either (throwError . review _KUnificationError) (const $ pure subs) $ unify [(k, Constraint)]
-    go (con:rest) = do
-      subs <- go [con]
-      subs' <- local (over kindTable $ subKindTable subs) $ go rest
-      pure $ subs' <> subs
+     ) => [Type] -> m (Substitution Kind)
+checkConstraints [] = pure mempty
+checkConstraints [con] = do
+  (subs, k) <- inferKind con
+  either (throwError . review _KUnificationError) (const $ pure subs) $ unify [(k, Constraint)]
+checkConstraints (con:rest) = do
+  subs <- checkConstraints [con]
+  subs' <- local (over kindTable $ subKindTable subs) $ checkConstraints rest
+  pure $ subs' <> subs

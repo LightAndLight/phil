@@ -61,7 +61,7 @@ subTypeScheme (Substitution subs) scheme = go (freeInScheme scheme) subs scheme
       | not (var `S.member` frees) = go frees rest scheme
       | Forall vars cons ty <- scheme
       , let runSub = substitute (Substitution [sub])
-      = go frees rest (Forall vars (S.map runSub cons) $ runSub ty)
+      = go frees rest (Forall vars (fmap runSub cons) $ runSub ty)
 
 -- | Gets the C from a type of format: C a_1 a_2 .. a_n
 getConstructor :: Type -> Maybe TyCon
@@ -71,7 +71,7 @@ getConstructor _ = Nothing
 
 pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 
-data TypeScheme = Forall (Set Identifier) (Set Type) Type deriving (Eq, Show)
+data TypeScheme = Forall (Set Identifier) [Type] Type deriving (Eq, Show)
 
 freeInType :: Type -> Set Identifier
 freeInType (TyVar name) = S.singleton name
@@ -97,11 +97,10 @@ showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
 showType (TyCon FunCon) = "(->)"
 showType (TyCon (TypeCon con)) = con
 
-showConstraints :: Set Type -> String
+showConstraints :: [Type] -> String
+showConstraints [] = ""
 showConstraints cons
-  | cons == S.empty = ""
-  | otherwise
-  = let cons' = intercalate ", " . fmap showType $ S.toList cons
+  = let cons' = intercalate ", " $ fmap showType cons
     in (if length cons > 1 then "(" ++ cons' ++ ")"
        else cons') ++ "=> "
 

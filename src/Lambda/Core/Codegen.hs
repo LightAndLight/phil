@@ -149,7 +149,14 @@ genDictionary (Dict ty) = do
   let tyName = genInstName name args
   scope %= M.insertWith (flip const) tyName Value
   pure $ PHPExprVar tyName
-genDictionary _ = error "genDictionary: not implemented"
+genDictionary (Select dict ty) = do
+  let Right (name, args) = asClassInstance ty :: Either SyntaxError (Identifier, [Type])
+  dict' <- genDictionary dict
+  pure $ PHPExprClassAccess dict' (phpId name) Nothing
+genDictionary (Construct dict args) = do
+  dict' <- genDictionary dict
+  args' <- traverse genDictionary args
+  pure $ PHPExprFunctionCall dict' args'
 
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
 genPHPExpr (Id name) = do

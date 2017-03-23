@@ -34,7 +34,7 @@ data SyntaxError = MalformedHead Type
 makeClassyPrisms ''SyntaxError
 
 -- | Naive generalization that closes over every free variable
-generalize :: S.Set Type -> Type -> TypeScheme
+generalize :: [Type] -> Type -> TypeScheme
 generalize constraints ty
   = Forall (foldMap vars constraints `S.union` vars ty) constraints ty
   where
@@ -90,8 +90,8 @@ data Definition
   = Data Identifier [Identifier] (NonEmpty C.ProdDecl)
   | TypeSignature Identifier TypeScheme
   | Function FunctionDefinition
-  | Class (S.Set Type) Type [(Identifier, Type)]
-  | Instance (S.Set Type) Type [FunctionDefinition]
+  | Class [Type] Type [(Identifier, Type)]
+  | Instance [Type] Type [FunctionDefinition]
 
 data Expr
   = Id Identifier

@@ -106,7 +106,7 @@ data TypeError
   | NotDefined Identifier
   | DuplicateTypeSignatures Identifier
   | KindInferenceError KindError
-  | CouldNotDeduce (Set Type) (Set Type)
+  | CouldNotDeduce [Type] [Type]
   | NoSuchClass Identifier
   | NonClassFunction Identifier [Type] Identifier
   | MissingClassFunctions Identifier [Type] (Set Identifier)
@@ -149,12 +149,13 @@ generalize
 generalize env expr cons ty = do
   ctxt <- view context
   let frees = freeInType ty
-  let expr' = foldr (uncurry replaceDictionaries) expr cons
-  let cons' = filter (\(_, ty) -> freeInType ty /= S.empty) cons
-  let expr'' = foldr DictAbs expr' $ fst <$> cons'
+  let (cons', solved) = partition (\(_, ty) -> freeInType ty /= S.empty) cons
+  let expr' = foldr (uncurry replaceDictionaries) expr $ fmap (second Dict) (traceShow "solved" $ traceShowId solved)
+  -- let expr'' = foldr DictAbs expr' $ fst <$> (traceShow "cons" $ traceShowId cons')
+  let expr'' = foldr DictAbs expr $ fst <$> (traceShow "cons" $ traceShowId cons')
   pure
     ( expr''
-    , Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty (snd <$> cons')) `S.difference` free ctxt) (S.fromList $ snd <$> cons') ty
+    , Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty (snd <$> cons')) `S.difference` free ctxt) (snd <$> cons') ty
     )
 
 fresh :: (HasFreshCount s, HasKindTable s, K.HasFreshCount s, MonadState s m) => m Type
@@ -175,10 +176,10 @@ instantiate ::
   , MonadReader r m
   )
   => TypeScheme
-  -> m (Set Type, Type)
+  -> m ([Type], Type)
 instantiate (Forall vars cons ty) = do
   subs <- Substitution <$> for (S.toList vars) makeFreshVar
-  pure (S.map (substitute subs) cons, substitute subs ty)
+  pure (fmap (substitute subs) cons, substitute subs ty)
   where
     makeFreshVar var = do
       var' <- fresh
@@ -235,12 +236,17 @@ special scheme scheme'
         subs <- Substitution . M.toList <$> (use kindTable >>= runReaderT (unifyTypes ty ty'))
         use kindTable >>= runReaderT (kindPreservingSubstitution subs)
         tctxt <- view tcContext
-        let newCons' = S.map (substitute subs) cons' -- more special
-            newCons = S.map (substitute subs) cons -- more general
-            generalCons = cons `S.union` newCons'
-            specialCons = cons' `S.union` newCons
-        unless (all (entails tctxt generalCons) specialCons) .
-          throwError $ _CouldNotDeduce # (specialCons, newCons')
+        let newCons' = fmap (substitute subs) cons' -- more special
+            newCons = fmap (substitute subs) cons -- more general
+            generalCons = cons ++ newCons'
+            specialCons = cons' ++ newCons
+        dicts <- flip evalStateT (0 :: Int) $ do
+          generalCons' <- for generalCons $ \g -> (,) <$> freshEVar <*> pure g
+          specialCons' <- for specialCons $ \s -> (,) <$> freshEVar <*> pure s
+          traverse (entails tctxt generalCons') specialCons'
+        case sequence dicts of
+          Just{} -> pure ()
+          Nothing -> throwError $ _CouldNotDeduce # (specialCons, newCons')
   where
     unifyTypes ty ty' = unifyTypes' ty ty' M.empty
       where
@@ -299,14 +305,14 @@ patType ::
   -> m (Map Identifier TypeScheme,Type)
 patType (PatId name) = do
   ty <- fresh
-  return (M.singleton name $ Forall S.empty S.empty ty,ty)
+  return (M.singleton name $ Forall S.empty [] ty,ty)
 patType (PatCon conName args) = do
   (_,conTy) <- instantiate =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
       argsLen = length args
       argTysLen = length argTys
   when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
-  let boundVars = foldr (\(arg,argTy) -> M.insert arg (Forall S.empty S.empty argTy)) M.empty $ zip args argTys
+  let boundVars = foldr (\(arg,argTy) -> M.insert arg (Forall S.empty [] argTy)) M.empty $ zip args argTys
   return (boundVars,retTy)
 patType (PatLit (LitInt p)) = return (M.empty,TyPrim Int)
 patType (PatLit (LitString p)) = return (M.empty,TyPrim String)
@@ -314,29 +320,20 @@ patType (PatLit (LitChar p)) = return (M.empty,TyPrim Char)
 patType (PatLit (LitBool p)) = return (M.empty,TyPrim Bool)
 patType PatWildcard = (,) M.empty <$> fresh
 
-replaceDictionaries :: EVar -> Type -> Expr -> Expr
-replaceDictionaries eVar ty expr
-  | freeInType ty /= S.empty = expr
-  | otherwise = case expr of
-      Prod cons exprs -> Prod cons $ fmap (replaceDictionaries eVar ty) exprs
-      App f x -> App (replaceDictionaries eVar ty f) (replaceDictionaries eVar ty x)
-      Abs name body -> Abs name (replaceDictionaries eVar ty body)
-      DictAbs eVar' body
-        | eVar /= eVar' -> DictAbs eVar' (replaceDictionaries eVar ty body)
-        | otherwise -> expr
-      DictApp expr' evidence ->
-        let newExpr = replaceDictionaries eVar ty expr'
-          in case evidence of
-            Variable eVar'
-              | eVar == eVar' -> DictApp newExpr (Dict ty)
-              | otherwise -> DictApp newExpr evidence
-      DictSel name (Variable eVar')
-        | eVar == eVar' -> DictSel name (Dict ty)
-        | otherwise -> expr
-      Let (Binding name value) rest -> Let (Binding name $ replaceDictionaries eVar ty value) (replaceDictionaries eVar ty rest)
-      Rec (Binding name value) rest -> Rec (Binding name $ replaceDictionaries eVar ty value) (replaceDictionaries eVar ty rest)
-      Case input branches -> Case (replaceDictionaries eVar ty input) $ fmap (second $ replaceDictionaries eVar ty) branches
-      _ -> expr
+replaceDictionaries :: EVar -> Dictionary -> Expr -> Expr
+replaceDictionaries eVar dict expr = case expr of
+    Prod cons exprs -> Prod cons $ fmap (replaceDictionaries eVar dict) exprs
+    App f x -> App (replaceDictionaries eVar dict f) (replaceDictionaries eVar dict x)
+    Abs name body -> Abs name (replaceDictionaries eVar dict body)
+    DictAbs eVar' body
+      | eVar /= eVar' -> DictAbs eVar' (replaceDictionaries eVar dict body)
+      | otherwise -> expr
+    DictApp expr' evidence -> DictApp (replaceDictionaries eVar dict expr') $ subDict (eVar, dict) evidence
+    DictSel name evidence -> DictSel name $ subDict (eVar, dict) evidence
+    Let (Binding name value) rest -> Let (Binding name $ replaceDictionaries eVar dict value) (replaceDictionaries eVar dict rest)
+    Rec (Binding name value) rest -> Rec (Binding name $ replaceDictionaries eVar dict value) (replaceDictionaries eVar dict rest)
+    Case input branches -> Case (replaceDictionaries eVar dict input) $ fmap (second $ replaceDictionaries eVar dict) branches
+    _ -> expr
 
 w :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => Expr -> m (Expr, TypeScheme)
 w e = do
@@ -358,9 +355,11 @@ w e = do
     w' e = case e of
         (Error _) -> (,,,) mempty [] <$> fresh <*> pure e
         (Id name) -> do
-          (cons,ty) <- lookupId name >>= instantiate
-          cons' <- for (S.toList cons) $ \c -> (,) <$> freshEVar <*> pure c
-          pure (mempty, cons', ty, foldl' DictApp e (Variable . fst <$> cons'))
+          (cons, ty) <- lookupId name >>= instantiate
+          tctxt <- use tcContext
+          cons' <- for cons $ \c -> (,) <$> freshEVar <*> pure c
+          Just dicts <- sequence <$> traverse (buildDictionary tctxt cons') cons'
+          pure (mempty, cons', ty, foldl' DictApp e (snd <$> dicts))
         (Lit (LitInt _)) -> return (mempty, [], TyPrim Int, e)
         (Lit (LitString _)) -> return (mempty, [], TyPrim String, e)
         (Lit (LitChar _)) -> return (mempty, [], TyPrim Char, e)
@@ -378,7 +377,7 @@ w e = do
             )
         (Abs x expr) -> do
           b <- fresh
-          (s1, cons, t1, expr') <- local (over context $ M.insert x (Forall S.empty S.empty b)) $ w' expr
+          (s1, cons, t1, expr') <- local (over context $ M.insert x (Forall S.empty [] b)) $ w' expr
           return (s1, cons, TyFun (substitute s1 b) t1, Abs x expr')
         (Let (Binding x e) e') -> do
           (s1, cons1, t1, e1) <- w' e
@@ -389,7 +388,7 @@ w e = do
           return (s2 <> s1, cons2, t2, Let (Binding x $ foldr DictAbs e1 (fst <$> cons1)) e2)
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
-          (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty S.empty freshVar) $ w' value
+          (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty [] freshVar) $ w' value
           s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
           let cons1' = fmap (second $ substitute s2) cons1
           (s3, cons2, t2, rest', cons1'', value'') <- local (over context $ fmap (subTypeScheme s1)) $ do
@@ -450,7 +449,7 @@ checkDefinition def@(Class supers constructor params funcs) = do
   (subs, classKind) <- flip runReaderT (M.fromList paramKinds `M.union` table) $ do
     subs <- checkConstraints supers
     local (subKindTable subs) $ do
-      let freeVars = foldMap freeInType (fmap snd funcs) `S.difference` foldMap freeInType (supers `S.union` S.singleton constructorTy)
+      let freeVars = foldMap freeInType (S.fromList $ fmap snd funcs) `S.difference` foldMap freeInType (S.fromList $ constructorTy : supers)
       varsWithKinds <- fmap M.fromList . for (S.toList freeVars) $ \var -> (,) var <$> freshKindVar
       local (M.union varsWithKinds) $ do
         subs' <- checkSignatures $ fmap snd funcs

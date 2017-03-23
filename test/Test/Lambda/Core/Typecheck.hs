@@ -139,8 +139,8 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
     describe "success" $ do
       let ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
-              , TceInst S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)) undefined
+              [ TceClass [] (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
+              , TceInst [] (TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)) undefined
               ]
             }
       it "forall a. a -> a [>=] forall a. Constraint a => a -> a" $
@@ -151,7 +151,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
         special ctxt constrainedId intToInt `shouldSatisfy` has _Right
 
     describe "failure" $ do
-      let ctxt = emptyContexts { _testTcContext = [TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined] }
+      let ctxt = emptyContexts { _testTcContext = [TceClass [] (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined] }
       it "forall a. Constraint a => a -> a [>=] Int -> Int but there is no instance Constraint Int" $
         special ctxt constrainedId intToInt `shouldSatisfy` has (_Left . _CouldNotDeduce)
       let constrainedId = _Forall'
@@ -162,8 +162,8 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
             # _TyFun # (_TyVar # "a", _TyVar # "a")
           ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
-              , TceInst S.empty (TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)) undefined
+              [ TceClass [] (TyApp (TyCon $ TypeCon "Constraint") (TyVar "b")) undefined
+              , TceInst [] (TyApp (TyCon $ TypeCon "Constraint") (TyPrim Int)) undefined
               ]
             }
       it "instance Constraint Int where ... => forall a. (Constraint a, Other a) => a -> a [>=] Int -> Int but there is no class `Other`" $
@@ -193,21 +193,21 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
                     [TyApp (TyCon $ TypeCon "Eq") $ TyVar "a"]
                     # _TyFun # (_TyVar # "a", _TyFun # (_TyVar # "a", _TyPrim # Bool))
               , _testTcContext =
-                  [ TceClass S.empty (TyApp (TyCon $ TypeCon "Eq") $ TyVar "a") undefined]
+                  [ TceClass [] (TyApp (TyCon $ TypeCon "Eq") $ TyVar "a") undefined]
               }
         it "\\x. \\y. eq y x : forall a. Eq a => a -> a -> Bool" $ do
           typeOf ctxt initialTestState (_Abs' "x" # _Abs' "y" # _App # (_App # (_Id # "eq", _Id # "y"), _Id # "x"))
             `shouldBe` (Right $
               Forall
                 (S.singleton "t2")
-                (S.singleton $ TyApp (TyCon $ TypeCon "Eq") (TyVar "t2"))
+                [TyApp (TyCon $ TypeCon "Eq") (TyVar "t2")]
                 (TyFun (TyVar "t2") $ TyFun (TyVar "t2") (TyPrim Bool)))
         it "\\x. eq x x : forall a. Eq a => a -> Bool" $ do
           typeOf ctxt initialTestState (_Abs' "x" # _App # (_App # (_Id # "eq", _Id # "x"), _Id # "x"))
             `shouldBe` (Right $
               Forall
                 (S.singleton "t1")
-                (S.singleton $ TyApp (TyCon $ TypeCon "Eq") (TyVar "t1"))
+                [TyApp (TyCon $ TypeCon "Eq") (TyVar "t1")]
                 (TyFun (TyVar "t1") (TyPrim Bool)))
         Test.Hspec.context "and : Bool -> Bool -> Bool" $ do
           let ctxtWithAnd = ctxt & over testContext
@@ -222,15 +222,13 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
               `shouldBe` (Right $
                 Forall
                   (S.fromList ["t2", "t6"])
-                  (S.fromList
-                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t2")
-                    , TyApp (TyCon $ TypeCon "Eq") (TyVar "t6")
-                    ]
-                  )
+                  [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t2")
+                  , TyApp (TyCon $ TypeCon "Eq") (TyVar "t6")
+                  ]
                   (TyFun (TyVar "t2") $ TyFun (TyVar "t6") $ TyPrim Bool))
           Test.Hspec.context "class Gt a where gt : a -> a -> Bool" $ do
             let ctxtWithGt = ctxtWithAnd
-                  & testTcContext <>~ [ TceClass S.empty (TyApp (TyCon $ TypeCon "Gt") $ TyVar "a") undefined ]
+                  & testTcContext <>~ [ TceClass [] (TyApp (TyCon $ TypeCon "Gt") $ TyVar "a") undefined ]
                   & over testContext
                     ( M.insert "gt" $
                         _Forall'
@@ -245,9 +243,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
                 `shouldBe` (Right $
                   Forall
                     (S.singleton "t5")
-                    (S.fromList
-                      [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t5")
-                      , TyApp (TyCon $ TypeCon "Gt") (TyVar "t5")
-                      ]
-                    )
+                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t5")
+                    , TyApp (TyCon $ TypeCon "Gt") (TyVar "t5")
+                    ]
                     (TyFun (TyVar "t5") $ TyPrim Bool))

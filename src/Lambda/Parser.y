@@ -106,16 +106,16 @@ Constructors : Constructor { $1 :| [] }
 DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
                | data cons '=' Constructors { Data $2 [] $4 }
 
-Predicates : A ',' A { S.fromList [$1,$3] }
-           | A ',' Predicates { S.insert $1 $3 }
+Predicates : A ',' A { [$1,$3] }
+           | A ',' Predicates { $1:$3 }
 
-Constraint : A { S.singleton $1 }
+Constraint : A { [$1] }
            | '(' Predicates ')' { $2 }
 
-Qualified : Ty { (S.empty, $1) }
+Qualified : Ty { ([], $1) }
           | Constraint '=>' Ty { ($1, $3) }
 
-TypeScheme : Ty { Forall S.empty S.empty $1 }
+TypeScheme : Ty { Forall S.empty [] $1 }
            | forall Args '.' Qualified { uncurry (Forall (S.fromList $2)) $4 }
 
 TypeSignature : ident ':' TypeScheme { TypeSignature $1 $3 }
@@ -132,7 +132,7 @@ ClassMembers : { [] }
              | ident ':' Ty { [($1, $3)] }
              | ident ':' Ty eol ClassMembers { ($1, $3):$5 }
 
-ClassDefinition : class A where '{' ClassMembers '}' { Class S.empty $2 $5 }
+ClassDefinition : class A where '{' ClassMembers '}' { Class [] $2 $5 }
                 | class Constraint '=>' A where '{' ClassMembers '}' { Class $2 $4 $7 }
 
 FunctionDefinitions : { [] }
@@ -142,7 +142,7 @@ FunctionDefinitions : { [] }
 TyCon : cons { TyCon (TypeCon $1) }
       | '(' '->' ')' { TyCon FunCon }
 
-InstanceDefinition : instance A where '{' FunctionDefinitions '}' { Instance S.empty $2 $5 }
+InstanceDefinition : instance A where '{' FunctionDefinitions '}' { Instance [] $2 $5 }
                    | instance Constraint '=>' A where '{' FunctionDefinitions '}' { Instance $2 $4 $7 }
 
 Definition : DataDefinition { $1 }
