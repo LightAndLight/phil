@@ -1,19 +1,23 @@
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Lambda.Core.Typecheck.Entailment where
 
-import Control.Applicative
-import Control.Monad.State
-import Data.Bifunctor
-import Data.Either
-import Data.Map (Map)
-import Data.Maybe
-import Data.Set (Set)
+import           Data.Monoid
+import           Data.List
+import           Data.Traversable
+import           Control.Applicative
+import           Control.Monad.State
+import           Data.Bifunctor
+import           Data.Either
+import           Data.Map (Map)
+import           Data.Maybe
+import           Data.Set (Set)
 
-import qualified Data.Map                          as M
-import qualified Data.Set                          as S
+import qualified Data.Map as M
+import qualified Data.Set as S
 
-import Lambda.Core.Typecheck.Unification
+import           Lambda.Core.Typecheck.Unification
 
 data Statement a
   = Or (Statement a) (Statement a)
@@ -184,26 +188,6 @@ isRenaming (Implies' left right) (Implies' left' right') = do
 isRenaming (Variable' var) (Variable' var') = Just [(var, var')]
 isRenaming _ _ = Nothing
 
-standardizeApart :: Set String -> [Statement' a] -> [Statement' a]
-standardizeApart seen = flip evalState (seen, M.empty, 0) . traverse standardize
-  where
-    standardize :: Statement' a -> State (Set String, Map String String, Int) (Statement' a)
-    standardize (Apply' a b) = Apply' <$> standardize a <*> traverse standardize b
-    standardize (Symbol' a) = pure $ Symbol' a
-    standardize (Variable' a) = do
-      (_, subs, _) <- get
-      case M.lookup a subs of
-        Just val -> pure $ Variable' val
-        Nothing -> freshVar a
-
-    freshVar :: String -> State (Set String, Map String String, Int) (Statement' a)
-    freshVar a = do
-      (seen, subs, count) <- get
-      let newVar = "v" ++ show count
-      if a `S.member` S.insert newVar seen
-        then put (seen, subs, count + 1) >> freshVar a
-        else put (S.insert newVar seen, M.insert a newVar subs, count + 1) >> pure (Variable' newVar)
-
 vars :: Statement' a -> Set String
 vars (Apply' a b) = vars a `S.union` foldMap vars b
 vars (Variable' a) = S.singleton a
@@ -241,7 +225,7 @@ initCounters (clause : rest) = case clause of
 entailsForward :: (Show a, Eq a) => [Statement' a] -> Statement' a -> Bool
 entailsForward kb g
   = let (unknowns, knowns) = initCounters kb
-    in loop [] [] unknowns knowns
+    in loop False [] unknowns knowns
   where
     -- Repeatedly loop over the 'unknowns'
     --
@@ -249,15 +233,15 @@ entailsForward kb g
     loop new seen [] knowns
       -- If nothing new was deduced, then our goal is required to exist
       -- our 'knowns'
-      | null new = any (isRight . unify) (pure . (,) g <$> knowns)
+      | new = loop False [] seen knowns
+      | otherwise = g `elem` knowns
       -- If we did, start again
-      | otherwise = loop [] [] seen knowns
     loop new seen (unknown : rest) knowns
       -- Attempt to apply the generalized modus ponens
       = case reduce unknown knowns of
           -- If the entire left side has been eliminated, then q is a new
           -- deduction
-          ([], q) -> loop (q : new) seen rest (q : knowns)
+          ([], q) -> loop True seen rest (q : knowns)
           unknown' -> loop new (unknown' : seen) rest knowns
 
     -- Attempt to reduce the left side of an unknown
@@ -278,15 +262,77 @@ entailsForward kb g
         go seen (p:ps) fact = case unify [(p, fact)] of
           Left _ -> go (p:seen) ps fact
           Right sub -> Just (sub, seen ++ ps)
-    
+
+-- | Standardizing apart
+-- |
+-- | Each horn clause in a knowledge base needs to have unique variables.
+-- | They will be used to generate substitutions, so if there are common
+-- | variables across horn clauses then infinite loops may form
+standardizeApart :: Statement' a -> State [String] (Statement' a)
+standardizeApart st = flip evalStateT M.empty $ case st of
+  Implies' p q -> Implies' <$> withFreshVariables p <*> withFreshVariables q
+  _ -> pure st
+  where
+    withFreshVariables st = case st of
+      Apply' a as ->
+        Apply' <$> withFreshVariables a <*> traverse withFreshVariables as
+      Implies' p q ->
+        Implies' <$> withFreshVariables p <*> withFreshVariables q
+      And' as -> And' <$> traverse withFreshVariables as
+      Symbol' a -> pure $ Symbol' a
+      Variable' name -> do
+        subs <- get
+        case M.lookup name subs of
+          Nothing -> do
+            new : rest <- lift get
+            lift $ put rest
+            put $ M.insert name new subs
+            pure $ Variable' new
+          Just name' -> pure $ Variable' name'
+
+
+-- | Backwards chaining
+-- |
+-- | Also based on generalized modus ponens, but starts by assuming the
+-- | goal.
+-- |
+-- | The backwards chaining process for knowledge base and a goal asks:
+-- |
+-- | "Is there anything in the knowledge base that could entail the goal?"
+-- |
+-- | If the goal exists in the knowledge base, then the answer is yes.
+-- | If there is a horn clause in the knowledge base with the goal on the
+-- | right side, then the entailment if and only if each clause on the
+-- | left side is also entailed by the knowledge base.
+entailsBackward :: (Show a, Eq a) => [Statement' a] -> Statement' a -> Bool
+entailsBackward kb g =
+  let fresh = ("v" ++) <$> fmap show [0..]
+      kb' = flip evalState fresh $
+        for kb standardizeApart
+  in not . null $ solve kb' mempty [g]
+  where
+    solve kb sub [] = [sub]
+    solve kb sub (goal : rest) = loop kb (substitute sub goal) []
+      where
+        loop [] goal' answers = answers
+        loop (r : kbs) goal' answers =
+          case r of
+            Implies' p q -> case unify [(q, goal')] of
+              Left _ -> loop kbs goal' answers
+              Right sub' -> case p of
+                And' ps ->
+                  solve kb (sub' <> sub) (nub $ ps ++ rest) ++ answers
+                _ -> solve kb (sub' <> sub) (nub $ p : rest) ++ answers
+            q -> case unify [(q, goal')] of
+              Left _ -> loop kbs goal' answers
+              Right sub' -> solve kb (sub' <> sub) rest ++ answers
 
 a = Apply'
 s = Symbol'
 v = Variable'
 i = Implies'
 
-test = entailsForward
-  [ i (And' [s "American" `a` [v "x"], s "Weapon" `a` [v "y"], s "Sells" `a` [v "x", v "y", v "z"], s "Hostile" `a` [v "z"]]) (s "Criminal" `a` [v "x"])
+kb1 = [ i (And' [s "American" `a` [v "x"], s "Weapon" `a` [v "y"], s "Sells" `a` [v "x", v "y", v "z"], s "Hostile" `a` [v "z"]]) (s "Criminal" `a` [v "x"])
   , s "Owns" `a` [s "Nono", s "M1"]
   , s "Missile" `a` [s "M1"]
   , i (And' [s "Owns" `a` [s "Nono", v "x"], s "Missile" `a` [v "x"]]) (s "Sells" `a` [s "West", v "x", s "Nono"])
@@ -294,24 +340,25 @@ test = entailsForward
   , i (s "Enemy" `a` [v "x", s "America"]) (s "Hostile" `a` [v "x"])
   , s "American" `a` [s "West"]
   , s "Enemy" `a` [s "Nono", s "America"]
-  ] (Apply' (Symbol' "Criminal") [Symbol' "West"])
-
-kb1 = [ i (s "A" `a` [v "x"]) (s "B" `a` [v "x"])
-  , i (s "B" `a` [v "y"]) (s "C" `a` [v "y"])
-  , s "A" `a` [s "hello"]
   ]
 
-test1 = entailsForward kb1 (s "C" `a` [s "hello"])
+test1f = entailsForward kb1 (Apply' (Symbol' "Criminal") [Symbol' "West"])
+test1b = entailsBackward kb1 (Apply' (Symbol' "Criminal") [Symbol' "West"])
 
-test2 = entailsForward
-  [ i (s "A" `a` [v "x"]) (s "B" `a` [v "x"])
+kb2 = [ i (s "A" `a` [v "x"]) (s "B" `a` [v "x"])
   , i (s "B" `a` [v "y"]) (s "C" `a` [v "y"])
-  , s "C" `a` [s "hello"]
-  ] (s "A" `a` [s "hello"])
+  , s "A" `a` [s "bool"]
+  , s "A" `a` [s "int"]
+  ]
 
-test3 = entailsForward
-  [ i (And' [s "A" `a` [v "x"], s "B" `a` [v "x"]]) (s "C" `a` [v "x"])
+test2f = entailsForward kb2 (s "C" `a` [v "Y"])
+test2b = entailsBackward kb2 (s "C" `a` [v "Y"])
+
+kb3 = [ i (And' [s "A" `a` [v "x"], s "B" `a` [v "x"]]) (s "C" `a` [v "x"])
   , s "A" `a` [s "hello"]
   , s "B" `a` [s "hello"]
-  ] (s "C" `a` [s "hello"])
+  ]
+  
+test3f = entailsForward kb3 (s "C" `a` [s "hello"])
+test3b = entailsBackward kb3 (s "C" `a` [s "hello"])
 
