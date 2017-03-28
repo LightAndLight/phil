@@ -27,22 +27,23 @@ freshEVar = do
 
 data Dictionary
   = Variable EVar
-  | Select Dictionary Type
-  | Construct Dictionary [Dictionary]
+  | Select Type Dictionary
+  | Construct Type [Dictionary]
   | Dict Type
   deriving (Eq, Show)
 
-evidenceVariables :: Dictionary -> Set EVar
-evidenceVariables (Variable e) = S.singleton e
-evidenceVariables (Select dict _) = evidenceVariables dict
-evidenceVariables (Construct dict dicts) = evidenceVariables dict `S.union` foldMap evidenceVariables dicts
-evidenceVariables _ = S.empty
+dictEVars :: Dictionary -> Set EVar
+dictEVars (Variable e) = S.singleton e
+dictEVars (Select _ dict) = dictEVars dict
+dictEVars (Construct _ dicts) = foldMap dictEVars dicts
+dictEVars _ = S.empty
 
 subDict :: (EVar, Dictionary) -> Dictionary -> Dictionary
 subDict (eVar, replacement) dict = case dict of
   Variable eVar'
     | eVar == eVar' -> replacement
     | otherwise -> dict
-  Select dict' ty -> Select (subDict (eVar, replacement) dict') ty
-  Construct dict' dicts -> Construct (subDict (eVar, replacement) dict') (fmap (subDict (eVar, replacement)) dicts)
+  Select ty dict' -> Select ty (subDict (eVar, replacement) dict')
+  Construct ty dicts ->
+    Construct ty (fmap (subDict (eVar, replacement)) dicts)
   Dict{} -> dict

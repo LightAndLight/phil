@@ -20,7 +20,9 @@ mkDerivation {
     base containers hspec lens mtl QuickCheck semigroups
   ];
   testToolDepends = [ alex happy ];
+  doHaddock = false;
   homepage = "https://github.com/githubuser/hindley-milner#readme";
   description = "Initial project template from stack";
   license = stdenv.lib.licenses.bsd3;
+  enableSplitObjs = false;
 }

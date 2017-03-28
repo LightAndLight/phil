@@ -15,27 +15,6 @@ instance Eq Bool where {
     }
 }
 
-asdf = let test a = eq a a in test true
+asdf a = eq a a
 
-data List a = Nil | Cons a (List a)
-
-and : Bool -> Bool -> Bool
-and a b = case a of {
-  true -> b;
-  _ -> false
-  }
-
-instance Eq a => Eq (List a) where {
-  eq = rec eq' la lb = case la of {
-    Nil -> case lb of {
-      Nil -> true;
-      _ -> false
-    };
-    Cons a resta -> case lb of {
-      Cons b restb -> and (eq a b) (eq' resta restb);
-      _ -> false
-    }
-  } in eq'
-}
-
-test = eq (Cons true Nil) (Cons true Nil)
+test = asdf true

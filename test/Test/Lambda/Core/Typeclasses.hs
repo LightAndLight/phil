@@ -10,8 +10,8 @@ import           Data.Traversable
 import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Types
 import           Lambda.Core.Typecheck.Unification
-import           Lambda.Core.Typeclasses           hiding (entails)
-import qualified Lambda.Core.Typeclasses           as T (entails)
+import           qualified Lambda.Core.Typecheck.Entailment as T (entails)
+import           Lambda.Core.Typeclasses
 
 import           Test.Hspec
 import           Test.Hspec.QuickCheck
@@ -24,10 +24,10 @@ instance Arbitrary TyCon where
   arbitrary = oneof [pure FunCon, TypeCon <$> arbitrary]
 
 entails :: [TypeclassEntry] -> [Type] -> Type -> Maybe Dictionary
-entails tctxt preds ty = flip evalState (0 :: Int) $ do
-  preds' <- for preds $ \p -> (,) <$> freshEVar <*> pure p
-  eVar <- freshEVar
-  T.entails tctxt preds' (eVar, ty)
+entails tctxt preds ty =
+  let preds' = flip evalState (0 :: Int) $
+        for preds $ \p -> (,) <$> (Variable <$> freshEVar) <*> pure p
+  in T.entails tctxt preds' ty
 
 sizedType :: Int -> Gen Type
 sizedType 0 = oneof [TyPrim <$> arbitrary, TyVar <$> listOf1 (elements ['a'..'z']), TyCon <$> arbitrary]

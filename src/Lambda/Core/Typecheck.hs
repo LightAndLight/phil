@@ -1,5 +1,4 @@
 {-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE RankNTypes       #-}
 {-# LANGUAGE ConstraintKinds       #-}
 {-# LANGUAGE FlexibleContexts       #-}
 
@@ -38,6 +37,7 @@ import           Lambda.Core.AST.Pattern
 import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
 import Lambda.Core.Kinds hiding (HasFreshCount(..))
 import Lambda.Core.Typeclasses
+import Lambda.Core.Typecheck.Entailment
 import Lambda.Core.Typecheck.Unification
 
 data InferenceState
@@ -148,15 +148,15 @@ generalize
      ) => env -> Expr -> [(EVar, Type)] -> Type -> m (Expr, TypeScheme)
 generalize env expr cons ty = do
   ctxt <- view context
-  let frees = freeInType ty
-  let (cons', solved) = partition (\(_, ty) -> freeInType ty /= S.empty) cons
-  let expr' = foldr (uncurry replaceDictionaries) expr $ fmap (second Dict) (traceShow "solved" $ traceShowId solved)
-  -- let expr'' = foldr DictAbs expr' $ fst <$> (traceShow "cons" $ traceShowId cons')
-  let expr'' = foldr DictAbs expr $ fst <$> (traceShow "cons" $ traceShowId cons')
-  pure
-    ( expr''
-    , Forall ((frees `S.union` foldr (\el set -> freeInType el `S.union` set) S.empty (snd <$> cons')) `S.difference` free ctxt) (snd <$> cons') ty
-    )
+  ~() <- traceShow expr $ pure ()
+  ~() <- traceShow cons $ pure ()
+  ~() <- traceShow ty $ pure ()
+  let expr' = foldr (uncurry replaceDicts) expr $
+        buildDicts (env ^. tcContext) cons
+  let eVars = exprEVars expr'
+  let cons' = filter (\c -> fst c `elem` eVars) cons
+  let frees = freeInType ty `S.union` foldMap (freeInType . snd) cons'
+  pure (foldr DictAbs expr' eVars, Forall frees (snd <$> cons') ty)
 
 fresh :: (HasFreshCount s, HasKindTable s, K.HasFreshCount s, MonadState s m) => m Type
 fresh = do
@@ -240,11 +240,10 @@ special scheme scheme'
             newCons = fmap (substitute subs) cons -- more general
             generalCons = cons ++ newCons'
             specialCons = cons' ++ newCons
-        dicts <- flip evalStateT (0 :: Int) $ do
-          generalCons' <- for generalCons $ \g -> (,) <$> freshEVar <*> pure g
-          specialCons' <- for specialCons $ \s -> (,) <$> freshEVar <*> pure s
-          traverse (entails tctxt generalCons') specialCons'
-        case sequence dicts of
+        generalCons' <- flip evalStateT (0 :: Int) $
+          for generalCons $ \g -> (,) <$> (Variable <$> freshEVar) <*> pure g
+        let dicts = sequence $ fmap (entails tctxt generalCons') specialCons
+        case dicts of
           Just{} -> pure ()
           Nothing -> throwError $ _CouldNotDeduce # (specialCons, newCons')
   where
@@ -320,27 +319,11 @@ patType (PatLit (LitChar p)) = return (M.empty,TyPrim Char)
 patType (PatLit (LitBool p)) = return (M.empty,TyPrim Bool)
 patType PatWildcard = (,) M.empty <$> fresh
 
-replaceDictionaries :: EVar -> Dictionary -> Expr -> Expr
-replaceDictionaries eVar dict expr = case expr of
-    Prod cons exprs -> Prod cons $ fmap (replaceDictionaries eVar dict) exprs
-    App f x -> App (replaceDictionaries eVar dict f) (replaceDictionaries eVar dict x)
-    Abs name body -> Abs name (replaceDictionaries eVar dict body)
-    DictAbs eVar' body
-      | eVar /= eVar' -> DictAbs eVar' (replaceDictionaries eVar dict body)
-      | otherwise -> expr
-    DictApp expr' evidence -> DictApp (replaceDictionaries eVar dict expr') $ subDict (eVar, dict) evidence
-    DictSel name evidence -> DictSel name $ subDict (eVar, dict) evidence
-    Let (Binding name value) rest -> Let (Binding name $ replaceDictionaries eVar dict value) (replaceDictionaries eVar dict rest)
-    Rec (Binding name value) rest -> Rec (Binding name $ replaceDictionaries eVar dict value) (replaceDictionaries eVar dict rest)
-    Case input branches -> Case (replaceDictionaries eVar dict input) $ fmap (second $ replaceDictionaries eVar dict) branches
-    _ -> expr
-
 w :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => Expr -> m (Expr, TypeScheme)
 w e = do
   (subs, cons, ty, e') <- w' e
   env <- get
-  (e'', ty') <- generalize env e' cons $ substitute subs ty
-  return (e'', ty')
+  generalize env e' (second (substitute subs) <$> cons) $ substitute subs ty
   where
     inferBranches :: (MonadW r s e m, HasEVarCount s, HasTcContext s) => NonEmpty (Pattern,Expr) -> m (Substitution Type, [(Type, [(EVar, Type)], Type, Expr)])
     inferBranches = foldrM inferBranch (mempty,[])
@@ -358,8 +341,12 @@ w e = do
           (cons, ty) <- lookupId name >>= instantiate
           tctxt <- use tcContext
           cons' <- for cons $ \c -> (,) <$> freshEVar <*> pure c
-          Just dicts <- sequence <$> traverse (buildDictionary tctxt cons') cons'
-          pure (mempty, cons', ty, foldl' DictApp e (snd <$> dicts))
+          pure
+            ( mempty
+            , cons'
+            , ty
+            , foldl' DictApp e $ Variable . fst <$> cons'
+            )
         (Lit (LitInt _)) -> return (mempty, [], TyPrim Int, e)
         (Lit (LitString _)) -> return (mempty, [], TyPrim String, e)
         (Lit (LitChar _)) -> return (mempty, [], TyPrim Char, e)
@@ -381,24 +368,25 @@ w e = do
           return (s1, cons, TyFun (substitute s1 b) t1, Abs x expr')
         (Let (Binding x e) e') -> do
           (s1, cons1, t1, e1) <- w' e
-          (s2, cons2, t2, e2) <- local (over context $ fmap (subTypeScheme s1)) $ do
+          (s2, cons2, t2, e2, e1') <- local (over context $ fmap (subTypeScheme s1)) $ do
             env <- get
             (e1', t1') <- generalize env e1 cons1 t1
-            local (over context $ M.insert x t1') $ w' e'
-          return (s2 <> s1, cons2, t2, Let (Binding x $ foldr DictAbs e1 (fst <$> cons1)) e2)
+            (s2, cons2, t2, e2) <- local (over context $ M.insert x t1') $ w' e'
+            pure (s2, cons2, t2, e2, e1')
+          return (s2 <> s1, cons2, t2, Let (Binding x e1') e2)
         (Rec (Binding name value) rest) -> do
           freshVar <- fresh
           (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty [] freshVar) $ w' value
           s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
           let cons1' = fmap (second $ substitute s2) cons1
-          (s3, cons2, t2, rest', cons1'', value'') <- local (over context $ fmap (subTypeScheme s1)) $ do
+          (s3, cons2, t2, rest', value'') <- local (over context $ fmap (subTypeScheme s1)) $ do
             env <- get
             (_, t1') <- generalize env value' cons1' (substitute s2 t1)
             local (over context $ M.insert name t1') $ do
               (sub, cons, ty, rest') <- w' rest
-              (_, cons1'', _, value'') <- w' value
-              pure (sub, cons, ty, rest', cons1'', value'')
-          pure (s3 <> s1, cons2, t2, Rec (Binding name $ foldr DictAbs value'' (fst <$> cons1'')) rest')
+              (_, _, _, value'') <- w' value
+              pure (sub, cons, ty, rest', value'')
+          pure (s3 <> s1, cons2, t2, Rec (Binding name value'') rest')
         (Case input bs) -> do
           (s1, cons, inputType, input') <- w' input
           (bSubs,bs') <- inferBranches bs
@@ -459,7 +447,7 @@ checkDefinition def@(Class supers constructor params funcs) = do
   checkedFuncs <- for funcs $ \(name, ty) -> do
     eVar <- freshEVar
     env <- get
-    (expr, checkedFuncTy) <- get >>= runReaderT (generalize env (DictAbs eVar $ DictSel name (Variable eVar)) [(eVar, constructorTy)] ty)
+    (expr, checkedFuncTy) <- get >>= runReaderT (generalize env (DictSel name (Variable eVar)) [(eVar, constructorTy)] ty)
     context %= M.insert name checkedFuncTy
     pure (name, checkedFuncTy, expr)
   tcContext %= (TceClass supers constructorTy (M.fromList $ fmap (\(name, ty, _) -> (name, ty)) checkedFuncs) :)

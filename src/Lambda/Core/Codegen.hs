@@ -149,14 +149,18 @@ genDictionary (Dict ty) = do
   let tyName = genInstName name args
   scope %= M.insertWith (flip const) tyName Value
   pure $ PHPExprVar tyName
-genDictionary (Select dict ty) = do
+genDictionary (Select ty dict) = do
   let Right (name, args) = asClassInstance ty :: Either SyntaxError (Identifier, [Type])
+  let tyName = genInstName name args
+  scope %= M.insertWith (flip const) tyName Value
   dict' <- genDictionary dict
-  pure $ PHPExprClassAccess dict' (phpId name) Nothing
-genDictionary (Construct dict args) = do
-  dict' <- genDictionary dict
-  args' <- traverse genDictionary args
-  pure $ PHPExprFunctionCall dict' args'
+  pure $ PHPExprClassAccess dict' tyName Nothing
+genDictionary (Construct ty dicts) = do
+  let Right (name, args) = asClassInstance ty :: Either SyntaxError (Identifier, [Type])
+  let tyName = genInstName name args
+  scope %= M.insertWith (flip const) tyName Value
+  dicts' <- traverse genDictionary dicts
+  pure $ PHPExprFunctionCall (PHPExprVar tyName) dicts'
 
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
 genPHPExpr (Id name) = do
