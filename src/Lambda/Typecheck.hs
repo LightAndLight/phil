@@ -264,8 +264,8 @@ special scheme scheme'
       = checkEquality con con' >> checkEquality arg arg'
     checkEquality ty ty' = unless (ty == ty') . throwError $ _TUnificationError # CannotUnify ty ty'
 
-runW :: Expr -> Either TypeError (Expr, TypeScheme)
-runW = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . w
+runInferType :: Expr -> Either TypeError (Expr, TypeScheme)
+runInferType = runExcept . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . inferType
 
 type MonadW r s e m
   = ( HasFreshCount s
@@ -315,93 +315,111 @@ runWithContext
      ) => Map Identifier TypeScheme -> Expr -> m (Expr, TypeScheme)
 runWithContext ctxt
   = flip evalStateT initialInferenceState .
-    flip runReaderT initialInferenceState { _isContext = ctxt } . w
+    flip runReaderT initialInferenceState { _isContext = ctxt } . inferType
 
-w :: (MonadW r s e m, HasEVarCount s, HasTcContext C.Expr s) => Expr -> m (Expr, TypeScheme)
-w e = do
-  (subs, cons, ty, e') <- w' e
+inferType :: (MonadW r s e m, HasEVarCount s, HasTcContext C.Expr s) => Expr -> m (Expr, TypeScheme)
+inferType e = do
+  (subs, cons, ty, e') <- w e
   env <- get
   generalize env e' (second (substitute subs) <$> cons) $ substitute subs ty
   where
-    inferBranches :: (MonadW r s e m, HasEVarCount s, HasTcContext C.Expr s) => NonEmpty (Pattern,Expr) -> m (Substitution Type, [(Type, [(EVar, Type)], Type, Expr)])
+    w :: (MonadW r s e m, HasEVarCount s, HasTcContext C.Expr s) => Expr -> m (Substitution Type, [(EVar, Type)], Type, Expr)
+    w e = case e of
+      Error _ -> (,,,) mempty [] <$> fresh <*> pure e
+      Id name -> inferIdent name
+      Lit lit -> inferLiteral lit
+      App f x -> inferApp f x
+      Abs x expr -> inferAbs x expr
+      Let binding rest -> inferLet binding rest
+      Rec binding rest -> inferRec binding rest
+      Case input bs -> inferCase input bs
+      _ -> error $ "inferType: invalid expression: " ++ show e
+
+    inferBranches
+      :: (MonadW r s e m
+         , HasEVarCount s
+         , HasTcContext C.Expr s
+         )
+      => NonEmpty (Pattern,Expr)
+      -> m (Substitution Type, [(Type, [(EVar, Type)], Type, Expr)])
     inferBranches = foldrM inferBranch (mempty,[])
       where
         inferBranch (pat,branch) (subs,bTypes) = do
           (boundVars,patternType) <- patType pat
           local (over context $ M.union boundVars) $ do
-            (branchSubs,preds,branchType,branch') <- w' branch
+            (branchSubs,preds,branchType,branch') <- w branch
             pure (branchSubs <> subs, (patternType, preds, branchType, branch'):bTypes)
 
-    w' :: (MonadW r s e m, HasEVarCount s, HasTcContext C.Expr s) => Expr -> m (Substitution Type, [(EVar, Type)], Type, Expr)
-    w' e = case e of
-        (Error _) -> (,,,) mempty [] <$> fresh <*> pure e
-        (Id name) -> do
-          (cons, ty) <- lookupId name >>= instantiate
-          tctxt <- use tcContext
-          cons' <- for cons $ \c -> (,) <$> freshEVar <*> pure c
-          pure
-            ( mempty
-            , cons'
-            , ty
-            , e
-            )
-        (Lit (LitInt _)) -> return (mempty, [], TyPrim Int, e)
-        (Lit (LitString _)) -> return (mempty, [], TyPrim String, e)
-        (Lit (LitChar _)) -> return (mempty, [], TyPrim Char, e)
-        (Lit (LitBool _)) -> return (mempty, [], TyPrim Bool, e)
-        (App f x) -> do
-          (s1, cons1, t1, f') <- w' f
-          (s2, cons2, t2, x') <- local (over context $ fmap (subTypeScheme s1)) $ w' x
-          b <- fresh
-          s3 <- either (throwError . review _TUnificationError) pure $ unify [(TyFun t2 b,substitute s2 t1)]
-          return
-            ( s3 <> s2 <> s1
-            , fmap (second $ substitute s3) (fmap (second $ substitute s2) cons1 ++ cons2)
-            , substitute s3 b
-            , App f' x'
-            )
-        (Abs x expr) -> do
-          b <- fresh
-          (s1, cons, t1, expr') <- local (over context $ M.insert x (Forall S.empty [] b)) $ w' expr
-          return (s1, cons, TyFun (substitute s1 b) t1, Abs x expr')
-        (Let (VariableBinding x e) e') -> do
-          (s1, cons1, t1, e1) <- w' e
-          (s2, cons2, t2, e2, e1') <- local (over context $ fmap (subTypeScheme s1)) $ do
-            env <- get
-            (e1', t1') <- generalize env e1 cons1 t1
-            (s2, cons2, t2, e2) <- local (over context $ M.insert x t1') $ w' e'
-            pure (s2, cons2, t2, e2, e1')
-          return (s2 <> s1, cons2, t2, Let (VariableBinding x e1') e2)
-        (Let binding e') -> error $ "w: invalid binding in let: " ++ show binding
+    inferIdent name = do
+      (cons, ty) <- lookupId name >>= instantiate
+      tctxt <- use tcContext
+      cons' <- for cons $ \c -> (,) <$> freshEVar <*> pure c
+      pure (mempty, cons', ty, e)
 
-        (Rec (VariableBinding name value) rest) -> do
-          freshVar <- fresh
-          (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty [] freshVar) $ w' value
-          s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
-          let cons1' = fmap (second $ substitute s2) cons1
-          (s3, cons2, t2, rest', value'') <- local (over context $ fmap (subTypeScheme s1)) $ do
-            env <- get
-            (_, t1') <- generalize env value' cons1' (substitute s2 t1)
-            local (over context $ M.insert name t1') $ do
-              (sub, cons, ty, rest') <- w' rest
-              (_, _, _, value'') <- w' value
-              pure (sub, cons, ty, rest', value'')
-          pure (s3 <> s1, cons2, t2, Rec (VariableBinding name value'') rest')
-        (Rec binding rest) -> error $ "w: invalid binding in rec: " ++ show binding
-        (Case input bs) -> do
-          (s1, cons, inputType, input') <- w' input
-          (bSubs,bs') <- inferBranches bs
-          outputType <- fresh
-          let equations = foldr (\(p,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
-          subs <- either (throwError . review _TUnificationError) pure $ unify equations
-          let cons' = fmap (second $ substitute subs) $ cons ++ join (fmap (\(_, c, _, _) -> c) bs')
-          let bs'' = N.zip (fst <$> bs) ((\(_, _, _, b) -> b) <$> N.fromList bs')
-          pure
-            ( subs <> bSubs <> s1
-            , cons'
-            , substitute subs outputType
-            , Case input' bs''
-            )
+    inferLiteral lit = case lit of
+      LitInt _ -> return (mempty, [], TyPrim Int, e)
+      LitString _ -> return (mempty, [], TyPrim String, e)
+      LitChar _ -> return (mempty, [], TyPrim Char, e)
+      LitBool _ -> return (mempty, [], TyPrim Bool, e)
+
+    inferApp f x = do
+      (s1, cons1, t1, f') <- w f
+      (s2, cons2, t2, x') <- local (over context $ fmap (subTypeScheme s1)) $ w x
+      b <- fresh
+      s3 <- either (throwError . review _TUnificationError) pure $ unify [(TyFun t2 b,substitute s2 t1)]
+      return
+        ( s3 <> s2 <> s1
+        , fmap (second $ substitute s3) (fmap (second $ substitute s2) cons1 ++ cons2)
+        , substitute s3 b
+        , App f' x'
+        )
+
+    inferAbs x expr = do
+      b <- fresh
+      (s1, cons, t1, expr') <- local (over context $ M.insert x (Forall S.empty [] b)) $ w expr
+      return (s1, cons, TyFun (substitute s1 b) t1, Abs x expr')
+
+    inferLet binding rest = case binding of
+      VariableBinding x e -> do
+        (s1, cons1, t1, e') <- w e
+        (s2, cons2, t2, rest', e'') <- local (over context $ fmap (subTypeScheme s1)) $ do
+          env <- get
+          (e'', t1') <- generalize env e' cons1 t1
+          (s2, cons2, t2, rest') <- local (over context $ M.insert x t1') $ w rest 
+          pure (s2, cons2, t2, rest', e'')
+        return (s2 <> s1, cons2, t2, Let (VariableBinding x e'') rest')
+      _ -> error $ "w: invalid binding in let: " ++ show binding
+
+    inferRec binding rest = case binding of
+      VariableBinding name value -> do
+        freshVar <- fresh
+        (s1, cons1, t1, value') <- local (over context . M.insert name $ Forall S.empty [] freshVar) $ w value
+        s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
+        let cons1' = fmap (second $ substitute s2) cons1
+        (s3, cons2, t2, rest', value'') <- local (over context $ fmap (subTypeScheme s1)) $ do
+          env <- get
+          (_, t1') <- generalize env value' cons1' (substitute s2 t1)
+          local (over context $ M.insert name t1') $ do
+            (sub, cons, ty, rest') <- w rest
+            (_, _, _, value'') <- w value
+            pure (sub, cons, ty, rest', value'')
+        pure (s3 <> s1, cons2, t2, Rec (VariableBinding name value'') rest')
+      _ -> error $ "w: invalid binding in rec: " ++ show binding
+
+    inferCase input bs = do
+      (s1, cons, inputType, input') <- w input
+      (bSubs,bs') <- inferBranches bs
+      outputType <- fresh
+      let equations = foldr (\(p,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
+      subs <- either (throwError . review _TUnificationError) pure $ unify equations
+      let cons' = fmap (second $ substitute subs) $ cons ++ join (fmap (\(_, c, _, _) -> c) bs')
+      let bs'' = N.zip (fst <$> bs) ((\(_, _, _, b) -> b) <$> N.fromList bs')
+      pure
+        ( subs <> bSubs <> s1
+        , cons'
+        , substitute subs outputType
+        , Case input' bs''
+        )
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
@@ -479,7 +497,7 @@ checkDefinition (ValidInstance supers constructor params impls) = do
               let inst = TceInst supers constructorTy undefined
               st <- get
               flip runReaderT st . local (over tcContext (inst :)) $ do
-                (impl', ty) <- w impl
+                (impl', ty) <- inferType impl
                 special implTy ty
                 pure $ VariableBinding implName impl'
   let inst = TceInst supers constructorTy . M.fromList $
@@ -514,7 +532,7 @@ checkDefinition (Function (VariableBinding name expr)) = do
   case maybeVar of
     Nothing -> do
       ctxt <- use context
-      (expr', ty) <- get >>= runReaderT (w expr)
+      (expr', ty) <- get >>= runReaderT (inferType expr)
       maybeSig <- use (typesignatures . at name)
       case maybeSig of
         Nothing -> context %= M.insert name ty
