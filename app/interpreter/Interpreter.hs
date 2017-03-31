@@ -1,5 +1,6 @@
 {-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
+{-# language MultiParamTypeClasses #-}
 {-# language TemplateHaskell #-}
 
 import Control.Lens
@@ -21,7 +22,11 @@ import System.Exit
 import System.FilePath
 import System.IO
 
-import Lambda.Core.AST.Binding
+import qualified Lambda.AST.Definitions as L
+import qualified Lambda.AST.Expr as L
+import Lambda.AST (toCore, toCoreExpr)
+import qualified Lambda.Core.AST.Binding as C
+import qualified Lambda.Core.AST.Definitions as C
 import Lambda.Core.AST.Evidence
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Identifier
@@ -30,10 +35,9 @@ import Lambda.Core.AST.Types
 import Lambda.Core.AST.Pattern
 import Lambda.Core.Kinds hiding (HasFreshCount(..))
 import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
-import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
-import Lambda.Sugar (AsSyntaxError(..), SyntaxError)
-import Lambda.Core.Typecheck
-import Lambda.Core.Typeclasses
+import Lambda.Sugar (AsSyntaxError(..), SyntaxError, desugar, desugarExpr)
+import Lambda.Typecheck
+import Lambda.Typeclasses
 import Lambda.Lexer
 import Lambda.Parser
 
@@ -56,7 +60,7 @@ data InterpreterState
     , _interpContext :: Map Identifier TypeScheme
     , _interpKindInferenceState :: KindInferenceState
     , _interpFreshCount :: Int
-    , _interpTcContext :: [TypeclassEntry]
+    , _interpTcContext :: [TypeclassEntry C.Expr]
     , _interpEVarCount :: Int
     }
 
@@ -95,7 +99,7 @@ instance HasKindInferenceState InterpreterState where
 instance K.HasFreshCount InterpreterState where
   freshCount = kindInferenceState . K.freshCount
 
-instance HasTcContext InterpreterState where
+instance HasTcContext C.Expr InterpreterState where
   tcContext = interpreterState . interpTcContext
 
 instance HasEVarCount InterpreterState where
@@ -136,8 +140,8 @@ withBinding ::
   , AsInterpreterError e
   , MonadError e m
   )
-  => (Binding C.Expr) -> m a -> m a
-withBinding (Binding name expr) m = do
+  => C.Binding C.Expr -> m a -> m a
+withBinding (C.Binding name expr) m = do
   expr' <- eval expr
   local (M.insert name expr') m
 
@@ -168,7 +172,7 @@ eval (C.App func input) = do
     VPointer expr -> eval (C.App expr input)
     _ -> error $ "Tried to apply a value to a non-function expression: " ++ show func'
 eval (C.Let binding rest) = withBinding binding $ eval rest
-eval (C.Rec (Binding name value) rest) = local (M.insert name $ VPointer value) $ eval rest
+eval (C.Rec (C.Binding name value) rest) = local (M.insert name $ VPointer value) $ eval rest
 eval c@(C.Case var (b :| bs)) = do
   var' <- eval var
   tryBranch var' b bs
@@ -222,13 +226,14 @@ evaluate ::
   , AsInterpreterError e
   , MonadError e m
   , MonadState s m
-  ) => C.Expr
+  ) => L.Expr
   -> m Value
 evaluate expr = do
   ctxt <- use context
-  runWithContext ctxt expr
+  let expr' = desugarExpr expr
+  runWithContext ctxt expr'
   table <- use symbolTable
-  runReaderT (eval expr) table
+  runReaderT (eval $ toCoreExpr expr') table
 
 define ::
   ( HasKindTable s
@@ -236,7 +241,7 @@ define ::
   , HasFreshCount s
   , HasContext s
   , HasTypesignatures s
-  , HasTcContext s
+  , HasTcContext C.Expr s
   , HasEVarCount s
   , K.HasFreshCount s
   , AsInterpreterError e
@@ -246,10 +251,10 @@ define ::
   , MonadError e m
   , MonadState s m
   )
-  => S.Definition
+  => L.Definition
   -> m ()
 define def = do
-  (exprs, _) <- checkDefinition =<< S.desugar def
+  (exprs, _) <- checkDefinition =<< desugar def
   exprs' <- runReaderT (traverse eval exprs) =<< use symbolTable
   symbolTable %= M.union exprs'
 
@@ -262,12 +267,12 @@ typeCheck ::
   , MonadError e m
   , MonadState s m
   )
-  => C.Expr
+  => L.Expr
   -> m TypeScheme
 typeCheck expr = do
   freshCount .= 0
   ctxt <- use context
-  snd <$> runWithContext ctxt expr
+  snd <$> runWithContext ctxt (desugarExpr expr)
 
 kindOf ::
   ( HasKindTable s
@@ -299,7 +304,7 @@ repl ::
   , HasSymbolTable s
   , HasFreshCount s
   , K.HasFreshCount s
-  , HasTcContext s
+  , HasTcContext C.Expr s
   , HasEVarCount s
   , MonadFree ReplF m
   , Show e
@@ -320,7 +325,7 @@ repl = flip catchError handleError $ do
     ':':'t':' ':rest -> do
       toks <- tokenize rest
       expr <- parseExpression toks
-      showTypeScheme <$> typeCheck (S.desugarExpr expr)
+      showTypeScheme <$> typeCheck (desugarExpr expr)
     ':':'k':' ':rest -> do
       kind <- kindOf rest
       pure $ unwords [rest, ":", showKind kind]
@@ -328,7 +333,7 @@ repl = flip catchError handleError $ do
       toks <- tokenize rest
       input <- parseExprOrData toks
       case input of
-        ReplExpr expr -> showValue <$> evaluate (S.desugarExpr expr)
+        ReplExpr expr -> showValue <$> evaluate (desugarExpr expr)
         ReplDef dat -> define dat $> ""
   printLine output
   repl

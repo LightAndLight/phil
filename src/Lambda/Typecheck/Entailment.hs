@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
 
-module Lambda.Core.Typecheck.Entailment ( buildDicts, entails ) where
+module Lambda.Typecheck.Entailment ( buildDicts, entails ) where
 
 import Debug.Trace
 
@@ -11,10 +11,10 @@ import           Data.Foldable
 import           Control.Applicative
 import           Data.Maybe
 
-import           Lambda.Core.Typecheck.Unification
 import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Types
-import           Lambda.Core.Typeclasses
+import           Lambda.Typecheck.Unification
+import           Lambda.Typeclasses
 
 {-
 findEntry :: Type -> TypeclassEntry -> Maybe (TypeclassEntry, Substitution Type)
@@ -25,10 +25,11 @@ findEntry pi entry@(TceInst supers ty _) =
 findEntry pi entry@(TceClass supers ty _) = (,) entry <$> asum (flip equiv pi <$> supers)
 -}
 
-findEntry :: Type -> TypeclassEntry -> Maybe (TypeclassEntry, Substitution Type)
+findEntry :: Type -> TypeclassEntry a -> Maybe (TypeclassEntry a, Substitution Type)
 findEntry pi entry@(TceInst supers ty _) = (,) entry <$> equiv ty pi
 findEntry pi entry@(TceClass supers ty _) = (,) entry <$> asum (flip equiv pi <$> supers)
 
+-- | Dis is broken
 equiv :: Type -> Type -> Maybe (Substitution Type)
 equiv (TyVar ty) ty'@TyVar{} = Just $ Substitution [(ty, ty')]
 equiv (TyApp t1 t2) (TyApp t1' t2') = do
@@ -42,12 +43,12 @@ equiv ty ty'
   | ty == ty' = Just mempty
   | otherwise = Nothing
 
-entails :: [TypeclassEntry] -> [(Dictionary, Type)] -> Type -> Maybe Dictionary
+entails :: [TypeclassEntry a] -> [(Dictionary, Type)] -> Type -> Maybe Dictionary
 entails entries ps pi
   | ((d, _):_) <- filter (\p -> snd p == traceShowId pi) (traceShowId ps) = Just d
   | otherwise = go (catMaybes $ findEntry pi <$> entries)
   where
-    go :: [(TypeclassEntry, Substitution Type)] -> Maybe Dictionary
+    go :: [(TypeclassEntry a, Substitution Type)] -> Maybe Dictionary
     go [] = Nothing
     go ((TceInst supers ty _, sub) : rest) = do 
       dicts <- sequence (entails entries ps . substitute sub <$> supers)
@@ -57,14 +58,12 @@ entails entries ps pi
     go ((TceClass supers ty _, sub) : rest) =
       (Select pi <$> entails entries ps (substitute sub ty)) <|> go rest
 
-buildDicts :: [TypeclassEntry] -> [(EVar, Type)] -> [(EVar, Dictionary)]
+buildDicts :: [TypeclassEntry a] -> [(EVar, Type)] -> [(EVar, Dictionary)]
 buildDicts entries ps = go ps
   where
     ps' = first Variable <$> ps
 
     go [] = []
     go ((var, ty) : rest) =
-      let res = case entails entries [] ty of
-            Nothing -> (var, fromJust $ entails entries ps' ty)
-            Just dict -> (var, dict) 
-      in res : go rest
+      let res = entails entries [] ty <|> entails entries (filter ((/= ty) . snd) ps') ty <|> entails entries ps' ty
+      in (var, fromJust res) : go rest

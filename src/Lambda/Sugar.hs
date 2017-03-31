@@ -1,15 +1,13 @@
 {-# language TemplateHaskell #-}
+{-# language DeriveFunctor #-}
 
 module Lambda.Sugar
   ( AsSyntaxError(..)
-  , Definition(..)
-  , Expr(..)
-  , FunctionDefinition(..)
   , SyntaxError(..)
-  , C.ProdDecl(..)
   , asClassDef
   , asClassInstance
   , desugar
+  , desugarBinding
   , desugarExpr
   ) where
 
@@ -20,13 +18,17 @@ import           Data.Foldable
 import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.Set           as S
 
-import Lambda.Core.AST.Binding
+import qualified Lambda.AST.Binding as L
+import qualified Lambda.AST.Definitions as L
+import qualified Lambda.AST.Expr as L
+import qualified Lambda.Core.AST.Binding as C
 import qualified Lambda.Core.AST.Definitions    as C
 import qualified Lambda.Core.AST.Expr    as C
 import Lambda.Core.AST.Identifier
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Types
 import Lambda.Core.AST.Pattern
+import Lambda.Core.AST.ProdDecl
 
 data SyntaxError = MalformedHead Type
   deriving (Eq, Show)
@@ -58,53 +60,31 @@ asClassInstance (TyApp left ty) = do
   pure (con, tys ++ [ty])
 asClassInstance ty = throwError $ _MalformedHead # ty
 
-desugar :: (AsSyntaxError e, MonadError e m) => Definition -> m C.Definition
-desugar (Data name typeArgs constructors) = pure $ C.Data name typeArgs constructors
-desugar (TypeSignature name ty) = pure $ C.TypeSignature name ty
-desugar (Function def) = pure . C.Function $ translateDefinition def
-desugar (Class constraints classType classMembers) = do
+desugar :: (AsSyntaxError e, MonadError e m) => L.Definition -> m L.Definition
+desugar (L.Function def) = pure . L.Function $ desugarBinding def
+desugar (L.Class constraints classType classMembers) = do
   (className, tyVars) <- asClassDef classType
-  pure $ C.Class constraints className tyVars classMembers
-desugar (Instance constraints classType classImpls) = do
+  pure $ L.ValidClass constraints className tyVars classMembers
+desugar (L.Instance constraints classType classImpls) = do
   (className, tyArgs) <- asClassInstance classType
   unless (all (sameConstructor className) constraints) . throwError $ _MalformedHead # classType
-  pure . C.Instance constraints className tyArgs $ fmap translateDefinition classImpls
+  pure . L.ValidInstance constraints className tyArgs $ fmap desugarBinding classImpls
   where
     sameConstructor name (TyApp (TyCon (TypeCon name')) _) = name == name'
     sameConstructor _ _ = False
+desugar def = pure def
 
-desugarExpr :: Expr -> C.Expr
-desugarExpr (Id n) = C.Id n
-desugarExpr (Lit l) = C.Lit l
-desugarExpr (Prod name args) = C.Prod name (fmap desugarExpr args)
-desugarExpr (App f x) = C.App (desugarExpr f) (desugarExpr x)
-desugarExpr (Abs n expr) = C.Abs n $ desugarExpr expr
-desugarExpr (Let def expr)
-  = C.Let (translateDefinition def) $ desugarExpr expr
-desugarExpr (Rec def expr)
-  = C.Rec (translateDefinition def) $ desugarExpr expr
-desugarExpr (Case n bs) = C.Case (desugarExpr n) $ fmap (fmap desugarExpr) bs
-desugarExpr (Error err) = C.Error err
+desugarExpr :: L.Expr -> L.Expr
+desugarExpr (L.Prod name args) = L.Prod name (fmap desugarExpr args)
+desugarExpr (L.App f x) = L.App (desugarExpr f) (desugarExpr x)
+desugarExpr (L.Abs n expr) = L.Abs n $ desugarExpr expr
+desugarExpr (L.Let def expr)
+  = L.Let (desugarBinding def) $ desugarExpr expr
+desugarExpr (L.Rec def expr)
+  = L.Rec (desugarBinding def) $ desugarExpr expr
+desugarExpr (L.Case n bs) = L.Case (desugarExpr n) $ fmap (fmap desugarExpr) bs
+desugarExpr expr = expr
 
-data Definition
-  = Data Identifier [Identifier] (NonEmpty C.ProdDecl)
-  | TypeSignature Identifier TypeScheme
-  | Function FunctionDefinition
-  | Class [Type] Type [(Identifier, Type)]
-  | Instance [Type] Type [FunctionDefinition]
-
-data Expr
-  = Id Identifier
-  | Lit Literal
-  | Prod Identifier [Expr]
-  | App Expr Expr
-  | Abs Identifier Expr
-  | Let FunctionDefinition Expr
-  | Rec FunctionDefinition Expr
-  | Case Expr (NonEmpty (Pattern,Expr))
-  | Error String
-
-data FunctionDefinition = FunctionDefinition Identifier [Identifier] Expr
-
-translateDefinition :: FunctionDefinition -> Binding C.Expr
-translateDefinition (FunctionDefinition name args expr) = Binding name $ foldr C.Abs (desugarExpr expr) args
+desugarBinding :: L.Binding L.Expr -> L.Binding L.Expr
+desugarBinding (L.FunctionBinding name args expr) = L.VariableBinding name $ foldr L.Abs (desugarExpr expr) args
+desugarBinding binding = binding

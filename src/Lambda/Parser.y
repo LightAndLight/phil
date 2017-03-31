@@ -19,8 +19,11 @@ import qualified Data.Set as S
 import Lambda.Lexer
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Pattern
+import Lambda.Core.AST.ProdDecl
 import Lambda.Core.AST.Types
-import Lambda.Sugar
+import Lambda.AST.Binding
+import Lambda.AST.Definitions
+import Lambda.AST.Expr
 
 }
 
@@ -120,7 +123,7 @@ TypeScheme : Ty { Forall S.empty [] $1 }
 
 TypeSignature : ident ':' TypeScheme { TypeSignature $1 $3 }
 
-FunctionDefinition : ident FunctionArgs '=' Expr { FunctionDefinition $1 $2 $4 }
+FunctionDefinition : ident FunctionArgs '=' Expr { FunctionBinding $1 $2 $4 }
 
 ExprOrDef : DataDefinition eof { ReplDef $1 }
           | Expr eof { ReplExpr $1 }

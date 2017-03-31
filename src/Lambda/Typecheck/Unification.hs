@@ -3,7 +3,7 @@
 {-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Lambda.Core.Typecheck.Unification (
+module Lambda.Typecheck.Unification (
   -- * Constraints
   Constraint,
   -- * Substitutions

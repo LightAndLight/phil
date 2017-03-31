@@ -1,5 +1,8 @@
+{-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
-module Lambda.Core.Typeclasses
+{-# language FunctionalDependencies #-}
+
+module Lambda.Typeclasses
   ( HasTcContext(..)
   , TypeclassEntry(..)
   , checkConstraints
@@ -32,14 +35,14 @@ import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Types
 import           Lambda.Core.Kinds
 import Lambda.Sugar (AsSyntaxError(..), asClassDef)
-import Lambda.Core.Typecheck.Unification
+import Lambda.Typecheck.Unification
 
-data TypeclassEntry
-  = TceInst [Type] Type (Map Identifier Expr)
+data TypeclassEntry a
+  = TceInst [Type] Type (Map Identifier a)
   | TceClass [Type] Type (Map Identifier TypeScheme)
-  deriving (Eq, Show)
+  deriving (Eq, Functor, Show)
 
-getClass :: Identifier -> [TypeclassEntry] -> Maybe TypeclassEntry
+getClass :: Identifier -> [TypeclassEntry a] -> Maybe (TypeclassEntry a)
 getClass _ [] = Nothing
 getClass className (entry@(TceClass _ clsTy _):rest)
   | Just (TypeCon className') <- getConstructor clsTy
@@ -47,15 +50,15 @@ getClass className (entry@(TceClass _ clsTy _):rest)
   | otherwise = getClass className rest
 getClass className (_:rest) = getClass className rest
 
-getInst :: Type -> [TypeclassEntry] -> Maybe TypeclassEntry
+getInst :: Type -> [TypeclassEntry a] -> Maybe (TypeclassEntry a)
 getInst _ [] = Nothing
 getInst inst (entry@(TceInst _ instTy _) : rest)
   | inst == instTy = Just entry
   | otherwise = getInst inst rest
 getInst inst (_ : rest) = getInst inst rest
 
-class HasTcContext s where
-  tcContext :: Lens' s [TypeclassEntry]
+class HasTcContext a s | s -> a where
+  tcContext :: Lens' s [TypeclassEntry a]
 
 -- forall a : Type, b : Type
 -- case equalUpToRenaming a b of

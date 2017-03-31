@@ -24,17 +24,22 @@ library
                      , Lambda.Core.AST.Lens
                      , Lambda.Core.AST.Literal
                      , Lambda.Core.AST.Pattern
+                     , Lambda.Core.AST.ProdDecl
                      , Lambda.Core.Codegen
                      , Lambda.Core.Kinds
-                     , Lambda.Core.Typecheck
-                     , Lambda.Core.Typecheck.Entailment
-                     , Lambda.Core.Typecheck.Unification
-                     , Lambda.Core.Typeclasses
+                     , Lambda.AST
+                     , Lambda.AST.Binding
+                     , Lambda.AST.Definitions
+                     , Lambda.AST.Expr
                      , Lambda.Lexer
                      , Lambda.Parser
                      , Lambda.PHP
                      , Lambda.PHP.AST
                      , Lambda.Sugar
+                     , Lambda.Typecheck
+                     , Lambda.Typecheck.Entailment
+                     , Lambda.Typecheck.Unification
+                     , Lambda.Typeclasses
   build-depends:       base >= 4.7 && < 5
                      , bifunctors
                      , array

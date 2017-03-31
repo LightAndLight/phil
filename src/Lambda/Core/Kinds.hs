@@ -41,8 +41,9 @@ import qualified Data.Map as M
 
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Definitions
+import           Lambda.Core.AST.ProdDecl
 import           Lambda.Core.AST.Types
-import           Lambda.Core.Typecheck.Unification
+import           Lambda.Typecheck.Unification
 
 data Kind
   = Star

@@ -8,7 +8,7 @@ import           Data.Set                          (Set)
 import qualified Data.Set                          as S
 
 import           Lambda.Core.AST.Identifier
-import           Lambda.Core.Typecheck.Unification
+import           Lambda.Typecheck.Unification
 
 data Prim
   = Int

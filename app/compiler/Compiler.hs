@@ -9,15 +9,16 @@ import Control.Monad.Trans
 import           Options.Applicative
 import           System.Environment
 
+import           Lambda.AST
 import           Lambda.Core.Codegen
 import           Lambda.Core.Kinds
-import           Lambda.Core.Typecheck
 import           Lambda.Lexer
 import           Lambda.Parser         (parseProgram)
 import qualified Lambda.Parser         as P (ParseError)
 import Lambda.Parser         hiding (ParseError)
 import           Lambda.PHP
 import           Lambda.Sugar
+import           Lambda.Typecheck
 
 data CompilerError
   = CompilerParseError P.ParseError
@@ -75,7 +76,8 @@ compile opts = flip catchError (liftIO . print) $ do
   initialAST <- parseProgram tokens
   desugaredAST <- traverse desugar initialAST
   (typecheckedAST,inferenceState) <- runStateT (checkDefinitions desugaredAST) initialInferenceState
-  let phpAST = genPHP typecheckedAST
+  let coreAST = fmap toCore typecheckedAST
+  let phpAST = genPHP coreAST
   let phpSource = toSource "    " phpAST
   liftIO $ if useStdout opts
     then print phpSource

@@ -7,12 +7,7 @@ import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Expr
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Types
-
-data ProdDecl
-  = ProdDecl
-  { prodName     :: Identifier
-  , prodArgTypes :: [Type]
-  }
+import           Lambda.Core.AST.ProdDecl
 
 data Definition
   -- | ADT Definition: type constructor, type variables, constructor definitions
@@ -23,5 +18,6 @@ data Definition
   | Function (Binding Expr)
   -- | Class definition: constraints, class name, type variables, class members
   | Class [Type] Identifier [Identifier] [(Identifier, Type)]
-  -- | Classs instance definition: constraints, class name, type arguments, member implementations
+  -- | Class instance definition: constraints, class name, type arguments, member implementations
   | Instance [Type] Identifier [Type] [Binding Expr]
+  deriving (Eq, Show)

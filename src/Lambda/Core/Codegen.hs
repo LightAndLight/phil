@@ -24,8 +24,9 @@ import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Literal
 import           Lambda.Core.AST.Pattern
+import           Lambda.Core.AST.ProdDecl
 import           Lambda.Core.AST.Types
-import Lambda.Core.Typecheck
+import Lambda.Typecheck
 import           Lambda.PHP.AST
 import           Lambda.Sugar (SyntaxError, asClassInstance)
 
@@ -231,20 +232,6 @@ genPHPExpr (Case val branches) = do
                   (PHPExprClassAccess val (phpId "values") Nothing)
                   (PHPExprLiteral $ PHPInt ix))
 genPHPExpr (Error str) = pure $ PHPExprFunctionCall (PHPExprFunction [] [] [PHPStatementThrow $ PHPExprNew (phpId "Exception") []]) []
-genPHPExpr (DictAbs eVar body) = do
-  let name = genPHPEVar eVar
-  scope %= M.insert name Value
-  body' <- genPHPExpr body
-  scope %= M.delete name
-  sc <- use scope
-  pure $ PHPExprFunction [PHPArgValue name] (scopeToArgs sc) [PHPStatementReturn body']
-genPHPExpr (DictApp expr evidence) = do
-  expr' <- genPHPExpr expr
-  evidence' <- genDictionary evidence
-  pure $ PHPExprFunctionCall expr' [evidence']
-genPHPExpr (DictSel member evidence) = do
-  evidence' <- genDictionary evidence
-  pure $ PHPExprClassAccess evidence' (phpId member) Nothing
 
 genPHPAssignment :: (HasScope s, MonadState s m) => Binding Expr -> m PHPStatement
 genPHPAssignment (Binding name value) = PHPStatementExpr . PHPExprAssign (PHPExprVar $ phpId name) <$> genPHPExpr value

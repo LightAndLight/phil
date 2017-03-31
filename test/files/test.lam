@@ -18,3 +18,25 @@ instance Eq Bool where {
 asdf a = eq a a
 
 test = asdf true
+
+and a b = case a of {
+  true -> b;
+  _ -> false
+  }
+
+data List a = Nil | Cons a (List a)
+
+instance Eq a => Eq (List a) where {
+  eq = rec eq' la lb = case la of {
+    Nil -> case lb of {
+      Nil -> true;
+      _ -> false
+    };
+    Cons a rest -> case lb of {
+      Cons b rest' -> and (eq a b) (eq' rest rest');
+      _ -> false
+    }
+  } in eq'
+}
+
+test2 = asdf (Cons true Nil)
