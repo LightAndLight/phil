@@ -22,5 +22,6 @@ data Expr
   | DictVar Identifier
   | DictInst Identifier (NonEmpty Identifier)
   | DictSel Identifier Expr
+  | DictSuper Identifier Expr
   | Error String
   deriving (Eq, Show)

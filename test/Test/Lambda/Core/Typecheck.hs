@@ -123,7 +123,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
                 )
           ) `shouldSatisfy` has (_Left . _TUnificationError)
 
-      it "Int -> Int is less general than forall a. a -> a" $
+      it "Int -> Int [>=] forall a. a -> a" $
         special emptyContexts (_Forall' [] [] # _TyFun # (_TyCtor # "Int", _TyCtor # "Int")) idType `shouldSatisfy` has (_Left . _TUnificationError)
 
   describe "typeclass" $ do

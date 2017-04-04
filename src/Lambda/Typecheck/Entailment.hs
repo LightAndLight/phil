@@ -3,7 +3,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Lambda.Typecheck.Entailment
-  ( DictParamEntry(..), dpeClassName, dpeTyArgs, dpeDictVar 
+  ( DictParamEntry(..), dpeClassName, dpeTyArgs
   , entails
   , replacePlaceholders
   , resolvePlaceholders
@@ -14,7 +14,9 @@ import Control.Lens
 import Control.Monad.Except
 import Control.Monad.Fresh
 import           Data.Bifunctor
+import Data.Either
 import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as N
 import qualified Data.Map as M
 import Data.Map (Map)
 import           Data.Foldable
@@ -53,7 +55,7 @@ entails ctxt kb goal = goal `elem` kb || go ctxt goal
       = all (entails ctxt kb) $ substitute subs <$> supers
       | otherwise = go rest goal
     go (TceClass supers className classArgs _ : rest) goal
-      | Right (subs : _) <- traverse (\ty -> unify [(ty, goal)]) supers
+      | (subs : _) <- rights $ fmap (\ty -> unify [(ty, goal)]) supers
       = let classTy = foldl' TyApp (TyCtor className) $ substitute subs . TyVar <$> classArgs
         in entails ctxt kb classTy || go rest goal
       | otherwise = go rest goal
@@ -62,7 +64,6 @@ data DictParamEntry
   = DictParamEntry
   { _dpeClassName :: Identifier
   , _dpeTyArgs :: NonEmpty Type
-  , _dpeDictVar :: Identifier
   } deriving (Eq, Ord, Show)
 
 makeLenses ''DictParamEntry
@@ -88,6 +89,7 @@ resolvePlaceholders ctxt [] _ = pure ([], [])
 resolvePlaceholders ctxt (p : rest) bound
   | foldMap freeInType (_dpeTyArgs p) `S.intersection` bound /= S.empty
   = first (p :) <$> resolvePlaceholders ctxt rest bound
+
   | any isTyVar (_dpeTyArgs p)
   = do
     (leftover, mapping) <- resolvePlaceholders ctxt rest bound
@@ -97,24 +99,49 @@ resolvePlaceholders ctxt (p : rest) bound
         var <- ("dict" ++) <$> fresh
         pure (leftover, (placeholder, DictVar var) : mapping)
       Just _ -> pure (leftover, mapping)
-  | Just (subs, TceInst supers instHead impls) <- getInst ctxt (_dpeClassName p) (_dpeTyArgs p)
-  = do
-    new <- traverse (newPlaceholders . ctorAndArgs . substitute subs) supers
-    let inst = DictInst (instHead ^. ihClassName) (fst <$> instHead ^. ihInstArgs)
-    let dictExpr = foldl' App inst (fmap (\n -> DictPlaceholder (_dpeClassName n, _dpeTyArgs n)) new)
-    (leftover, mapping) <- resolvePlaceholders ctxt (new ++ rest) bound
-    let dictExpr' = everywhere (replacePlaceholders $ M.fromList mapping) dictExpr
-    pure (leftover, ((_dpeClassName p, _dpeTyArgs p), dictExpr') : mapping)
-  | otherwise = throwError $ _NoSuchInstance # (_dpeClassName p, _dpeTyArgs p)
+
+  | otherwise = go ctxt
   where
+    toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
+    inputTy = foldl' TyApp (TyCtor $ p ^. dpeClassName) (p ^. dpeTyArgs)
+
+    go [] = throwError $ _NoSuchInstance # (p ^. dpeClassName, p ^. dpeTyArgs)
+    go (TceClass supers className tyVars _ : entries)
+      | (subs : _) <- rights $ fmap (\ty -> unify [(ty, inputTy)]) supers
+      = flip catchError (const $ go entries) $ do
+          let tyArgs = substitute subs . TyVar <$> tyVars
+          (leftover, mapping) <- resolvePlaceholders ctxt (DictParamEntry className tyArgs : rest) bound
+          case lookup (className, tyArgs) mapping of
+            Nothing -> go entries
+            Just dict ->
+              pure (leftover, ((p ^. dpeClassName, p ^. dpeTyArgs), DictSuper className dict) : mapping)
+      | otherwise = go entries
+
+    go (TceInst supers instHead _ : entries)
+      | p ^. dpeClassName == instHead ^. ihClassName
+      , Right subs <- unify .
+          N.toList $
+          N.zip
+            (toType <$> instHead ^. ihInstArgs)
+            (p ^. dpeTyArgs)
+      = do
+        let Just supers' = traverse (fmap (second N.fromList) . ctorAndArgs . substitute subs) supers
+        (leftover, mapping) <-
+          resolvePlaceholders
+            ctxt
+            (fmap (uncurry DictParamEntry) supers' ++ rest)
+            bound
+        let superDicts = traverse (`lookup` mapping) supers'
+        case superDicts of
+          Nothing -> throwError $ _NoSuchInstance # (p ^. dpeClassName, p ^. dpeTyArgs)
+          Just supers -> do
+            let dict = foldl' App (DictInst (p ^. dpeClassName) (fst . fromJust . ctorAndArgs <$> p ^. dpeTyArgs)) supers
+            pure (leftover, ((p ^. dpeClassName, p ^. dpeTyArgs), dict) : mapping)
+      | otherwise = go entries
+
     newPlaceholders (con, args) = do
       ident <- ("dict" ++) <$> fresh
-      pure $ DictParamEntry con args ident
+      pure $ DictParamEntry con args
 
     isTyVar TyVar{} = True
     isTyVar _ = False
-
-    ctorAndArgs (TyApp (TyCtor con) arg) = (con, pure arg)
-    ctorAndArgs (TyApp rest arg)
-      = let (con, args) = ctorAndArgs rest
-        in (con, args <> pure arg)

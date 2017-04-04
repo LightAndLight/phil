@@ -1,0 +1,46 @@
+class Monad m where {
+  return : a -> m a;
+  bind : m a -> (a -> m b) -> m b
+}
+
+liftM2 : forall a b c m. Monad m => (a -> b -> c) -> m a -> m b -> m c
+liftM2 f ma mb = bind ma (\a. bind mb (\b. return (f a b)))
+
+data Maybe a = Nothing | Just a
+
+instance Monad Maybe where {
+  return = Just;
+  bind ma f = case ma of {
+    Nothing -> Nothing;
+    Just a -> f a
+  }
+}
+
+and : Bool -> Bool -> Bool
+and a b = case a of {
+  true -> b;
+  _ -> false
+  }
+
+asdf = liftM2 and (Just true) (Just false)
+
+class Show a where {
+  show : a -> String
+}
+
+instance Show Bool where {
+  show a = case a of {
+    true -> "true";
+    false -> "false"
+  }
+}
+
+instance Show a => Show (Maybe a) where {
+  show a = case a of {
+    Nothing -> "Nothing";
+    Just a -> show a
+  }
+}
+
+test : String
+test = show asdf

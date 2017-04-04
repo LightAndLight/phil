@@ -33,7 +33,11 @@ import Lambda.Core.AST.Pattern
 import Lambda.Core.AST.ProdDecl
 import Lambda.Typeclasses
 
-data SyntaxError = MalformedHead Type
+data SyntaxError
+  = MalformedHead Type
+  | InvalidInstanceArg Type
+  | NoInstanceArgs Type
+  | InvalidClassArg Type
   deriving (Eq, Show)
 
 makeClassyPrisms ''SyntaxError
@@ -53,7 +57,7 @@ asClassDef (TyApp (TyCon (TypeCon con)) (TyVar arg)) = pure (con, arg :| [])
 asClassDef (TyApp left (TyVar arg)) = do
   (con, args) <- asClassDef left
   pure (con, args <> pure arg)
-asClassDef ty = throwError $ _MalformedHead # ty
+asClassDef ty = throwError $ _InvalidClassArg # ty
 
 -- | Converts a 'Type' to a valid instance head, or throws a 'SyntaxError'
 -- | if it isn't
@@ -61,24 +65,23 @@ asClassInstance
   :: (AsSyntaxError e, MonadError e m)
   => Type
   -> m InstanceHead
-asClassInstance ty = case ty of
-  TyApp (TyCtor className) arg -> do
-    res <- ctorAndTyVars arg
-    pure $ InstanceHead className (pure res)
-  TyApp left arg -> do
-    res <- ctorAndTyVars arg
-    instHead <- asClassInstance left
-    pure (instHead & over ihInstArgs (<> pure res))
-  _->  throwError $ _MalformedHead # ty
+asClassInstance ty = go ty
   where
+    go (TyApp (TyCtor className) arg) = do
+      res <- ctorAndTyVars arg
+      pure $ InstanceHead className (pure res)
+    go (TyApp left arg) = do
+      res <- ctorAndTyVars arg
+      instHead <- go left
+      pure (instHead & over ihInstArgs (<> pure res))
+    go _ = throwError $ _NoInstanceArgs # ty
+
     ctorAndTyVars ty' = case ty' of
       TyCtor con -> pure (con, []) 
-      TyApp (TyCtor con) (TyVar name) -> pure (con, [name])
       TyApp rest (TyVar var) -> do
         (con, vars) <- ctorAndTyVars rest
         pure (con, vars ++ [var])
-      _ -> throwError $ _MalformedHead # ty
-
+      _ -> throwError $ _InvalidInstanceArg # ty
 
 -- | Converts a type to the form T a_1 a_2 .. a_n, where a_i are any type
 -- |
@@ -96,7 +99,6 @@ desugar (L.Class constraints classType classMembers) = do
   pure $ L.ValidClass constraints className tyVars classMembers
 desugar (L.Instance constraints classType classImpls) = do
   InstanceHead className tyArgs <- asClassInstance classType
-  unless (all (sameConstructor className) constraints) . throwError $ _MalformedHead # classType
   pure . L.ValidInstance constraints className tyArgs $ fmap desugarBinding classImpls
   where
     sameConstructor name (TyApp (TyCon (TypeCon name')) _) = name == name'

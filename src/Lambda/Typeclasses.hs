@@ -67,32 +67,28 @@ data TypeclassEntry a
 
 -- | Look up a class in the context
 getClass
-  :: Identifier -- ^ Class constructor
-  -> [TypeclassEntry a] -- ^ Typeclass context
+  :: [TypeclassEntry a] -- ^ Typeclass context
+  -> Identifier -- ^ Class constructor
   -> Maybe (TypeclassEntry a)
-getClass _ [] = Nothing
-getClass className (entry@(TceClass _ className' _ _):rest)
+getClass [] _ = Nothing
+getClass (entry@(TceClass _ className' _ _):rest) className 
   | className == className' = Just entry
-  | otherwise = getClass className rest
-getClass className (_:rest) = getClass className rest
+  | otherwise = getClass rest className
+getClass (_:rest) className  = getClass rest className
 
--- | Look up an instance in the context by unifying instance heads
+-- | Look up an instance in the context
 getInst
   :: [TypeclassEntry a] -- ^ Typeclass context
-  -> Identifier -- ^ Class name
-  -> NonEmpty Type -- ^ Instance arguments
-  -> Maybe (Substitution Type, TypeclassEntry a)
+  -> Identifier -- ^ Class constructor
+  -> NonEmpty Identifier -- ^ Type constructors of the instance arguments
+  -> Maybe (TypeclassEntry a)
 getInst [] _ _ = Nothing
-getInst (entry@(TceInst supers instHead impls) : rest) className instArgs
-  | className == instHead ^. ihClassName
-  , Right subs <- unify .
-  -- Instantiation might be required here
-      N.toList $ N.zip (toType <$> instHead ^. ihInstArgs) instArgs
-  = pure (subs, entry)
-  | otherwise = getInst rest className instArgs
-  where
-    toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
-getInst (_ : rest) className instArgs = getInst rest className instArgs
+getInst (entry@(TceInst _ instHead _) : rest) className argCons
+  | instHead ^. ihClassName == className
+  , fmap fst (instHead ^. ihInstArgs) == argCons
+  = Just entry
+  | otherwise = getInst rest className argCons
+getInst (_:rest) className argCons = getInst rest className argCons
 
 class HasTcContext a s | s -> a where
   tcContext :: Lens' s [TypeclassEntry a]

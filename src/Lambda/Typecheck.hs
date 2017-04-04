@@ -215,45 +215,29 @@ special scheme scheme'
   | scheme == scheme' = pure ()
   | Forall vars cons ty <- scheme
   , Forall vars' cons' ty' <- scheme'
-  = if vars == vars' && cons == cons'
-      then use kindTable >>= void . runReaderT (unifyTypes ty ty')
-      else do
-        for_ (S.toList vars) $ \var -> do
-          updateKindTable <- M.insertWith (flip const) var <$> freshKindVar
-          kindTable %= updateKindTable
-        for_ (S.toList vars') $ \var -> do
-          updateKindTable <- M.insertWith (flip const) var <$> freshKindVar
-          kindTable %= updateKindTable
-        (cons, ty) <- instantiate scheme -- this would be the body's type
-        (cons', ty') <- instantiate scheme' -- this would be the signature
-        subs <- Substitution . M.toList <$> (use kindTable >>= runReaderT (unifyTypes ty ty'))
-        use kindTable >>= runReaderT (kindPreservingSubstitution subs)
-        tctxt <- view tcContext
-        let newCons' = fmap (substitute subs) cons' -- more special
-            newCons = fmap (substitute subs) cons -- more general
-            generalCons = cons ++ newCons'
-            specialCons = cons' ++ newCons
-        unless (all (entails tctxt generalCons) specialCons) .
-          throwError $ _CouldNotDeduce # (specialCons, newCons')
+  , vars' `S.intersection` freeInScheme scheme == S.empty
+  = do
+    subs <- Substitution . M.toList <$> unifyTypes vars ty ty'
+    tctxt <- view tcContext
+    unless (all (entails tctxt cons') (substitute subs <$> cons)) .
+      throwError $ _CouldNotDeduce # (cons, cons')
+  | otherwise = throwError $ _TypeMismatch # (scheme, scheme')
   where
-    unifyTypes ty ty' = unifyTypes' ty ty' M.empty
+    unifyTypes bound ty ty' = unifyTypes' ty ty' M.empty
       where
         unifyTypes' ty ty' ctxt
           | ty == ty' = pure ctxt
           | TyVar name <- ty
-              = case M.lookup name ctxt of
-                  Nothing -> pure $ M.insert name ty' ctxt
-                  Just actualTy -> do
-                    checkEquality actualTy ty'
-                    pure ctxt
+          , name `S.member` bound
+          = case M.lookup name ctxt of
+              Nothing -> pure $ M.insert name ty' ctxt
+              Just actualTy
+                | actualTy /= ty' -> throwError $ _TUnificationError # CannotUnify actualTy ty'
+                | otherwise -> pure ctxt
           | TyApp con arg <- ty, TyApp con' arg' <- ty' = do
-              ctxt' <- unifyTypes' con con' ctxt
-              unifyTypes' arg arg' ctxt'
+              ctxt' <- unifyTypes' arg arg' ctxt
+              unifyTypes' con con' ctxt'
           | otherwise = throwError $ _TUnificationError # CannotUnify ty ty'
-
-    checkEquality (TyApp con arg) (TyApp con' arg')
-      = checkEquality con con' >> checkEquality arg arg'
-    checkEquality ty ty' = unless (ty == ty') . throwError $ _TUnificationError # CannotUnify ty ty'
 
 runInferType :: Expr -> Either TypeError (Expr, TypeScheme)
 runInferType = runExcept . runFreshT . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . inferType
@@ -369,7 +353,7 @@ inferType e = do
               dvar <- ("dict" ++) <$> fresh
               bimap
                 (DictPlaceholder (className, N.fromList instArgs) :)
-                (DictParamEntry className (N.fromList instArgs) dvar :)
+                (DictParamEntry className (N.fromList instArgs) :)
                 <$> consToPlaceholders rest
 
     inferLiteral lit = case lit of
@@ -414,7 +398,7 @@ inferType e = do
           (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ w rest 
           pure (s2, cons2, env2, t2, rest', e'')
         return
-          ( s2 <> s1
+          ( s1 <> s2
           , cons2
           , over (traverse.dpeTyArgs.traverse) (substitute s2) env2
           , t2
@@ -445,7 +429,7 @@ inferType e = do
             (sub, cons, env, ty, rest') <- w rest
             pure (sub, cons, env, ty, rest', value'')
         pure
-          ( s3 <> s1
+          ( s1 <> s3
           , cons2
           , over (traverse.dpeTyArgs.traverse) (substitute s3) env2
           , t2
@@ -469,7 +453,7 @@ inferType e = do
           (boundVars,patternType) <- patType pat
           local (over context $ M.union boundVars) $ do
             (branchSubs,preds,env,branchType,branch') <- w branch
-            pure (branchSubs <> subs, (patternType, preds, env, branchType, branch'):bTypes)
+            pure (subs <> branchSubs, (patternType, preds, env, branchType, branch'):bTypes)
 
     inferCase input bs = do
       (s1, cons, env, inputType, input') <- w input
@@ -481,7 +465,7 @@ inferType e = do
       let env' = over (traverse.dpeTyArgs.traverse) (substitute subs) $ env ++ join (fmap (\(_, _, e, _, _) -> e) bs')
       let bs'' = N.zip (fst <$> bs) ((\(_, _, _, _, b) -> b) <$> N.fromList bs')
       pure
-        ( subs <> bSubs <> s1
+        ( s1 <> bSubs <> subs
         , cons'
         , env'
         , substitute subs outputType
@@ -543,26 +527,41 @@ checkDefinition def@(ValidClass supers constructor params funcs) = do
       pure $ subs' <> subs
 
 checkDefinition (ValidInstance supers constructor params impls) = do
-  entry <- uses tcContext $ getClass constructor
+  tctxt <- use tcContext
+  let entry = getClass tctxt constructor
   let params' = fmap (\(con, args) -> foldl' TyApp (TyCtor con) $ TyVar <$> args) params
   let constructorTy = foldl' TyApp (TyCon $ TypeCon constructor) params'
+  tyVars <- M.fromList <$> traverse (\ty -> (,) ty <$> freshKindVar) (S.toList $ foldMap freeInType supers)
+  kindTable %= M.union tyVars
   get >>= runReaderT (inferKind constructorTy)
   impls' <- case entry of
     Nothing -> throwError $ _NoSuchClass # constructor
-    Just (TceClass supers _ _ members)
+    Just (TceClass classSupers _ classArgs members)
       | let implNames = S.fromList (fmap bindingName impls)
       , let memberNames = M.keysSet members
       , let notImplemented = memberNames `S.difference` implNames
       , notImplemented /= S.empty -> throwError $ _MissingClassFunctions # (constructor, params', notImplemented)
+      | let classSupers' = substitute (Substitution . N.toList $ N.zip classArgs params') <$> classSupers
+      , let fromInstHead ih = (ih ^. ihClassName, fst <$> ih ^. ihInstArgs)
+      , Nothing <- traverse (uncurry (getInst tctxt) . fromInstHead . asClassInstanceP) classSupers'
+      -> throwError $ _MissingSuperclassInsts # classSupers'
       | otherwise -> for impls $ \(VariableBinding implName impl) ->
           case M.lookup implName members of
             Nothing -> throwError $ _NonClassFunction # (constructor, params', implName)
-            Just implTy -> do
+            Just (Forall _ implCons implTy) -> do
               let inst = TceInst supers (InstanceHead constructor params) undefined
               st <- get
               flip runReaderT st . local (over tcContext (inst :)) $ do
                 (impl', ty) <- inferType impl
-                special implTy ty
+                let subs = Substitution . N.toList $ N.zip classArgs params'
+                let implTy' = substitute subs implTy
+                let freeInImplTy' = freeInType implTy'
+                let implCons'
+                      = supers ++
+                        filter
+                          (\c -> freeInType c `S.isSubsetOf` freeInImplTy')
+                          implCons
+                special ty $ Forall freeInImplTy' implCons' implTy'
                 pure $ VariableBinding implName impl'
   let inst = TceInst supers (InstanceHead constructor params) . M.fromList $
         fmap (\(VariableBinding name expr) -> (name, toCoreExpr $ desugarExpr expr)) impls'
