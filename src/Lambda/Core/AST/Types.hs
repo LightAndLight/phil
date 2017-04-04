@@ -3,6 +3,7 @@
 
 module Lambda.Core.AST.Types where
 
+import Data.Bifunctor
 import           Data.List                         (intercalate)
 import           Data.Set                          (Set)
 import qualified Data.Set                          as S
@@ -10,21 +11,24 @@ import qualified Data.Set                          as S
 import           Lambda.Core.AST.Identifier
 import           Lambda.Typecheck.Unification
 
-data Prim
-  = Int
-  | String
-  | Char
-  | Bool
-  deriving (Eq, Show, Ord)
-
 data TyCon = FunCon | TypeCon Identifier deriving (Eq, Show, Ord)
 
 data Type
   = TyVar Identifier
   | TyApp Type Type
   | TyCon TyCon
-  | TyPrim Prim
   deriving (Eq, Show, Ord)
+
+pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
+pattern TyCtor con = TyCon (TypeCon con)
+
+-- | Split a Type into a type constructor and some arguments
+ctorAndArgs :: Type -> Maybe (Identifier, [Type])
+ctorAndArgs (TyCtor con) = Just (con, [])
+ctorAndArgs (TyApp rest arg) = second (++ [arg]) <$> ctorAndArgs rest
+ctorAndArgs _ = Nothing
+
+data TypeScheme = Forall (Set Identifier) [Type] Type deriving (Eq, Show)
 
 instance Unify Type where
   type Variable Type = Identifier
@@ -69,10 +73,6 @@ getConstructor (TyCon con) = Just con
 getConstructor (TyApp con _) = getConstructor con
 getConstructor _ = Nothing
 
-pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
-
-data TypeScheme = Forall (Set Identifier) [Type] Type deriving (Eq, Show)
-
 freeInType :: Type -> Set Identifier
 freeInType (TyVar name) = S.singleton name
 freeInType (TyApp con arg) = freeInType con `S.union` freeInType arg
@@ -91,7 +91,6 @@ nestedCon ty = showType ty
 
 showType :: Type -> String
 showType (TyVar name) = name
-showType (TyPrim ty) = show ty
 showType (TyFun from to) = nestedFunc from ++ " -> " ++ showType to
 showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
 showType (TyCon FunCon) = "(->)"

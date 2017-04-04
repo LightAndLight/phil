@@ -8,6 +8,7 @@ import Data.Foldable
 import Data.Bifunctor
 import Control.Monad.Except
 import Control.Monad.Free
+import Control.Monad.Fresh
 import Control.Monad.Trans
 import Control.Monad.Reader
 import Control.Monad.State
@@ -27,14 +28,12 @@ import qualified Lambda.AST.Expr as L
 import Lambda.AST (toCore, toCoreExpr)
 import qualified Lambda.Core.AST.Binding as C
 import qualified Lambda.Core.AST.Definitions as C
-import Lambda.Core.AST.Evidence
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Identifier
 import qualified Lambda.Core.AST.Expr as C
 import Lambda.Core.AST.Types
 import Lambda.Core.AST.Pattern
-import Lambda.Core.Kinds hiding (HasFreshCount(..))
-import qualified Lambda.Core.Kinds as K (HasFreshCount(..))
+import Lambda.Core.Kinds
 import Lambda.Sugar (AsSyntaxError(..), SyntaxError, desugar, desugarExpr)
 import Lambda.Typecheck
 import Lambda.Typeclasses
@@ -57,11 +56,8 @@ data InterpreterState
     { _interpSymbolTable :: Map Identifier Value
     , _interpKindTable :: Map Identifier Kind
     , _interpTypesignatures :: Map Identifier TypeScheme
-    , _interpContext :: Map Identifier TypeScheme
-    , _interpKindInferenceState :: KindInferenceState
-    , _interpFreshCount :: Int
+    , _interpContext :: Map Identifier ContextEntry
     , _interpTcContext :: [TypeclassEntry C.Expr]
-    , _interpEVarCount :: Int
     }
 
 makeClassy ''InterpreterState
@@ -72,10 +68,7 @@ initialInterpreterState
   , _interpKindTable = M.empty
   , _interpTypesignatures = M.empty
   , _interpContext = M.empty
-  , _interpKindInferenceState = initialKindInferenceState
-  , _interpFreshCount = 0
   , _interpTcContext = []
-  , _interpEVarCount = 0
   }
 
 instance HasSymbolTable InterpreterState where
@@ -87,23 +80,11 @@ instance HasContext InterpreterState where
 instance HasTypesignatures InterpreterState where
   typesignatures = interpreterState . interpTypesignatures
 
-instance HasFreshCount InterpreterState where
-  freshCount = interpreterState . interpFreshCount
-
 instance HasKindTable InterpreterState where
   kindTable = interpreterState . interpKindTable
 
-instance HasKindInferenceState InterpreterState where
-  kindInferenceState = interpreterState . interpKindInferenceState
-
-instance K.HasFreshCount InterpreterState where
-  freshCount = kindInferenceState . K.freshCount
-
 instance HasTcContext C.Expr InterpreterState where
   tcContext = interpreterState . interpTcContext
-
-instance HasEVarCount InterpreterState where
-  eVarCount = interpreterState . interpEVarCount
 
 data InterpreterError
   = NotBound String
@@ -217,9 +198,9 @@ printString :: MonadFree ReplF m => String -> m ()
 printString str = liftF $ PrintString str ()
 
 evaluate ::
-  ( HasKindTable s
+  ( MonadFresh m
+  , HasKindTable s
   , HasContext s
-  , HasFreshCount s
   , HasSymbolTable s
   , AsTypeError e
   , AsKindError e
@@ -236,14 +217,12 @@ evaluate expr = do
   runReaderT (eval $ toCoreExpr expr') table
 
 define ::
-  ( HasKindTable s
+  ( MonadFresh m
+  , HasKindTable s
   , HasSymbolTable s
-  , HasFreshCount s
   , HasContext s
   , HasTypesignatures s
   , HasTcContext C.Expr s
-  , HasEVarCount s
-  , K.HasFreshCount s
   , AsInterpreterError e
   , AsTypeError e
   , AsKindError e
@@ -259,9 +238,9 @@ define def = do
   symbolTable %= M.union exprs'
 
 typeCheck ::
-  ( HasKindTable s
+  ( MonadFresh m
+  , HasKindTable s
   , HasContext s
-  , HasFreshCount s
   , AsTypeError e
   , AsKindError e
   , MonadError e m
@@ -270,7 +249,6 @@ typeCheck ::
   => L.Expr
   -> m TypeScheme
 typeCheck expr = do
-  freshCount .= 0
   ctxt <- use context
   snd <$> runWithContext ctxt (desugarExpr expr)
 
@@ -298,14 +276,12 @@ showValue (VError message) = "Runtime Error: " ++ message
 showValue (VProduct name args) = unwords . (:) name $ fmap showNestedValue args
 
 repl ::
-  ( HasKindTable s
+  ( MonadFresh m
+  , HasKindTable s
   , HasContext s
   , HasTypesignatures s
   , HasSymbolTable s
-  , HasFreshCount s
-  , K.HasFreshCount s
   , HasTcContext C.Expr s
-  , HasEVarCount s
   , MonadFree ReplF m
   , Show e
   , AsLexError e
@@ -355,4 +331,5 @@ main :: IO (Either InterpreterError ())
 main = do
   tempDir <- getTemporaryDirectory
   runInputT defaultSettings
-    { historyFile = Just $ tempDir </> "lambdai_history" } $ foldFree replIO (runExceptT . flip evalStateT initialInterpreterState $ repl)
+    { historyFile = Just $ tempDir </> "lambdai_history" } $
+    foldFree replIO (runExceptT . runFreshT . flip evalStateT initialInterpreterState $ repl)

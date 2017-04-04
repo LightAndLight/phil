@@ -56,10 +56,6 @@ import Lambda.AST.Expr
     char_lit { Token _ (TokChar $$) }
     eof { TokEOF }
     lam { Token _ TokLam }
-    intType { Token _ TokIntType }
-    stringType { Token _ TokStringType }
-    charType { Token _ TokCharType }
-    boolType { Token _ TokBoolType }
     '=' { Token _ TokEq }
     '_' { Token _ TokWildcard }
     '.' { Token _ TokDot }
@@ -89,14 +85,8 @@ A : A B { TyApp $1 $2 }
   | B { $1 }
 
 B : TyCon { $1 }
-  | PrimType { TyPrim $1 }
   | '(' Ty ')' { $2 }
   | ident { TyVar $1 }
-
-PrimType : intType { Int }
-         | stringType { String }
-         | charType { Char }
-         | boolType { Bool }
 
 TypeArgs : { [] }
          | B TypeArgs { $1:$2 }

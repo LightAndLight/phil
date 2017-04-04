@@ -18,7 +18,6 @@ import           Lambda.Core.AST.Types
 ast :: Prism' Expr () -> Expr
 ast p = p # ()
 
-makePrisms ''Prim
 makePrisms ''TyCon
 makePrisms ''Type
 
@@ -27,6 +26,9 @@ _TyFun = prism' (uncurry TyFun) $ \ty -> case ty of { TyFun from to -> Just (fro
 
 _TyFun' :: Type -> Type -> Prism' Type ()
 _TyFun' ty ty' = only $ TyFun ty ty'
+
+_TyCtor :: Prism' Type Identifier
+_TyCtor = prism' TyCtor $ \ty -> case ty of { TyCtor con -> Just con; _ -> Nothing }
 
 makePrisms ''TypeScheme
 

@@ -7,33 +7,22 @@ import           Data.Set                          (Set)
 import qualified Data.Set                          as S
 import           Data.Traversable
 
-import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Types
-import           Lambda.Core.Typecheck.Unification
-import           qualified Lambda.Core.Typecheck.Entailment as T (entails)
-import           Lambda.Core.Typeclasses
+import           Lambda.Typecheck.Unification
+import           Lambda.Typecheck.Entailment
+import           Lambda.Typeclasses
 
 import           Test.Hspec
 import           Test.Hspec.QuickCheck
 import           Test.QuickCheck
 
-instance Arbitrary Prim where
-  arbitrary = elements [Int, String, Char, Bool]
-
 instance Arbitrary TyCon where
   arbitrary = oneof [pure FunCon, TypeCon <$> arbitrary]
 
-entails :: [TypeclassEntry] -> [Type] -> Type -> Maybe Dictionary
-entails tctxt preds ty =
-  let preds' = flip evalState (0 :: Int) $
-        for preds $ \p -> (,) <$> (Variable <$> freshEVar) <*> pure p
-  in T.entails tctxt preds' ty
-
 sizedType :: Int -> Gen Type
-sizedType 0 = oneof [TyPrim <$> arbitrary, TyVar <$> listOf1 (elements ['a'..'z']), TyCon <$> arbitrary]
+sizedType 0 = oneof [TyVar <$> listOf1 (elements ['a'..'z']), TyCon <$> arbitrary]
 sizedType n = oneof
-  [ TyPrim <$> arbitrary
-  , TyVar <$> listOf1 (elements ['a'..'z'])
+  [ TyVar <$> listOf1 (elements ['a'..'z'])
   , TyCon <$> arbitrary
   , TyApp <$> sizedType (n-1) <*> sizedType (n-1)
   ]
@@ -79,46 +68,46 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         ord a = TyApp (TyCon $ TypeCon "Ord") (TyVar a)
         num a = TyApp (TyCon $ TypeCon "Num") (TyVar a)
         context =
-          [ TceClass [] (eq "a") undefined
-          , TceClass [eq "b"] (ord "b") undefined
+          [ TceClass [] "Eq" (pure "a") undefined
+          , TceClass [eq "b"] "Ord" (pure "b") undefined
           ]
     it "P ||- {}" $
-      traverse (entails [] [ord "c"]) [] `shouldSatisfy` has _Just
+      all (entails [] [ord "c"]) [] `shouldBe` True
     it "given `Eq a` and `Eq b => Ord b`, `Ord c` entails `Eq c`" $
-      entails context [ord "c"] (eq "c") `shouldSatisfy` has _Just
+      entails context [ord "c"] (eq "c") `shouldBe` True
     it "given `Eq a` and `Eq b => Ord b`, `Ord c` entails `Ord c`" $
-      entails context [ord "c"] (ord "c") `shouldSatisfy` has _Just
+      entails context [ord "c"] (ord "c") `shouldBe` True
     it "given `Eq a` and `Eq b => Ord b`, `Ord c` does not entail `Eq d`" $
-      entails context [ord "c"] (eq "d") `shouldSatisfy` has _Nothing
+      entails context [ord "c"] (eq "d") `shouldBe` False
     it "given `Eq a` and `Eq b => Ord b`, `Ord c` does not entail `Num d`" $
-      entails context [ord "c"] (num "d") `shouldSatisfy` has _Nothing
-    let eq a = TyApp (TyCon $ TypeCon "Eq") a
-        ord a = TyApp (TyCon $ TypeCon "Ord") a
-        context' = context ++ [TceInst [] (eq $ TyPrim Int) undefined]
-        list a = TyApp (TyCon $ TypeCon "List") a
+      entails context [ord "c"] (num "d") `shouldBe` False
+    let eq = TyApp (TyCon $ TypeCon "Eq")
+        ord = TyApp (TyCon $ TypeCon "Ord")
+        context' = context ++ [TceInst [] (InstanceHead "Eq" $ pure ("Int", [])) undefined]
+        list = TyApp (TyCon $ TypeCon "List")
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` entails `Eq Int`" $
-      entails context' [eq $ TyVar "c"] (eq $ TyPrim Int) `shouldSatisfy` has _Just
+      entails context' [eq $ TyVar "c"] (eq $ TyCtor "Int") `shouldBe` True
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Eq Bool`" $
-      entails context' [eq $ TyVar "c"] (eq $ TyPrim Bool) `shouldSatisfy` has _Nothing
+      entails context' [eq $ TyVar "c"] (eq $ TyCtor "Bool") `shouldBe` False
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
-      entails context' [eq $ TyVar "c"] (ord $ TyPrim Int) `shouldSatisfy` has _Nothing
+      entails context' [eq $ TyVar "c"] (ord $ TyCtor "Int") `shouldBe` False
     let context' = context ++
-          [ TceInst [eq $ TyVar "b"] (eq . list $ TyVar "b") undefined
-          , TceInst [] (eq $ TyPrim Int) undefined
+          [ TceInst [eq $ TyVar "b"] (InstanceHead "Eq" $ pure ("List", ["b"])) undefined
+          , TceInst [] (InstanceHead "Eq" $ pure ("Int", [])) undefined
           ]
     it "given `Eq a`, and `Eq b => Eq (List b)`, `Eq c` entails `Eq (List c)`" $
-      entails context' [eq $ TyVar "c"] (eq $ (TyApp (TyCon $ TypeCon "List")) (TyVar "c")) `shouldSatisfy` has _Just
+      entails context' [eq $ TyVar "c"] (eq $ TyApp (TyCon $ TypeCon "List") (TyVar "c")) `shouldBe` True
     it "given `Eq a`, `Eq b => Eq (List b)`, and `Eq Int`, `Eq c` entails `Eq (List Int)`" $
-      entails context' [eq $ TyVar "c"] (eq $ (TyApp (TyCon $ TypeCon "List")) (TyPrim Int)) `shouldSatisfy` has _Just
+      entails context' [eq $ TyVar "c"] (eq $ TyApp (TyCon $ TypeCon "List") (TyCtor "Int")) `shouldBe` True
     let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)
         context =
-          [ TceClass [] (functor "a") undefined
-          , TceClass [functor "b"] (applicative "b") undefined
-          , TceClass [applicative "c"] (monad "c") undefined
+          [ TceClass [] "Functor" (pure "a") undefined
+          , TceClass [functor "b"] "Applicative" (pure "b") undefined
+          , TceClass [applicative "c"] "Monad" (pure "c") undefined
           ]
     it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Monad d` entails `Functor d, Applicative d`" $
-      traverse (entails context [monad "d"]) [applicative "d", functor "d"] `shouldSatisfy` has _Just
+      all (entails context [monad "d"]) [applicative "d", functor "d"] `shouldBe` True
     it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Applicative d` does not entail `Monad d`" $
-      entails context [applicative "d"] (monad "d") `shouldSatisfy` has _Nothing
+      entails context [applicative "d"] (monad "d") `shouldBe` False

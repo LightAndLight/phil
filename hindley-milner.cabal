@@ -15,9 +15,10 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lambda.Core.AST.Binding
+  exposed-modules:     Control.Monad.Fresh
+                     , Control.Monad.Fresh.Class
+                     , Lambda.Core.AST.Binding
                      , Lambda.Core.AST.Definitions
-                     , Lambda.Core.AST.Evidence
                      , Lambda.Core.AST.Expr
                      , Lambda.Core.AST.Identifier
                      , Lambda.Core.AST.Types
@@ -45,6 +46,7 @@ library
                      , array
                      , containers
                      , dlist
+                     , free
                      , lens
                      , mtl
                      , semigroups

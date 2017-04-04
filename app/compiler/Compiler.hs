@@ -2,6 +2,7 @@
 
 import Control.Lens
 import           Control.Monad
+import Control.Monad.Fresh
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Except
@@ -75,7 +76,7 @@ compile opts = flip catchError (liftIO . print) $ do
   tokens <- tokenize content
   initialAST <- parseProgram tokens
   desugaredAST <- traverse desugar initialAST
-  (typecheckedAST,inferenceState) <- runStateT (checkDefinitions desugaredAST) initialInferenceState
+  typecheckedAST <- runFreshT $ evalStateT (checkDefinitions desugaredAST) initialInferenceState
   let coreAST = fmap toCore typecheckedAST
   let phpAST = genPHP coreAST
   let phpSource = toSource "    " phpAST

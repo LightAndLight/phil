@@ -6,15 +6,11 @@
 module Lambda.Core.Kinds
   ( KindError(..)
   , Kind(..)
-  , KindInferenceState(..)
-  , HasKindInferenceState(..)
-  , HasFreshCount(..)
   , HasKindTable(..)
   , AsKindError(..)
   , checkDefinitionKinds
   , freshKindVar
   , inferKind
-  , initialKindInferenceState
   , lookupKind
   , runInferKind
   , showKind
@@ -22,8 +18,9 @@ module Lambda.Core.Kinds
   )
   where
 
-import Control.Lens
 import Control.Applicative
+import Control.Monad.Fresh
+import Control.Lens
 import Data.Foldable
 import Data.Traversable
 import Data.Functor
@@ -102,30 +99,14 @@ instantiate (KindArrow k1 k2) = KindArrow (instantiate k1) (instantiate k2)
 instantiate Constraint = Constraint
 instantiate _ = Star
 
-newtype KindInferenceState = KindInferenceState { _kindFreshCount :: Int }
-
-initialKindInferenceState = KindInferenceState 0
-
-class HasKindInferenceState s where
-  kindInferenceState :: Lens' s KindInferenceState
-
-class HasFreshCount s where
-  freshCount :: Lens' s Int
-
-instance HasFreshCount KindInferenceState where
-  freshCount = lens _kindFreshCount (\_ i -> KindInferenceState i)
-
 class HasKindTable s where
   kindTable :: Lens' s (Map Identifier Kind)
 
 instance HasKindTable (Map Identifier Kind) where
   kindTable = lens id (flip const)
 
-freshKindVar :: (HasFreshCount s, MonadState s m) => m Kind
-freshKindVar = do
-  count <- use freshCount
-  freshCount += 1
-  pure . KindVar $ "k" ++ show count
+freshKindVar :: MonadFresh m => m Kind
+freshKindVar = KindVar . ("k" ++) <$> fresh
 
 lookupKind :: (AsKindError e, MonadError e m) => Identifier -> Map Identifier Kind -> m Kind
 lookupKind name table = case M.lookup name table of
@@ -135,8 +116,7 @@ lookupKind name table = case M.lookup name table of
 subKindTable subs = fmap (substitute subs)
 
 inferKind
-  :: ( HasFreshCount s
-     , MonadState s m
+  :: ( MonadFresh m
      , HasKindTable r
      , MonadReader r m
      , AsKindError e
@@ -159,14 +139,12 @@ inferKind (TyCon tyCon) = case tyCon of
   TypeCon con -> do
     kind <- lookupKind con =<< view kindTable
     pure (mempty, kind)
-inferKind (TyPrim _) = pure (mempty, Star)
 
 runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m (Substitution Kind, Kind)
-runInferKind ty = flip evalStateT initialKindInferenceState . runReaderT (inferKind ty)
+runInferKind ty = runFreshT . runReaderT (inferKind ty)
 
 checkDefinitionKinds
-  :: ( HasFreshCount s
-     , MonadState s m
+  :: ( MonadFresh m
      , HasKindTable r
      , MonadReader r m
      , AsKindError e

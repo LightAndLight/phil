@@ -4,6 +4,7 @@ module Test.Lambda.Core.Kinds (kindSpec) where
 
 import           Control.Lens
 import           Control.Monad.Except
+import           Control.Monad.Fresh
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Either
@@ -13,6 +14,7 @@ import           Data.Traversable
 
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.ProdDecl
 import           Lambda.Core.AST.Types
 import           Lambda.Core.Kinds
 
@@ -21,7 +23,6 @@ import           Test.Hspec
 data TestState
   = TestState
   { _tsKindTable  :: M.Map Identifier Kind
-  , _tsFreshCount :: Int
   }
 
 makeLenses ''TestState
@@ -29,20 +30,16 @@ makeLenses ''TestState
 instance HasKindTable TestState where
   kindTable = tsKindTable
 
-instance HasFreshCount TestState where
-  freshCount = tsFreshCount
-
 runCheckDefinitionKinds
   :: Identifier
   -> [Identifier]
   -> NonEmpty ProdDecl
   -> Either KindError Kind
 runCheckDefinitionKinds name tyVars prods
-  = let s = TestState M.empty 0
-    in evalStateT (runExceptT (checkDefinitionKinds name tyVars prods)) s s
-
+  = let s = TestState M.empty
+    in runExcept . flip evalStateT s . flip runReaderT s . runFreshT $ checkDefinitionKinds name tyVars prods
 runInferKindTypeScheme :: [Identifier] -> Type -> Either KindError Kind
-runInferKindTypeScheme vars ty = flip evalState (KindInferenceState 0) . runExceptT $ do
+runInferKindTypeScheme vars ty = runExcept . runFreshT $ do
   vars' <- for vars $ \var -> (,) var <$> freshKindVar
   fmap snd . flip runReaderT (M.fromList vars') $ inferKind ty
 
