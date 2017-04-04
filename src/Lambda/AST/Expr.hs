@@ -17,7 +17,7 @@ data Expr
   | Let (Binding Expr) Expr
   | Rec (Binding Expr) Expr
   | Case Expr (NonEmpty (Pattern, Expr))
-  | DictPlaceholder Identifier
+  | DictPlaceholder (Identifier, NonEmpty Type)
   | RecPlaceholder Identifier
   | DictVar Identifier
   | DictInst Identifier (NonEmpty Identifier)

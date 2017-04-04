@@ -119,17 +119,19 @@ genInst
   -> InstanceHead
   -> [Binding Expr]
   -> m PHPDecl
-genInst supers instHead impls
-  = PHPDeclStatement . PHPStatementExpr .
-    PHPExprAssign (PHPExprVar $ genInstName instHead) . 
-    genDict <$> traverse (toAnonymous . genImpl) impls
+genInst supers instHead impls = do
+  impls' <- traverse (toAnonymous . genImpl) impls
+  sc <- use scope
+  pure . PHPDeclStatement . PHPStatementExpr .
+    PHPExprAssign (PHPExprVar $ genInstName instHead) $
+    genDict (scopeToArgs . foldr M.delete sc $ phpId <$> supersDicts) impls'
   where
     supersDicts = fmap (("dict" ++) . genTypeName) supers
     toAnonymous (Binding _ expr) = genPHPExpr expr
     genImpl = fmap (flip (foldl' App) $ Id <$> supersDicts)
-    genDict = if null supersDicts
+    genDict scope = if null supersDicts
       then PHPExprNew (phpId $ _ihClassName instHead)
-      else PHPExprFunction (PHPArgValue . phpId <$> supersDicts) [] .
+      else PHPExprFunction (PHPArgValue . phpId <$> supersDicts) scope .
         pure . PHPStatementReturn .
         PHPExprNew (phpId $ _ihClassName instHead)
 

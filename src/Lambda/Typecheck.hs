@@ -148,24 +148,29 @@ generalize
      , HasContext r
      , MonadReader r m
      )
-  => [TypeclassEntry a] -- ^ Typeclass environment
+  => Substitution Type -- ^ Substitutions to apply to placeholders
+  -> [TypeclassEntry a] -- ^ Typeclass environment
   -> Expr -- ^ Expression to operate on
   -> [Type] -- ^ Constraints
   -> [DictParamEntry] -- ^ Dictionary parameter environment
   -> Type -- ^ Type to generalize
   -> m (Expr, TypeScheme)
-generalize tcenv expr cons dictParams ty = do
+generalize subs tcenv expr cons dictParams ty = do
   ctxt <- view context
   let freeInCtxt = free $ typeScheme <$> ctxt
   let frees = (freeInType ty `S.union` foldMap freeInType cons)
         `S.difference` freeInCtxt
   (dictParams', mapping) <- resolvePlaceholders tcenv dictParams freeInCtxt
-  let expr' = everywhere (replacePlaceholders $ M.fromList mapping) expr
-  let unresolved = fst <$> filter (isDictVar . snd) mapping
+  let expr' = everywhere (replacePlaceholders (M.fromList mapping) . subPlaceholders) expr
+  let unresolved = foldr fromDictVar [] $ snd <$> mapping
   pure (foldr Abs expr' unresolved, Forall frees cons ty)
   where
-    isDictVar DictVar{} = True
-    isDictVar _ = False
+    subPlaceholders (DictPlaceholder (className, tyArgs))
+      = DictPlaceholder (className, substitute subs <$> tyArgs)
+    subPlaceholders expr = expr
+
+    fromDictVar (DictVar a) as = a : as
+    fromDictVar _ as = as
 
 freshTyVar :: (MonadFresh m, HasKindTable s, MonadState s m) => m Type
 freshTyVar = do
@@ -324,7 +329,7 @@ inferType :: (MonadW r s e m, HasTcContext C.Expr s) => Expr -> m (Expr, TypeSch
 inferType e = do
   (subs, cons, dictParams, ty, e') <- w e
   env <- use tcContext
-  generalize env e' (substitute subs <$> cons) dictParams (substitute subs ty)
+  generalize subs env e' (substitute subs <$> cons) dictParams (substitute subs ty)
   where
     w :: MonadW r s e m => Expr -> m (Substitution Type, [Type], [DictParamEntry], Type, Expr)
     w e = case e of
@@ -380,7 +385,7 @@ inferType e = do
             in do
               dvar <- ("dict" ++) <$> fresh
               bimap
-                (DictPlaceholder dvar :)
+                (DictPlaceholder (className, N.fromList instArgs) :)
                 (DictParamEntry className (N.fromList instArgs) dvar :)
                 <$> consToPlaceholders rest
 
@@ -395,7 +400,7 @@ inferType e = do
       (s2, cons2, env2, t2, x') <- local (over context $ fmap (subContextEntry s1)) $ w x
       b <- freshTyVar
       s3 <- either (throwError . review _TUnificationError) pure $ unify [(TyFun t2 b,substitute s2 t1)]
-      let subs = s3 <> s2 <> s1
+      let subs = s1 <> s2 <> s3
       return
         ( subs
         , substitute subs <$> cons1 ++ cons2
@@ -422,7 +427,7 @@ inferType e = do
         (s1, cons1, env1, t1, e') <- w e
         (s2, cons2, env2, t2, rest', e'') <- local (over context $ fmap (subContextEntry s1)) $ do
           env <- use tcContext
-          (e'', t1') <- generalize env e' cons1 env1 t1
+          (e'', t1') <- generalize s1 env e' cons1 env1 t1
           (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ w rest 
           pure (s2, cons2, env2, t2, rest', e'')
         return
@@ -444,9 +449,10 @@ inferType e = do
         let cons1' = substitute s2 <$> cons1
         (s3, cons2, env2, t2, rest', value'') <- local (over context $ fmap (subContextEntry s1)) $ do
           env <- use tcContext
-          let replacement = foldl' App (Id name) $ fmap (DictPlaceholder . _dpeDictVar) env1
+          let replacement = foldl' App (Id name) $ fmap (\n -> DictPlaceholder (_dpeClassName n, _dpeTyArgs n)) env1
           (value'', t1') <-
             generalize
+              s1
               env
               (everywhere (replacePlaceholder replacement) value')
               cons1'
@@ -541,7 +547,7 @@ checkDefinition def@(ValidClass supers constructor params funcs) = do
   kindTable %= subKindTable subs
   checkedFuncs <- for funcs $ \(name, ty) -> do
     env <- use tcContext
-    (expr, checkedFuncTy) <- get >>= runReaderT (generalize env (Error "Not implemented") [constructorTy] [] ty)
+    (expr, checkedFuncTy) <- get >>= runReaderT (generalize mempty env (Error "Not implemented") [constructorTy] [] ty)
     context %= M.insert name (OEntry checkedFuncTy)
     pure (name, checkedFuncTy, toCoreExpr expr)
   tcContext %= (TceClass supers constructor params (M.fromList $ fmap (\(name, ty, _) -> (name, ty)) checkedFuncs) :)
@@ -596,7 +602,7 @@ checkDefinition def@(Data tyCon tyVars decls) = do
           ctxt <- use context
           let conExpr = buildDataCon p
           env <- use tcContext
-          (conExpr', conTy') <- get >>= runReaderT (generalize env conExpr [] [] conTy)
+          (conExpr', conTy') <- get >>= runReaderT (generalize mempty env conExpr [] [] conTy)
           context %= M.insert dataCon (CEntry conTy')
           return (dataCon, toCoreExpr $ desugarExpr conExpr')
 

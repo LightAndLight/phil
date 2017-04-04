@@ -34,10 +34,11 @@ instance Eq a => Eq (List a) where {
       _ -> false
       };
     Cons a la' -> case lb of {
-      Cons b lb' -> and (eq a b) (eq' la lb);
+      Cons b lb' -> and (eq a b) (eq' la' lb');
       _ -> false
       }
   } in eq'
 }
 
-asdfasdf = eq (Cons true Nil) Nil
+shouldBeFalse = eq (Cons true Nil) Nil
+shouldBeTrue = eq (Cons true Nil) (Cons true Nil)

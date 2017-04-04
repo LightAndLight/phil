@@ -19,20 +19,18 @@ $not = function($b) {
     })();
 };
 
-$eqBool = function() {
-    return new Eq(function($a) use ($not) {
-        return function($b) use ($a, $not) {
-            return (function() use ($a, $b, $not) {
-                if ($a === true) {
-                    return $b;
-                }
-                if ($a === false) {
-                    return $not($b);
-                }
-            })();
-        };
-    });
-};
+$eqBool = new Eq(function($a) use ($not) {
+    return function($b) use ($a, $not) {
+        return (function() use ($a, $b, $not) {
+            if ($a === true) {
+                return $b;
+            }
+            if ($a === false) {
+                return $not($b);
+            }
+        })();
+    };
+});
 
 $asdf = function($dict34) {
     return function($a) use ($dict34) {
@@ -73,7 +71,7 @@ $Cons = function($a1) {
     };
 };
 
-$eqList = function($dictEq) {
+$eqList = function($dictEq) use ($and) {
     return new Eq((function($dict103) use ($and) {
         return (function() use ($and, $dict103) {
             $eqPrime = function($dict76) use ($and, &$eqPrime) {
@@ -91,11 +89,11 @@ $eqList = function($dictEq) {
                             if ($la instanceof ConsCon) {
                                 $a = $la->values[0];
                                 $laPrime = $la->values[1];
-                                return (function() use ($a, $and, $dict76, &$eqPrime, $la, $lb) {
+                                return (function() use ($a, $and, $dict76, &$eqPrime, $la, $laPrime, $lb) {
                                     if ($lb instanceof ConsCon) {
                                         $b = $lb->values[0];
                                         $lbPrime = $lb->values[1];
-                                        return $and(($dict76->eq)($a)($b))($eqPrime($dict76)($la)($lb));
+                                        return $and(($dict76->eq)($a)($b))($eqPrime($dict76)($laPrime)($lbPrime));
                                     }
                                     return false;
                                 })();
@@ -109,6 +107,8 @@ $eqList = function($dictEq) {
     })($dictEq));
 };
 
-$asdfasdf = ($eqList($eqBool)->eq)($Cons(true)($Nil))($Nil);
+$shouldBeFalse = ($eqList($eqBool)->eq)($Cons(true)($Nil))($Nil);
+
+$shouldBeTrue = ($eqList($eqBool)->eq)($Cons(true)($Nil))($Cons(true)($Nil));
 
 ?>

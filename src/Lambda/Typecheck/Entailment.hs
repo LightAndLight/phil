@@ -61,13 +61,13 @@ data DictParamEntry
   { _dpeClassName :: Identifier
   , _dpeTyArgs :: NonEmpty Type
   , _dpeDictVar :: Identifier
-  }
+  } deriving (Eq, Ord, Show)
 
 makeLenses ''DictParamEntry
 
 -- | Replace the 'DictPlaceholder's in an expression using the specified
 -- | mapping
-replacePlaceholders :: Map Identifier Expr -> Expr -> Expr
+replacePlaceholders :: Map (Identifier, NonEmpty Type) Expr -> Expr -> Expr
 replacePlaceholders mapping expr@(DictPlaceholder d)
   | Just expr' <- M.lookup d mapping = expr'
   | otherwise = expr 
@@ -78,22 +78,28 @@ resolvePlaceholders
   => [TypeclassEntry a] -- ^ Typeclass environment
   -> [DictParamEntry] -- ^ Dictionary parameter environment
   -> Set Identifier -- ^ Type variables bound in the outer context
-  -> m ([DictParamEntry], [(Identifier, Expr)])
+  -> m ([DictParamEntry], [((Identifier, NonEmpty Type), Expr)])
 resolvePlaceholders ctxt [] _ = pure ([], [])
 resolvePlaceholders ctxt (p : rest) bound
   | foldMap freeInType (_dpeTyArgs p) `S.intersection` bound /= S.empty
   = first (p :) <$> resolvePlaceholders ctxt rest bound
   | any isTyVar (_dpeTyArgs p)
-  , let var = _dpeDictVar p
-  = second ((var, DictVar var) :) <$> resolvePlaceholders ctxt rest bound
+  = do
+    (leftover, mapping) <- resolvePlaceholders ctxt rest bound
+    let placeholder = (_dpeClassName p, _dpeTyArgs p)
+    case lookup placeholder mapping of
+      Nothing -> do
+        var <- ("dict" ++) <$> fresh
+        pure (leftover, (placeholder, DictVar var) : mapping)
+      Just _ -> pure (leftover, mapping)
   | Just (subs, TceInst supers instHead impls) <- getInst ctxt (_dpeClassName p) (_dpeTyArgs p)
   = do
     new <- traverse (newPlaceholders . ctorAndArgs . substitute subs) supers
     let inst = DictInst (instHead ^. ihClassName) (fst <$> instHead ^. ihInstArgs)
-    let dictExpr = foldl' App inst (DictPlaceholder . _dpeDictVar <$> new)
+    let dictExpr = foldl' App inst (fmap (\n -> DictPlaceholder (_dpeClassName n, _dpeTyArgs n)) new)
     (leftover, mapping) <- resolvePlaceholders ctxt (new ++ rest) bound
     let dictExpr' = everywhere (replacePlaceholders $ M.fromList mapping) dictExpr
-    pure (leftover, (_dpeDictVar p, dictExpr') : mapping)
+    pure (leftover, ((_dpeClassName p, _dpeTyArgs p), dictExpr') : mapping)
   where
     newPlaceholders (con, args) = do
       ident <- ("dict" ++) <$> fresh
