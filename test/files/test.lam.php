@@ -19,18 +19,20 @@ $not = function($b) {
     })();
 };
 
-$eqBool = new Eq(function($a) use ($not) {
-    return function($b) use ($a, $not) {
-        return (function() use ($a, $b, $not) {
-            if ($a === true) {
-                return $b;
-            }
-            if ($a === false) {
-                return $not($b);
-            }
-        })();
-    };
-});
+$eqBool = function() {
+    return new Eq(function($a) use ($not) {
+        return function($b) use ($a, $not) {
+            return (function() use ($a, $b, $not) {
+                if ($a === true) {
+                    return $b;
+                }
+                if ($a === false) {
+                    return $not($b);
+                }
+            })();
+        };
+    });
+};
 
 $asdf = function($dict34) {
     return function($a) use ($dict34) {
