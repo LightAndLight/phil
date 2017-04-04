@@ -12,7 +12,7 @@ data Definition
   | TypeSignature Identifier TypeScheme
   | Function (Binding Expr)
   | Class [Type] Type [(Identifier, Type)]
-  | ValidClass [Type] Identifier [Identifier] [(Identifier, Type)]
+  | ValidClass [Type] Identifier (NonEmpty Identifier) [(Identifier, Type)]
   | Instance [Type] Type [Binding Expr]
-  | ValidInstance [Type] Identifier [Type] [Binding Expr]
+  | ValidInstance [Type] Identifier (NonEmpty (Identifier, [Identifier])) [Binding Expr]
   deriving (Eq, Show)

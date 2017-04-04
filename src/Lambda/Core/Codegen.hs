@@ -6,7 +6,7 @@ module Lambda.Core.Codegen (genPHP) where
 import Control.Lens
 import Control.Monad.Reader
 import           Control.Monad.State
-import Data.Foldable (traverse_)
+import Data.Foldable
 import Data.Char
 import qualified Data.List.NonEmpty as N
 import Data.Map (Map)
@@ -20,7 +20,6 @@ import qualified Data.Set as S
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Expr
-import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Literal
 import           Lambda.Core.AST.Pattern
@@ -28,7 +27,8 @@ import           Lambda.Core.AST.ProdDecl
 import           Lambda.Core.AST.Types
 import Lambda.Typecheck
 import           Lambda.PHP.AST
-import           Lambda.Sugar (SyntaxError, asClassInstance)
+import           Lambda.Sugar (SyntaxError, asClassInstanceP)
+import           Lambda.Typeclasses (InstanceHead(..))
 
 data ArgType = Reference | Value
 
@@ -103,18 +103,30 @@ genDict name members =
 
 genTypeName :: Type -> String
 genTypeName (TyApp con arg) = genTypeName con ++ genTypeName arg
-genTypeName (TyCon (TypeCon name)) = name
+genTypeName (TyCtor name) = name
 genTypeName (TyCon FunCon) = "Function"
-genTypeName (TyPrim p) = show p
 genTypeName e = ""
 
-genInstName :: Identifier -> [Type] -> PHPId
-genInstName name args = phpId $ fmap toLower name ++ join (fmap genTypeName args)
+genInstName :: InstanceHead -> PHPId
+genInstName (InstanceHead className instArgs)
+  = phpId $ fmap toLower className ++ foldMap fst instArgs
 
-genInst :: (HasScope s, MonadState s m) => Identifier -> [Type] -> [Binding Expr] -> m PHPDecl
-genInst name args impls
-  = PHPDeclStatement . PHPStatementExpr .
-      PHPExprAssign (PHPExprVar $ genInstName name args) . PHPExprNew (phpId name) <$> traverse toAnonymous impls
+genInst
+  :: ( HasScope s
+     , MonadState s m
+     )
+  => [Type]
+  -> InstanceHead
+  -> [Binding Expr]
+  -> m PHPDecl
+genInst supers instHead impls
+  = let supersDicts = fmap (("dict" ++) . genTypeName) supers
+    in PHPDeclStatement . PHPStatementExpr .
+       PHPExprAssign (PHPExprVar $ genInstName instHead) . 
+       PHPExprFunction (PHPArgValue . phpId <$> supersDicts) [] .
+       pure . PHPStatementReturn .
+        PHPExprNew (phpId $ _ihClassName instHead) <$>
+         traverse (toAnonymous . fmap (flip (foldl' App) $ Id <$> supersDicts)) impls
   where
     toAnonymous (Binding _ expr) = genPHPExpr expr
 
@@ -123,7 +135,7 @@ genPHPDecl (Class supers name args members) = do
   let decls = genDict name $ phpId . fst <$> members
   code %= flip D.append (D.fromList decls)
 genPHPDecl (Instance supers name args impls) = do
-  inst <- genInst name args impls
+  inst <- genInst supers (InstanceHead name args) impls
   code %= flip D.snoc inst
 genPHPDecl (Data _ _ constructors) = do
   let decls = genConstructor =<< N.toList constructors
@@ -139,29 +151,6 @@ genPHPLiteral (LitInt i) = PHPInt i
 genPHPLiteral (LitString s) = PHPString s
 genPHPLiteral (LitChar c) = PHPString [c]
 genPHPLiteral (LitBool b) = PHPBool b
-
-genPHPEVar :: EVar -> PHPId
-genPHPEVar (EVar n) = phpId $ "ev" ++ show n
-
-genDictionary :: (HasScope s, MonadState s m) => Dictionary -> m PHPExpr
-genDictionary (Variable eVar) = pure . PHPExprVar $ genPHPEVar eVar
-genDictionary (Dict ty) = do
-  let Right (name, args) = asClassInstance ty :: Either SyntaxError (Identifier, [Type])
-  let tyName = genInstName name args
-  scope %= M.insertWith (flip const) tyName Value
-  pure $ PHPExprVar tyName
-genDictionary (Select ty dict) = do
-  let Right (name, args) = asClassInstance ty :: Either SyntaxError (Identifier, [Type])
-  let tyName = genInstName name args
-  scope %= M.insertWith (flip const) tyName Value
-  dict' <- genDictionary dict
-  pure $ PHPExprClassAccess dict' tyName Nothing
-genDictionary (Construct ty dicts) = do
-  let Right (name, args) = asClassInstance ty :: Either SyntaxError (Identifier, [Type])
-  let tyName = genInstName name args
-  scope %= M.insertWith (flip const) tyName Value
-  dicts' <- traverse genDictionary dicts
-  pure $ PHPExprFunctionCall (PHPExprVar tyName) dicts'
 
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
 genPHPExpr (Id name) = do
@@ -197,6 +186,9 @@ genPHPExpr (Rec binding rest) = do
   scope %= M.delete name
   sc <- use scope
   pure $ PHPExprFunctionCall (PHPExprFunction [] (scopeToArgs sc) [assignment, PHPStatementReturn rest']) []
+genPHPExpr (Select expr name) = do
+  expr' <- genPHPExpr expr
+  pure $ PHPExprClassAccess expr' (phpId name) Nothing
 genPHPExpr (Case val branches) = do
   val' <- genPHPExpr val
   branches' <- join . N.toList <$> traverse (genBranch val') branches

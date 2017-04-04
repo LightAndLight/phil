@@ -1,6 +1,8 @@
 module Lambda.AST where
 
 import Data.Bifunctor
+import Data.Char
+import Data.Foldable
 
 import qualified Lambda.Core.AST.Binding as C
 import qualified Lambda.Core.AST.Definitions as C
@@ -34,3 +36,17 @@ toCoreExpr (L.Let binding expr) = C.Let (toCoreBinding binding) (toCoreExpr expr
 toCoreExpr (L.Rec binding expr) = C.Rec (toCoreBinding binding) (toCoreExpr expr)
 toCoreExpr (L.Case expr branches) = C.Case (toCoreExpr expr) $ fmap (second toCoreExpr) branches
 toCoreExpr (L.Error err) = C.Error err
+toCoreExpr (L.DictVar a) = C.Id a
+toCoreExpr (L.DictInst className instArgs) = C.Id $ fmap toLower className ++ fold instArgs
+toCoreExpr (L.DictSel className expr) = C.Select (toCoreExpr expr) className
+toCoreExpr expr = error $ "toCoreExpr: invalid argument: " ++ show expr
+
+everywhere :: (L.Expr -> L.Expr) -> L.Expr -> L.Expr
+everywhere f (L.Prod name vals) = L.Prod name $ everywhere f <$> vals
+everywhere f (L.App func arg) = L.App (everywhere f func) (everywhere f arg)
+everywhere f (L.Abs name expr) = L.Abs name $ everywhere f expr
+everywhere f (L.Let binding rest) = L.Let (everywhere f <$> binding) (everywhere f rest)
+everywhere f (L.Rec binding rest) = L.Rec (everywhere f <$> binding) (everywhere f rest)
+everywhere f (L.Case expr branches) = L.Case (everywhere f expr) (second (everywhere f) <$> branches)
+everywhere f (L.DictSel className expr) = L.DictSel className $ everywhere f expr
+everywhere f e = f e

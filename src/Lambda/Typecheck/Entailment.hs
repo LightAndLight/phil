@@ -1,69 +1,108 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell #-}
 
-module Lambda.Typecheck.Entailment ( buildDicts, entails ) where
+module Lambda.Typecheck.Entailment
+  ( DictParamEntry(..), dpeClassName, dpeTyArgs, dpeDictVar 
+  , entails
+  , replacePlaceholders
+  , resolvePlaceholders
+  ) where
 
-import Debug.Trace
-
-import           Data.Bifunctor
-import           Data.Monoid
-import           Data.Foldable
 import           Control.Applicative
+import Control.Lens
+import Control.Monad.Fresh
+import           Data.Bifunctor
+import Data.List.NonEmpty (NonEmpty)
+import qualified Data.Map as M
+import Data.Map (Map)
+import           Data.Foldable
 import           Data.Maybe
+import           Data.Semigroup
+import qualified Data.Set as S
+import Data.Set (Set)
 
-import           Lambda.Core.AST.Evidence
+import Lambda.AST
+import Lambda.AST.Expr
+import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Types
+import           Lambda.Sugar
 import           Lambda.Typecheck.Unification
 import           Lambda.Typeclasses
 
-{-
-findEntry :: Type -> TypeclassEntry -> Maybe (TypeclassEntry, Substitution Type)
-findEntry pi entry@(TceInst supers ty _) =
-  case unify [(ty, pi)] of
-    Left _ -> Nothing
-    Right sub -> Just (entry, sub)
-findEntry pi entry@(TceClass supers ty _) = (,) entry <$> asum (flip equiv pi <$> supers)
--}
-
-findEntry :: Type -> TypeclassEntry a -> Maybe (TypeclassEntry a, Substitution Type)
-findEntry pi entry@(TceInst supers ty _) = (,) entry <$> equiv ty pi
-findEntry pi entry@(TceClass supers ty _) = (,) entry <$> asum (flip equiv pi <$> supers)
-
--- | Dis is broken
-equiv :: Type -> Type -> Maybe (Substitution Type)
-equiv (TyVar ty) ty'@TyVar{} = Just $ Substitution [(ty, ty')]
-equiv (TyApp t1 t2) (TyApp t1' t2') = do
-  t1Subs <- equiv t1 t1'
-  t2Subs <- equiv t2 t2'
-  if all (\(s1, s2) -> fst s1 /= fst s2 || snd s1 == snd s2) $
-    zip (getSubstitution t1Subs) (getSubstitution t2Subs)
-    then Just $ t1Subs <> t2Subs
-    else Nothing
-equiv ty ty'
-  | ty == ty' = Just mempty
-  | otherwise = Nothing
-
-entails :: [TypeclassEntry a] -> [(Dictionary, Type)] -> Type -> Maybe Dictionary
-entails entries ps pi
-  | ((d, _):_) <- filter (\p -> snd p == traceShowId pi) (traceShowId ps) = Just d
-  | otherwise = go (catMaybes $ findEntry pi <$> entries)
+reduceContext
+  :: [TypeclassEntry a]
+  -> [Type]
+  -> Type
+  -> Maybe ([Type], Type)
+reduceContext entries context (TyVar name) = Just (context, TyVar name)
+reduceContext entries context ty = undefined
   where
-    go :: [(TypeclassEntry a, Substitution Type)] -> Maybe Dictionary
-    go [] = Nothing
-    go ((TceInst supers ty _, sub) : rest) = do 
-      dicts <- sequence (entails entries ps . substitute sub <$> supers)
-      pure $ if null dicts
-        then Dict pi
-        else Construct pi dicts
-    go ((TceClass supers ty _, sub) : rest) =
-      (Select pi <$> entails entries ps (substitute sub ty)) <|> go rest
+    propagateClassTycon cls ty
+      = let InstanceHead name args = asClassInstanceP ty
+        in undefined
 
-buildDicts :: [TypeclassEntry a] -> [(EVar, Type)] -> [(EVar, Dictionary)]
-buildDicts entries ps = go ps
+entails :: [TypeclassEntry a] -> [Type] -> Type -> Bool
+entails ctxt kb goal = goal `elem` kb || go ctxt goal
   where
-    ps' = first Variable <$> ps
+    go [] goal = False
+    go (TceInst supers instHead _ : rest) goal
+      | Right subs <- unify [(instHeadToType instHead, goal)]
+      = all (entails ctxt kb) $ substitute subs <$> supers
+      | otherwise = go rest goal
+    go (TceClass supers className classArgs _ : rest) goal
+      | Right (subs : _) <- traverse (\ty -> unify [(ty, goal)]) supers
+      = let classTy = foldl' TyApp (TyCtor className) $ substitute subs . TyVar <$> classArgs
+        in entails ctxt kb classTy || go rest goal
+      | otherwise = go rest goal
 
-    go [] = []
-    go ((var, ty) : rest) =
-      let res = entails entries [] ty <|> entails entries (filter ((/= ty) . snd) ps') ty <|> entails entries ps' ty
-      in (var, fromJust res) : go rest
+data DictParamEntry
+  = DictParamEntry
+  { _dpeClassName :: Identifier
+  , _dpeTyArgs :: NonEmpty Type
+  , _dpeDictVar :: Identifier
+  }
+
+makeLenses ''DictParamEntry
+
+-- | Replace the 'DictPlaceholder's in an expression using the specified
+-- | mapping
+replacePlaceholders :: Map Identifier Expr -> Expr -> Expr
+replacePlaceholders mapping expr@(DictPlaceholder d)
+  | Just expr' <- M.lookup d mapping = expr'
+  | otherwise = expr 
+replacePlaceholders _ expr = expr
+
+resolvePlaceholders
+  :: MonadFresh m
+  => [TypeclassEntry a] -- ^ Typeclass environment
+  -> [DictParamEntry] -- ^ Dictionary parameter environment
+  -> Set Identifier -- ^ Type variables bound in the outer context
+  -> m ([DictParamEntry], [(Identifier, Expr)])
+resolvePlaceholders ctxt [] _ = pure ([], [])
+resolvePlaceholders ctxt (p : rest) bound
+  | foldMap freeInType (_dpeTyArgs p) `S.intersection` bound /= S.empty
+  = first (p :) <$> resolvePlaceholders ctxt rest bound
+  | any isTyVar (_dpeTyArgs p)
+  , let var = _dpeDictVar p
+  = second ((var, DictVar var) :) <$> resolvePlaceholders ctxt rest bound
+  | Just (subs, TceInst supers instHead impls) <- getInst ctxt (_dpeClassName p) (_dpeTyArgs p)
+  = do
+    new <- traverse (newPlaceholders . ctorAndArgs . substitute subs) supers
+    let inst = DictInst (instHead ^. ihClassName) (fst <$> instHead ^. ihInstArgs)
+    let dictExpr = foldl' App inst (DictPlaceholder . _dpeDictVar <$> new)
+    (leftover, mapping) <- resolvePlaceholders ctxt (new ++ rest) bound
+    let dictExpr' = everywhere (replacePlaceholders $ M.fromList mapping) dictExpr
+    pure (leftover, (_dpeDictVar p, dictExpr') : mapping)
+  where
+    newPlaceholders (con, args) = do
+      ident <- ("dict" ++) <$> fresh
+      pure $ DictParamEntry con args ident
+
+    isTyVar TyVar{} = True
+    isTyVar _ = False
+
+    ctorAndArgs (TyApp (TyCtor con) arg) = (con, pure arg)
+    ctorAndArgs (TyApp rest arg)
+      = let (con, args) = ctorAndArgs rest
+        in (con, args <> pure arg)
