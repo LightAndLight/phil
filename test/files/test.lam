@@ -15,6 +15,7 @@ instance Eq Bool where {
     }
 }
 
+asdf : forall a. Eq a => a -> Bool
 asdf a = eq a a
 
 test = asdf true
@@ -31,12 +32,12 @@ instance Eq a => Eq (List a) where {
     Nil -> case lb of {
       Nil -> true;
       _ -> false
-    };
-    Cons a rest -> case lb of {
-      Cons b rest' -> and (eq a b) (eq' rest rest');
+      };
+    Cons a la' -> case lb of {
+      Cons b lb' -> and (eq a b) (eq' la lb);
       _ -> false
-    }
+      }
   } in eq'
 }
 
-test2 = asdf (Cons true Nil)
+asdfasdf = eq (Cons true Nil) Nil

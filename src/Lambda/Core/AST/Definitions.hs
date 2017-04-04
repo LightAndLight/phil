@@ -17,7 +17,7 @@ data Definition
   -- | Function definition
   | Function (Binding Expr)
   -- | Class definition: constraints, class name, type variables, class members
-  | Class [Type] Identifier [Identifier] [(Identifier, Type)]
+  | Class [Type] Identifier (NonEmpty Identifier) [(Identifier, Type)]
   -- | Class instance definition: constraints, class name, type arguments, member implementations
-  | Instance [Type] Identifier [Type] [Binding Expr]
+  | Instance [Type] Identifier (NonEmpty (Identifier, [Identifier])) [Binding Expr]
   deriving (Eq, Show)

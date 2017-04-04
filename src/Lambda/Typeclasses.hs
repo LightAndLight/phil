@@ -1,9 +1,11 @@
 {-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
 {-# language FunctionalDependencies #-}
+{-# language TemplateHaskell #-}
 
 module Lambda.Typeclasses
   ( HasTcContext(..)
+  , InstanceHead(..), ihClassName, ihInstArgs, instHeadToType
   , TypeclassEntry(..)
   , checkConstraints
   , equalUpToRenaming
@@ -16,6 +18,7 @@ import Control.Lens
 import Control.Applicative
 import Data.Bifunctor
 import Control.Monad.Except
+import Control.Monad.Fresh
 import Control.Monad.Reader
 import Data.Traversable
 import Data.Monoid
@@ -25,37 +28,71 @@ import qualified Data.Set as S
 import Data.Maybe
 import qualified Data.Map as M
 import Data.Map (Map)
+import qualified Data.List.NonEmpty as N
 import Data.List.NonEmpty (NonEmpty)
 import Data.Set (Set)
 
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Expr
-import           Lambda.Core.AST.Evidence
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Types
 import           Lambda.Core.Kinds
-import Lambda.Sugar (AsSyntaxError(..), asClassDef)
 import Lambda.Typecheck.Unification
 
+-- | An instance head has the form: .. => C (T_1 tv_0 tv_1 .. tv_m) (T_2 ..) .. (T_n ..)
+-- |
+-- | A constructor applied to one or more constructors that are each applied to zero or
+-- | more type variables.
+data InstanceHead
+  = InstanceHead
+  { _ihClassName :: Identifier
+  , _ihInstArgs :: NonEmpty (Identifier, [Identifier])
+  } deriving (Eq, Show)
+
+instHeadToType :: InstanceHead -> Type
+instHeadToType (InstanceHead className instArgs)
+  = foldl' TyApp (TyCtor className) $ toType <$> instArgs
+  where
+    toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
+
+makeLenses ''InstanceHead
+
 data TypeclassEntry a
-  = TceInst [Type] Type (Map Identifier a)
-  | TceClass [Type] Type (Map Identifier TypeScheme)
+  -- | An instance entry consists of: a context, an instance head, and some function definitions
+  = TceInst [Type] InstanceHead (Map Identifier a)
+  -- | A class entry consists of: a context, a constructor applied to one or more type variables,
+  -- and some function type signatures
+  | TceClass [Type] Identifier (NonEmpty Identifier) (Map Identifier TypeScheme)
   deriving (Eq, Functor, Show)
 
-getClass :: Identifier -> [TypeclassEntry a] -> Maybe (TypeclassEntry a)
+-- | Look up a class in the context
+getClass
+  :: Identifier -- ^ Class constructor
+  -> [TypeclassEntry a] -- ^ Typeclass context
+  -> Maybe (TypeclassEntry a)
 getClass _ [] = Nothing
-getClass className (entry@(TceClass _ clsTy _):rest)
-  | Just (TypeCon className') <- getConstructor clsTy
-  , className == className' = Just entry
+getClass className (entry@(TceClass _ className' _ _):rest)
+  | className == className' = Just entry
   | otherwise = getClass className rest
 getClass className (_:rest) = getClass className rest
 
-getInst :: Type -> [TypeclassEntry a] -> Maybe (TypeclassEntry a)
-getInst _ [] = Nothing
-getInst inst (entry@(TceInst _ instTy _) : rest)
-  | inst == instTy = Just entry
-  | otherwise = getInst inst rest
-getInst inst (_ : rest) = getInst inst rest
+-- | Look up an instance in the context by unifying instance heads
+getInst
+  :: [TypeclassEntry a] -- ^ Typeclass context
+  -> Identifier -- ^ Class name
+  -> NonEmpty Type -- ^ Instance arguments
+  -> Maybe (Substitution Type, TypeclassEntry a)
+getInst [] _ _ = Nothing
+getInst (entry@(TceInst supers instHead impls) : rest) className instArgs
+  | className == instHead ^. ihClassName
+  , Right subs <- unify .
+  -- Instantiation might be required here
+      N.toList $ N.zip (toType <$> instHead ^. ihInstArgs) instArgs
+  = pure (subs, entry)
+  | otherwise = getInst rest className instArgs
+  where
+    toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
+getInst (_ : rest) className instArgs = getInst rest className instArgs
 
 class HasTcContext a s | s -> a where
   tcContext :: Lens' s [TypeclassEntry a]
@@ -75,12 +112,11 @@ elementUpToRenaming :: Type -> [Type] -> Maybe (Substitution Type)
 elementUpToRenaming ty tys = asum $ fmap (equalUpToRenaming ty) tys
 
 checkConstraints
-  :: ( AsKindError e
+  :: ( MonadFresh m
+     , AsKindError e
      , MonadError e m
      , HasKindTable r
      , MonadReader r m
-     , HasFreshCount s
-     , MonadState s m
      ) => [Type] -> m (Substitution Kind)
 checkConstraints [] = pure mempty
 checkConstraints [con] = do

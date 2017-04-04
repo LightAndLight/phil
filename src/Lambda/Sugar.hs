@@ -6,6 +6,7 @@ module Lambda.Sugar
   , SyntaxError(..)
   , asClassDef
   , asClassInstance
+  , asClassInstanceP
   , desugar
   , desugarBinding
   , desugarExpr
@@ -15,7 +16,8 @@ import Control.Lens
 import Control.Monad.Except
 import           Data.Bifunctor
 import           Data.Foldable
-import           Data.List.NonEmpty (NonEmpty)
+import           Data.List.NonEmpty (NonEmpty(..))
+import           Data.Semigroup
 import qualified Data.Set           as S
 
 import qualified Lambda.AST.Binding as L
@@ -29,6 +31,7 @@ import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Types
 import Lambda.Core.AST.Pattern
 import Lambda.Core.AST.ProdDecl
+import Lambda.Typeclasses
 
 data SyntaxError = MalformedHead Type
   deriving (Eq, Show)
@@ -45,20 +48,46 @@ generalize constraints ty
     vars _ = S.empty
 
 -- | Converts a type to the form T a_1 a_2 .. a_n, where a_i are type variables
-asClassDef :: (AsSyntaxError e, MonadError e m) => Type -> m (Identifier, [Identifier])
-asClassDef (TyApp (TyCon (TypeCon con)) (TyVar arg)) = pure (con, [arg])
+asClassDef :: (AsSyntaxError e, MonadError e m) => Type -> m (Identifier, NonEmpty Identifier)
+asClassDef (TyApp (TyCon (TypeCon con)) (TyVar arg)) = pure (con, arg :| [])
 asClassDef (TyApp left (TyVar arg)) = do
   (con, args) <- asClassDef left
-  pure (con, args ++ [arg])
+  pure (con, args <> pure arg)
 asClassDef ty = throwError $ _MalformedHead # ty
 
+-- | Converts a 'Type' to a valid instance head, or throws a 'SyntaxError'
+-- | if it isn't
+asClassInstance
+  :: (AsSyntaxError e, MonadError e m)
+  => Type
+  -> m InstanceHead
+asClassInstance ty = case ty of
+  TyApp (TyCtor className) arg -> do
+    res <- ctorAndTyVars arg
+    pure $ InstanceHead className (pure res)
+  TyApp left arg -> do
+    res <- ctorAndTyVars arg
+    instHead <- asClassInstance left
+    pure (instHead & over ihInstArgs (<> pure res))
+  _->  throwError $ _MalformedHead # ty
+  where
+    ctorAndTyVars ty' = case ty' of
+      TyCtor con -> pure (con, []) 
+      TyApp (TyCtor con) (TyVar name) -> pure (con, [name])
+      TyApp rest (TyVar var) -> do
+        (con, vars) <- ctorAndTyVars rest
+        pure (con, vars ++ [var])
+      _ -> throwError $ _MalformedHead # ty
+
+
 -- | Converts a type to the form T a_1 a_2 .. a_n, where a_i are any type
-asClassInstance :: (AsSyntaxError e, MonadError e m) => Type -> m (Identifier, [Type])
-asClassInstance (TyApp (TyCon (TypeCon con)) ty) = pure (con, [ty])
-asClassInstance (TyApp left ty) = do
-  (con, tys) <- asClassInstance left
-  pure (con, tys ++ [ty])
-asClassInstance ty = throwError $ _MalformedHead # ty
+-- |
+-- | Partial
+asClassInstanceP :: Type -> InstanceHead
+asClassInstanceP ty
+  = case asClassInstance ty :: Either SyntaxError InstanceHead of
+      Right res -> res
+      Left _ -> error $ "asClassInstanceP: invalid argument: " ++ show ty 
 
 desugar :: (AsSyntaxError e, MonadError e m) => L.Definition -> m L.Definition
 desugar (L.Function def) = pure . L.Function $ desugarBinding def
@@ -66,7 +95,7 @@ desugar (L.Class constraints classType classMembers) = do
   (className, tyVars) <- asClassDef classType
   pure $ L.ValidClass constraints className tyVars classMembers
 desugar (L.Instance constraints classType classImpls) = do
-  (className, tyArgs) <- asClassInstance classType
+  InstanceHead className tyArgs <- asClassInstance classType
   unless (all (sameConstructor className) constraints) . throwError $ _MalformedHead # classType
   pure . L.ValidInstance constraints className tyArgs $ fmap desugarBinding classImpls
   where
