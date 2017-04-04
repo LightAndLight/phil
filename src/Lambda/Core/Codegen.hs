@@ -92,14 +92,11 @@ genConstructor (ProdDecl name args) = [classDecl, funcDecl]
 
 genDict :: Identifier -> [PHPId] -> [PHPDecl]
 genDict name members =
-  PHPDeclClass (phpId name)
+  [ PHPDeclClass (phpId name)
     [ PHPClassFunc False Public (phpId "__construct") (fmap PHPArgValue members) $
         fmap (\ident -> PHPStatementExpr $ PHPExprAssign (PHPExprClassAccess (PHPExprVar $ phpId "this") ident Nothing) (PHPExprVar ident)) members
     ]
-  : fmap genAccessor members
-  where
-    genAccessor member = PHPDeclStatement $ PHPStatementExpr $ PHPExprAssign (PHPExprVar member) $
-      PHPExprFunction [PHPArgValue $ phpId "dict"] [] [ PHPStatementReturn $ PHPExprClassAccess (PHPExprVar $ phpId "dict") member Nothing ]
+  ]
 
 genTypeName :: Type -> String
 genTypeName (TyApp con arg) = genTypeName con ++ genTypeName arg

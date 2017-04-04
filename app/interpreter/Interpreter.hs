@@ -36,6 +36,7 @@ import Lambda.Core.AST.Pattern
 import Lambda.Core.Kinds
 import Lambda.Sugar (AsSyntaxError(..), SyntaxError, desugar, desugarExpr)
 import Lambda.Typecheck
+import Lambda.Typecheck.TypeError
 import Lambda.Typeclasses
 import Lambda.Lexer
 import Lambda.Parser

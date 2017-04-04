@@ -22,6 +22,7 @@ import           Lambda.Core.AST.Types
 import Lambda.Core.Kinds        
 import           Lambda.Typecheck      hiding (special)
 import qualified Lambda.Typecheck      as T (special)
+import Lambda.Typecheck.TypeError
 import           Lambda.Typeclasses
 
 import           Test.Hspec

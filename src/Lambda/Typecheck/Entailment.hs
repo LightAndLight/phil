@@ -11,6 +11,7 @@ module Lambda.Typecheck.Entailment
 
 import           Control.Applicative
 import Control.Lens
+import Control.Monad.Except
 import Control.Monad.Fresh
 import           Data.Bifunctor
 import Data.List.NonEmpty (NonEmpty)
@@ -27,6 +28,7 @@ import Lambda.AST.Expr
 import           Lambda.Core.AST.Identifier
 import           Lambda.Core.AST.Types
 import           Lambda.Sugar
+import           Lambda.Typecheck.TypeError
 import           Lambda.Typecheck.Unification
 import           Lambda.Typeclasses
 
@@ -74,7 +76,10 @@ replacePlaceholders mapping expr@(DictPlaceholder d)
 replacePlaceholders _ expr = expr
 
 resolvePlaceholders
-  :: MonadFresh m
+  :: ( MonadFresh m
+     , AsTypeError e
+     , MonadError e m
+     )
   => [TypeclassEntry a] -- ^ Typeclass environment
   -> [DictParamEntry] -- ^ Dictionary parameter environment
   -> Set Identifier -- ^ Type variables bound in the outer context
@@ -100,6 +105,7 @@ resolvePlaceholders ctxt (p : rest) bound
     (leftover, mapping) <- resolvePlaceholders ctxt (new ++ rest) bound
     let dictExpr' = everywhere (replacePlaceholders $ M.fromList mapping) dictExpr
     pure (leftover, ((_dpeClassName p, _dpeTyArgs p), dictExpr') : mapping)
+  | otherwise = throwError $ _NoSuchInstance # (_dpeClassName p, _dpeTyArgs p)
   where
     newPlaceholders (con, args) = do
       ident <- ("dict" ++) <$> fresh

@@ -39,6 +39,7 @@ import           Lambda.Core.AST.ProdDecl
 import Lambda.Core.Kinds
 import Lambda.Sugar (asClassInstanceP, desugarExpr)
 import Lambda.Typecheck.Entailment
+import Lambda.Typecheck.TypeError
 import Lambda.Typecheck.Unification
 import Lambda.Typeclasses
 
@@ -96,27 +97,6 @@ instance HasKindTable InferenceState where
 instance HasTcContext C.Expr InferenceState where
   tcContext = inferenceState . isTcContext
 
-data TypeError
-  = NotInScope [String]
-  | PatternArgMismatch Int Int
-  | AlreadyDefined Identifier
-  | TooManyArguments TypeScheme
-  | WrongArity [Type]
-  | NotDefined Identifier
-  | DuplicateTypeSignatures Identifier
-  | KindInferenceError KindError
-  | CouldNotDeduce [Type] [Type]
-  | NoSuchClass Identifier
-  | NonClassFunction Identifier (NonEmpty Type) Identifier
-  | MissingClassFunctions Identifier (NonEmpty Type) (Set Identifier)
-  | TUnificationError (UnificationError Type)
-  deriving (Eq, Show)
-
-makeClassyPrisms ''TypeError
-
-instance AsKindError TypeError where
-  _KindError = _KindInferenceError . _KindError
-
 lookupId ::
   ( HasContext r
   , MonadReader r m
@@ -147,6 +127,8 @@ generalize
   :: ( MonadFresh m
      , HasContext r
      , MonadReader r m
+     , AsTypeError e
+     , MonadError e m
      )
   => Substitution Type -- ^ Substitutions to apply to placeholders
   -> [TypeclassEntry a] -- ^ Typeclass environment
@@ -163,7 +145,8 @@ generalize subs tcenv expr cons dictParams ty = do
   (dictParams', mapping) <- resolvePlaceholders tcenv dictParams freeInCtxt
   let expr' = everywhere (replacePlaceholders (M.fromList mapping) . subPlaceholders) expr
   let unresolved = foldr fromDictVar [] $ snd <$> mapping
-  pure (foldr Abs expr' unresolved, Forall frees cons ty)
+  let cons' = filter ((S.empty /=) . freeInType) cons
+  pure (foldr Abs expr' unresolved, Forall frees cons' ty)
   where
     subPlaceholders (DictPlaceholder (className, tyArgs))
       = DictPlaceholder (className, substitute subs <$> tyArgs)

@@ -20,6 +20,7 @@ import Lambda.Parser         hiding (ParseError)
 import           Lambda.PHP
 import           Lambda.Sugar
 import           Lambda.Typecheck
+import           Lambda.Typecheck.TypeError
 
 data CompilerError
   = CompilerParseError P.ParseError

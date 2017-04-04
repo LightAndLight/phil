@@ -40,6 +40,7 @@ library
                      , Lambda.Typecheck
                      , Lambda.Typecheck.Entailment
                      , Lambda.Typecheck.Unification
+                     , Lambda.Typecheck.TypeError
                      , Lambda.Typeclasses
   build-depends:       base >= 4.7 && < 5
                      , bifunctors
