@@ -1,12 +1,12 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 module Lambda.Typecheck.Entailment
-  ( DictParamEntry(..), dpeClassName, dpeTyArgs
-  , entails
+  ( entails
   , replacePlaceholders
   , resolvePlaceholders
+  , simplify
+  , updatePlaceholders
   ) where
 
 import           Control.Applicative
@@ -28,45 +28,66 @@ import Data.Set (Set)
 import Lambda.AST
 import Lambda.AST.Expr
 import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.InstanceHead
 import           Lambda.Core.AST.Types
 import           Lambda.Sugar
 import           Lambda.Typecheck.TypeError
 import           Lambda.Typecheck.Unification
 import           Lambda.Typeclasses
 
-reduceContext
-  :: [TypeclassEntry a]
-  -> [Type]
-  -> Type
-  -> Maybe ([Type], Type)
-reduceContext entries context (TyVar name) = Just (context, TyVar name)
-reduceContext entries context ty = undefined
-  where
-    propagateClassTycon cls ty
-      = let InstanceHead name args = asClassInstanceP ty
-        in undefined
+applyMapping :: Map Placeholder Placeholder -> Placeholder -> Placeholder
+applyMapping mapping ty = fromMaybe ty (M.lookup ty mapping)
 
-entails :: [TypeclassEntry a] -> [Type] -> Type -> Bool
+updatePlaceholders :: Map Placeholder Placeholder -> Expr -> Expr
+updatePlaceholders mapping = everywhere updatePlaceholder 
+  where
+    updatePlaceholder (DictPlaceholder p) = DictPlaceholder $ applyMapping mapping p
+    updatePlaceholder a = a
+
+-- | Reduce a list of predicates to a normal form where no predicate
+-- | can be derived from the other predicates
+-- |
+-- | The resulting elements will retain their respective order
+simplify
+  :: [TypeclassEntry a] -- ^ Typeclass context
+  -> [Type] -- ^ Predicates
+  -> ([Type], Map Placeholder Placeholder) -- ^ New predicates, and a mapping from old placeholders to new placeholders
+simplify ctxt preds = go [] $ reverse preds
+  where
+    entailedBy [] goal = Nothing
+    entailedBy (pred : rest) goal
+      | entails ctxt [pred] goal = Just pred
+      | otherwise = entailedBy rest goal
+
+    go seen [] = (seen, M.empty)
+    go seen (pred : rest)
+      | Just parent <- entailedBy (seen ++ rest) pred
+      = let mapping =
+              M.singleton
+                (fmap N.fromList . fromJust $ ctorAndArgs pred)
+                (fmap N.fromList . fromJust $ ctorAndArgs parent)
+        in M.union mapping . fmap (applyMapping mapping) <$> go seen rest
+      | otherwise = go (pred : seen) rest
+
+-- | Given a typeclass context, does the knowledge base always imply the
+-- | goal?
+entails
+  :: [TypeclassEntry a] -- ^ Typeclass context
+  -> [Type] -- ^ Knowledge base
+  -> Type -- ^ Goal
+  -> Bool
 entails ctxt kb goal = goal `elem` kb || go ctxt goal
   where
     go [] goal = False
     go (TceInst supers instHead _ : rest) goal
       | Right subs <- unify [(instHeadToType instHead, goal)]
-      = all (entails ctxt kb) $ substitute subs <$> supers
+      = all (entails ctxt kb) (substitute subs . toTypeTyVars <$> supers) || go rest goal
       | otherwise = go rest goal
-    go (TceClass supers className classArgs _ : rest) goal
-      | (subs : _) <- rights $ fmap (\ty -> unify [(ty, goal)]) supers
+    go (TceClass supers className classArgs _ _ : rest) goal
+      | (subs : _) <- rights $ fmap (\ty -> unify [(toTypeTyVars ty, goal)]) supers
       = let classTy = foldl' TyApp (TyCtor className) $ substitute subs . TyVar <$> classArgs
         in entails ctxt kb classTy || go rest goal
       | otherwise = go rest goal
-
-data DictParamEntry
-  = DictParamEntry
-  { _dpeClassName :: Identifier
-  , _dpeTyArgs :: NonEmpty Type
-  } deriving (Eq, Ord, Show)
-
-makeLenses ''DictParamEntry
 
 -- | Replace the 'DictPlaceholder's in an expression using the specified
 -- | mapping
@@ -82,66 +103,64 @@ resolvePlaceholders
      , MonadError e m
      )
   => [TypeclassEntry a] -- ^ Typeclass environment
-  -> [DictParamEntry] -- ^ Dictionary parameter environment
+  -> [Placeholder] -- ^ Dictionary parameter environment
   -> Set Identifier -- ^ Type variables bound in the outer context
-  -> m ([DictParamEntry], [((Identifier, NonEmpty Type), Expr)])
+  -> m ([Placeholder], [(Placeholder, Expr)])
 resolvePlaceholders ctxt [] _ = pure ([], [])
-resolvePlaceholders ctxt (p : rest) bound
-  | foldMap freeInType (_dpeTyArgs p) `S.intersection` bound /= S.empty
+resolvePlaceholders ctxt (p@(con, args) : rest) bound
+  | foldMap freeInType args `S.intersection` bound /= S.empty
   = first (p :) <$> resolvePlaceholders ctxt rest bound
 
-  | any isTyVar (_dpeTyArgs p)
+  | any isTyVar args
   = do
     (leftover, mapping) <- resolvePlaceholders ctxt rest bound
-    let placeholder = (_dpeClassName p, _dpeTyArgs p)
-    case lookup placeholder mapping of
+    case lookup p mapping of
       Nothing -> do
         var <- ("dict" ++) <$> fresh
-        pure (leftover, (placeholder, DictVar var) : mapping)
+        pure (leftover, (p, DictVar var) : mapping)
       Just _ -> pure (leftover, mapping)
 
   | otherwise = go ctxt
   where
     toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
-    inputTy = foldl' TyApp (TyCtor $ p ^. dpeClassName) (p ^. dpeTyArgs)
+    inputTy = foldl' TyApp (TyCtor con) args
 
-    go [] = throwError $ _NoSuchInstance # (p ^. dpeClassName, p ^. dpeTyArgs)
-    go (TceClass supers className tyVars _ : entries)
-      | (subs : _) <- rights $ fmap (\ty -> unify [(ty, inputTy)]) supers
+    go [] = throwError $ _NoSuchInstance # p
+    go (TceClass supers className tyVars _ _ : entries)
+      | (subs : _) <- rights $ fmap (\ty -> unify [(toTypeTyVars ty, inputTy)]) supers
       = flip catchError (const $ go entries) $ do
           let tyArgs = substitute subs . TyVar <$> tyVars
-          (leftover, mapping) <- resolvePlaceholders ctxt (DictParamEntry className tyArgs : rest) bound
+          (leftover, mapping) <- resolvePlaceholders ctxt ((className, tyArgs) : rest) bound
           case lookup (className, tyArgs) mapping of
             Nothing -> go entries
             Just dict ->
-              pure (leftover, ((p ^. dpeClassName, p ^. dpeTyArgs), DictSuper className dict) : mapping)
+              pure (leftover, ((con, args), DictSuper className dict) : mapping)
       | otherwise = go entries
 
     go (TceInst supers instHead _ : entries)
-      | p ^. dpeClassName == instHead ^. ihClassName
+      | con == instHead ^. ihClassName
       , Right subs <- unify .
           N.toList $
-          N.zip
-            (toType <$> instHead ^. ihInstArgs)
-            (p ^. dpeTyArgs)
+          N.zip (toType <$> instHead ^. ihInstArgs) args
       = do
-        let Just supers' = traverse (fmap (second N.fromList) . ctorAndArgs . substitute subs) supers
+        let supers' = over (mapped._2.mapped) (substitute subs . TyVar) supers
         (leftover, mapping) <-
           resolvePlaceholders
             ctxt
-            (fmap (uncurry DictParamEntry) supers' ++ rest)
+            (supers' ++ rest)
             bound
         let superDicts = traverse (`lookup` mapping) supers'
         case superDicts of
-          Nothing -> throwError $ _NoSuchInstance # (p ^. dpeClassName, p ^. dpeTyArgs)
+          Nothing -> throwError $ _NoSuchInstance # p
           Just supers -> do
-            let dict = foldl' App (DictInst (p ^. dpeClassName) (fst . fromJust . ctorAndArgs <$> p ^. dpeTyArgs)) supers
-            pure (leftover, ((p ^. dpeClassName, p ^. dpeTyArgs), dict) : mapping)
+            let args' = fromJust . ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
+            let dict = foldl' App (DictInst con $ fst <$> args') supers
+            pure (leftover, ((con, args), dict) : mapping)
       | otherwise = go entries
 
     newPlaceholders (con, args) = do
       ident <- ("dict" ++) <$> fresh
-      pure $ DictParamEntry con args
+      pure (con, args)
 
     isTyVar TyVar{} = True
     isTyVar _ = False

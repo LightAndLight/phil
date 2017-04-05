@@ -8,6 +8,8 @@ import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Pattern
 import Lambda.Core.AST.Types
 
+type Placeholder = (Identifier, NonEmpty Type)
+
 data Expr
   = Id Identifier
   | Lit Literal
@@ -17,7 +19,7 @@ data Expr
   | Let (Binding Expr) Expr
   | Rec (Binding Expr) Expr
   | Case Expr (NonEmpty (Pattern, Expr))
-  | DictPlaceholder (Identifier, NonEmpty Type)
+  | DictPlaceholder Placeholder
   | RecPlaceholder Identifier
   | DictVar Identifier
   | DictInst Identifier (NonEmpty Identifier)

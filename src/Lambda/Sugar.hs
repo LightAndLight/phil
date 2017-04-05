@@ -27,6 +27,7 @@ import qualified Lambda.Core.AST.Binding as C
 import qualified Lambda.Core.AST.Definitions    as C
 import qualified Lambda.Core.AST.Expr    as C
 import Lambda.Core.AST.Identifier
+import Lambda.Core.AST.InstanceHead
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Types
 import Lambda.Core.AST.Pattern
@@ -96,10 +97,12 @@ desugar :: (AsSyntaxError e, MonadError e m) => L.Definition -> m L.Definition
 desugar (L.Function def) = pure . L.Function $ desugarBinding def
 desugar (L.Class constraints classType classMembers) = do
   (className, tyVars) <- asClassDef classType
-  pure $ L.ValidClass constraints className tyVars classMembers
+  constraints' <- traverse asClassDef constraints
+  pure $ L.ValidClass constraints' className tyVars classMembers []
 desugar (L.Instance constraints classType classImpls) = do
-  InstanceHead className tyArgs <- asClassInstance classType
-  pure . L.ValidInstance constraints className tyArgs $ fmap desugarBinding classImpls
+  instHead <- asClassInstance classType
+  constraints' <- traverse asClassDef constraints
+  pure . L.ValidInstance constraints' instHead undefined $ fmap desugarBinding classImpls
   where
     sameConstructor name (TyApp (TyCon (TypeCon name')) _) = name == name'
     sameConstructor _ _ = False

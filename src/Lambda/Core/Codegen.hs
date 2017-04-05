@@ -9,6 +9,7 @@ import           Control.Monad.State
 import Data.Foldable
 import Data.Char
 import qualified Data.List.NonEmpty as N
+import Data.List.NonEmpty (NonEmpty)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
@@ -21,6 +22,7 @@ import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Expr
 import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.InstanceHead
 import           Lambda.Core.AST.Literal
 import           Lambda.Core.AST.Pattern
 import           Lambda.Core.AST.ProdDecl
@@ -28,7 +30,6 @@ import           Lambda.Core.AST.Types
 import Lambda.Typecheck
 import           Lambda.PHP.AST
 import           Lambda.Sugar (SyntaxError, asClassInstanceP)
-import           Lambda.Typeclasses (InstanceHead(..))
 
 data ArgType = Reference | Value
 
@@ -90,13 +91,29 @@ genConstructor (ProdDecl name args) = [classDecl, funcDecl]
           pure $ PHPExprFunction [arg] scope [PHPStatementReturn res]
     funcDecl = PHPDeclStatement . PHPStatementExpr $ PHPExprAssign (PHPExprVar $ phpId name) func
 
-genDict :: Identifier -> [PHPId] -> [PHPDecl]
-genDict name members =
+genDict :: Identifier -> [PHPId] -> [(Identifier, [Identifier])] -> [PHPDecl]
+genDict name members superMembers =
   [ PHPDeclClass (phpId name)
-    [ PHPClassFunc False Public (phpId "__construct") (fmap PHPArgValue members) $
-        fmap (\ident -> PHPStatementExpr $ PHPExprAssign (PHPExprClassAccess (PHPExprVar $ phpId "this") ident Nothing) (PHPExprVar ident)) members
+    [ PHPClassFunc False Public (phpId "__construct") (fmap PHPArgValue $ members ++ fmap (phpId . fst) superMembers) $
+        fmap genMemberAssignment members ++
+        fmap genSuperMemberAssignment (superMembers >>= expand)
     ]
   ]
+  where
+    expand :: (a, [b]) -> [(a, b)]
+    expand e = zip (repeat $ fst e) $ snd e
+
+    genMemberAssignment ident
+      = PHPStatementExpr $
+        PHPExprAssign
+          (PHPExprClassAccess (PHPExprVar $ phpId "this") ident Nothing)
+          (PHPExprVar ident)
+
+    genSuperMemberAssignment (dName, ident)
+      = PHPStatementExpr $
+        PHPExprAssign
+          (PHPExprClassAccess (PHPExprVar $ phpId "this") (phpId ident) Nothing)
+          (PHPExprClassAccess (PHPExprVar $ phpId dName) (phpId ident) Nothing)
 
 genTypeName :: Type -> String
 genTypeName (TyApp con arg) = genTypeName con ++ genTypeName arg
@@ -112,18 +129,22 @@ genInst
   :: ( HasScope s
      , MonadState s m
      )
-  => [Type]
-  -> InstanceHead
-  -> [Binding Expr]
+  => [(Identifier, NonEmpty Identifier)] -- ^ Dictionary parameters
+  -> InstanceHead -- ^ Dictionary instance head
+  -> [InstanceHead] -- ^ Superclass instance heads
+  -> [Binding Expr] -- ^ Member implementations
   -> m PHPDecl
-genInst supers instHead impls = do
+genInst supers instHead superClasses impls = do
   impls' <- traverse (toAnonymous . genImpl) impls
-  sc <- use scope
+  let superClasses' = genInstName <$> superClasses
+  sc <- uses scope (M.union . M.fromList . zip superClasses' $ repeat Value)
   pure . PHPDeclStatement . PHPStatementExpr .
     PHPExprAssign (PHPExprVar $ genInstName instHead) $
-    genDict (scopeToArgs . foldr M.delete sc $ phpId <$> supersDicts) impls'
+    genDict
+      (scopeToArgs . foldr M.delete sc $ phpId <$> supersDicts)
+      (impls' ++ (PHPExprVar <$> superClasses'))
   where
-    supersDicts = fmap (("dict" ++) . genTypeName) supers
+    supersDicts = fmap (("dict" ++) . genTypeName . toTypeTyVars) supers
     toAnonymous (Binding _ expr) = genPHPExpr expr
     genImpl = fmap (flip (foldl' App) $ Id <$> supersDicts)
     genDict scope = if null supersDicts
@@ -133,11 +154,11 @@ genInst supers instHead impls = do
         PHPExprNew (phpId $ _ihClassName instHead)
 
 genPHPDecl :: (HasCode s, HasScope s, MonadState s m) => Definition -> m ()
-genPHPDecl (Class supers name args members) = do
-  let decls = genDict name $ phpId . fst <$> members
+genPHPDecl (Class supers name args members superMembers) = do
+  let decls = genDict name (phpId . fst <$> members) $ zip (("super" ++) . show <$> [1..]) (snd <$> superMembers)
   code %= flip D.append (D.fromList decls)
-genPHPDecl (Instance supers name args impls) = do
-  inst <- genInst supers (InstanceHead name args) impls
+genPHPDecl (Instance supers instHead superClasses impls) = do
+  inst <- genInst supers instHead superClasses impls
   code %= flip D.snoc inst
 genPHPDecl (Data _ _ constructors) = do
   let decls = genConstructor =<< N.toList constructors

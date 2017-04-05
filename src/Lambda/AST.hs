@@ -16,10 +16,10 @@ toCore :: L.Definition -> C.Definition
 toCore (L.Data name typeArgs constructors) = C.Data name typeArgs constructors
 toCore (L.TypeSignature name ty) = C.TypeSignature name ty
 toCore (L.Function def) = C.Function $ toCoreBinding def
-toCore (L.ValidClass constraints className tyVars classMembers)
-  = C.Class constraints className tyVars classMembers
-toCore (L.ValidInstance constraints className tyArgs classImpls)
-  = C.Instance constraints className tyArgs $ fmap toCoreBinding classImpls
+toCore (L.ValidClass constraints className tyVars classMembers superMembers)
+  = C.Class constraints className tyVars classMembers superMembers
+toCore (L.ValidInstance constraints instHead superInsts classImpls)
+  = C.Instance constraints instHead superInsts $ fmap toCoreBinding classImpls
 toCore def = error $ "toCore: invalid definition: " ++ show def
 
 toCoreBinding :: L.Binding L.Expr -> C.Binding C.Expr
@@ -49,4 +49,5 @@ everywhere f (L.Let binding rest) = L.Let (everywhere f <$> binding) (everywhere
 everywhere f (L.Rec binding rest) = L.Rec (everywhere f <$> binding) (everywhere f rest)
 everywhere f (L.Case expr branches) = L.Case (everywhere f expr) (second (everywhere f) <$> branches)
 everywhere f (L.DictSel className expr) = L.DictSel className $ everywhere f expr
+everywhere f (L.DictSuper className expr) = L.DictSuper className $ everywhere f expr
 everywhere f e = f e

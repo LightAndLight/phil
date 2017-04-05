@@ -6,10 +6,6 @@ class Eq {
     }
 }
 
-$eq = function($dict) {
-    return $dict->eq;
-};
-
 $not = function($b) {
     return (function() use ($b) {
         if ($b === true) {
@@ -32,9 +28,9 @@ $eqBool = new Eq(function($a) use ($not) {
     };
 });
 
-$asdf = function($dict34) {
-    return function($a) use ($dict34) {
-        return ($dict34->eq)($a)($a);
+$asdf = function($dict37) {
+    return function($a) use ($dict37) {
+        return ($dict37->eq)($a)($a);
     };
 };
 
@@ -72,12 +68,12 @@ $Cons = function($a1) {
 };
 
 $eqList = function($dictEq) use ($and) {
-    return new Eq((function($dict103) use ($and) {
-        return (function() use ($and, $dict103) {
-            $eqPrime = function($dict76) use ($and, &$eqPrime) {
-                return function($la) use ($and, $dict76, &$eqPrime) {
-                    return function($lb) use ($and, $dict76, &$eqPrime, $la) {
-                        return (function() use ($and, $dict76, &$eqPrime, $la, $lb) {
+    return new Eq((function($dict101) use ($and) {
+        return (function() use ($and, $dict101) {
+            $eqPrime = function($dict95) use ($and, &$eqPrime) {
+                return function($la) use ($and, $dict95, &$eqPrime) {
+                    return function($lb) use ($and, $dict95, &$eqPrime, $la) {
+                        return (function() use ($and, $dict95, &$eqPrime, $la, $lb) {
                             if ($la instanceof NilCon) {
                                 return (function() use (&$eqPrime, $la, $lb) {
                                     if ($lb instanceof NilCon) {
@@ -89,11 +85,11 @@ $eqList = function($dictEq) use ($and) {
                             if ($la instanceof ConsCon) {
                                 $a = $la->values[0];
                                 $laPrime = $la->values[1];
-                                return (function() use ($a, $and, $dict76, &$eqPrime, $la, $laPrime, $lb) {
+                                return (function() use ($a, $and, $dict95, &$eqPrime, $la, $laPrime, $lb) {
                                     if ($lb instanceof ConsCon) {
                                         $b = $lb->values[0];
                                         $lbPrime = $lb->values[1];
-                                        return $and(($dict76->eq)($a)($b))($eqPrime($dict76)($laPrime)($lbPrime));
+                                        return $and(($dict95->eq)($a)($b))($eqPrime($dict95)($laPrime)($lbPrime));
                                     }
                                     return false;
                                 })();
@@ -102,7 +98,7 @@ $eqList = function($dictEq) use ($and) {
                     };
                 };
             };
-            return $eqPrime($dict103);
+            return $eqPrime($dict101);
         })();
     })($dictEq));
 };

@@ -7,6 +7,7 @@ import           Data.Set                          (Set)
 import qualified Data.Set                          as S
 import           Data.Traversable
 
+import           Lambda.Core.AST.InstanceHead
 import           Lambda.Core.AST.Types
 import           Lambda.Typecheck.Unification
 import           Lambda.Typecheck.Entailment
@@ -68,8 +69,8 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         ord a = TyApp (TyCon $ TypeCon "Ord") (TyVar a)
         num a = TyApp (TyCon $ TypeCon "Num") (TyVar a)
         context =
-          [ TceClass [] "Eq" (pure "a") undefined
-          , TceClass [eq "b"] "Ord" (pure "b") undefined
+          [ TceClass [] "Eq" (pure "a") undefined undefined
+          , TceClass [("Eq", pure "b")] "Ord" (pure "b") undefined undefined
           ]
     it "P ||- {}" $
       all (entails [] [ord "c"]) [] `shouldBe` True
@@ -92,7 +93,7 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
     it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
       entails context' [eq $ TyVar "c"] (ord $ TyCtor "Int") `shouldBe` False
     let context' = context ++
-          [ TceInst [eq $ TyVar "b"] (InstanceHead "Eq" $ pure ("List", ["b"])) undefined
+          [ TceInst [("Eq", pure "b")] (InstanceHead "Eq" $ pure ("List", ["b"])) undefined
           , TceInst [] (InstanceHead "Eq" $ pure ("Int", [])) undefined
           ]
     it "given `Eq a`, and `Eq b => Eq (List b)`, `Eq c` entails `Eq (List c)`" $
@@ -103,11 +104,21 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)
         context =
-          [ TceClass [] "Functor" (pure "a") undefined
-          , TceClass [functor "b"] "Applicative" (pure "b") undefined
-          , TceClass [applicative "c"] "Monad" (pure "c") undefined
+          [ TceClass [] "Functor" (pure "a") undefined undefined
+          , TceClass [("Functor", pure "b")] "Applicative" (pure "b") undefined undefined
+          , TceClass [("Applicative", pure "c")] "Monad" (pure "c") undefined undefined
           ]
     it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Monad d` entails `Functor d, Applicative d`" $
       all (entails context [monad "d"]) [applicative "d", functor "d"] `shouldBe` True
     it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Applicative d` does not entail `Monad d`" $
       entails context [applicative "d"] (monad "d") `shouldBe` False
+    let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
+        applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
+        monoid a = TyApp (TyCon $ TypeCon "Monoid") (TyVar a)
+        context =
+          [ TceClass [] "Monoid" (pure "m") undefined undefined
+          , TceClass [("Functor", pure "f")] "Applicative" (pure "f") undefined undefined
+          , TceClass [] "Functor" (pure "f") undefined undefined
+          ]
+    it "given `Functor f`, `Functor f => Applicative f`, `Applicative d` entails `Applicative d, Functor d`" $
+      all (entails context [applicative "d"]) [applicative "d", functor "d"] `shouldBe` True

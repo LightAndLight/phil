@@ -7,6 +7,7 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.Set (Set)
 
 import Lambda.Core.AST.Identifier
+import Lambda.Core.AST.InstanceHead
 import Lambda.Core.AST.Types
 import Lambda.Core.Kinds
 import Lambda.Typecheck.Unification
@@ -25,7 +26,7 @@ data TypeError
   | NoSuchInstance Identifier (NonEmpty Type)
   | NonClassFunction Identifier (NonEmpty Type) Identifier
   | MissingClassFunctions Identifier (NonEmpty Type) (Set Identifier)
-  | MissingSuperclassInsts [Type]
+  | MissingSuperclassInsts InstanceHead
   | TypeMismatch TypeScheme TypeScheme
   | TUnificationError (UnificationError Type)
   deriving (Eq, Show)

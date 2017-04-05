@@ -39,3 +39,6 @@ instance Monoid m => Applicative (Const m) where {
   pure = pureConst;
   ap = apConst
 }
+
+liftA2 : forall f a b c. Applicative f => (a -> b -> c) -> f a -> f b -> f c
+liftA2 f ma mb = ap (fmap f ma) mb

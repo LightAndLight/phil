@@ -7,13 +7,13 @@ class Monad {
     }
 }
 
-$liftM2 = function($dict77) {
-    return function($f) use ($dict77) {
-        return function($ma) use ($dict77, $f) {
-            return function($mb) use ($dict77, $f, $ma) {
-                return ($dict77->bind)($ma)(function($a) use ($dict77, $f, $ma, $mb) {
-                    return ($dict77->bind)($mb)(function($b) use ($a, $dict77, $f, $ma, $mb) {
-                        return ($dict77->return)($f($a)($b));
+$liftM2 = function($dict79) {
+    return function($f) use ($dict79) {
+        return function($ma) use ($dict79, $f) {
+            return function($mb) use ($dict79, $f, $ma) {
+                return ($dict79->bind)($ma)(function($a) use ($dict79, $f, $ma, $mb) {
+                    return ($dict79->bind)($mb)(function($b) use ($a, $dict79, $f, $ma, $mb) {
+                        return ($dict79->return)($f($a)($b));
                     });
                 });
             };
@@ -84,15 +84,15 @@ $showBool = new Show(function($a) use ($Just, $and, $liftM2, $monadMaybe) {
 });
 
 $showMaybe = function($dictShow) use ($Just, $and, $liftM2, $monadMaybe) {
-    return new Show((function($dict206) use ($Just, $and, $liftM2, $monadMaybe) {
-        return function($a) use ($Just, $and, $dict206, $liftM2, $monadMaybe) {
-            return (function() use ($Just, $a, $and, $dict206, $liftM2, $monadMaybe) {
+    return new Show((function($dict159) use ($Just, $and, $liftM2, $monadMaybe) {
+        return function($a) use ($Just, $and, $dict159, $liftM2, $monadMaybe) {
+            return (function() use ($Just, $a, $and, $dict159, $liftM2, $monadMaybe) {
                 if ($a instanceof NothingCon) {
                     return "Nothing";
                 }
                 if ($a instanceof JustCon) {
                     $a = $a->values[0];
-                    return ($dict206->show)($a);
+                    return ($dict159->show)($a);
                 }
             })();
         };

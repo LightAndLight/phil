@@ -1,4 +1,4 @@
-module Lambda.Core.AST.Definitions where
+module Lambda.Core.AST.Definitions (Definition(..)) where
 
 import           Data.List.NonEmpty         (NonEmpty)
 import           Data.Set                   (Set)
@@ -6,8 +6,11 @@ import           Data.Set                   (Set)
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Expr
 import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.InstanceHead
 import           Lambda.Core.AST.Types
 import           Lambda.Core.AST.ProdDecl
+
+type Context = [(Identifier, NonEmpty Identifier)]
 
 data Definition
   -- | ADT Definition: type constructor, type variables, constructor definitions
@@ -16,8 +19,9 @@ data Definition
   | TypeSignature Identifier TypeScheme
   -- | Function definition
   | Function (Binding Expr)
-  -- | Class definition: constraints, class name, type variables, class members
-  | Class [Type] Identifier (NonEmpty Identifier) [(Identifier, Type)]
-  -- | Class instance definition: constraints, class name, type arguments, member implementations
-  | Instance [Type] Identifier (NonEmpty (Identifier, [Identifier])) [Binding Expr]
+  -- | Class definition: constraints, class name, type variables, class members, superclass members
+  | Class Context Identifier (NonEmpty Identifier) [(Identifier, Type)] [(Identifier, [Identifier])]
+  -- | Class instance definition: constraints, class name, type arguments, 
+  -- | available superclasses, member implementations
+  | Instance Context InstanceHead [InstanceHead] [Binding Expr]
   deriving (Eq, Show)

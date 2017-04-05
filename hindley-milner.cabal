@@ -21,6 +21,7 @@ library
                      , Lambda.Core.AST.Definitions
                      , Lambda.Core.AST.Expr
                      , Lambda.Core.AST.Identifier
+                     , Lambda.Core.AST.InstanceHead
                      , Lambda.Core.AST.Types
                      , Lambda.Core.AST.Lens
                      , Lambda.Core.AST.Literal

@@ -1,20 +1,20 @@
 {-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
 {-# language FunctionalDependencies #-}
-{-# language TemplateHaskell #-}
 
 module Lambda.Typeclasses
   ( HasTcContext(..)
-  , InstanceHead(..), ihClassName, ihInstArgs, instHeadToType
   , TypeclassEntry(..)
   , checkConstraints
   , equalUpToRenaming
   , elementUpToRenaming
   , getClass
   , getInst
+  , getAllSuperclasses
+  , getSuperInsts
   ) where
 
-import Control.Lens
+import Control.Lens hiding (Context)
 import Control.Applicative
 import Data.Bifunctor
 import Control.Monad.Except
@@ -32,37 +32,23 @@ import qualified Data.List.NonEmpty as N
 import Data.List.NonEmpty (NonEmpty)
 import Data.Set (Set)
 
+import           Lambda.AST.Definitions
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Expr
 import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.InstanceHead
 import           Lambda.Core.AST.Types
 import           Lambda.Core.Kinds
 import Lambda.Typecheck.Unification
 
--- | An instance head has the form: .. => C (T_1 tv_0 tv_1 .. tv_m) (T_2 ..) .. (T_n ..)
--- |
--- | A constructor applied to one or more constructors that are each applied to zero or
--- | more type variables.
-data InstanceHead
-  = InstanceHead
-  { _ihClassName :: Identifier
-  , _ihInstArgs :: NonEmpty (Identifier, [Identifier])
-  } deriving (Eq, Show)
-
-instHeadToType :: InstanceHead -> Type
-instHeadToType (InstanceHead className instArgs)
-  = foldl' TyApp (TyCtor className) $ toType <$> instArgs
-  where
-    toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
-
-makeLenses ''InstanceHead
+type Context = [(Identifier, NonEmpty Identifier)]
 
 data TypeclassEntry a
   -- | An instance entry consists of: a context, an instance head, and some function definitions
-  = TceInst [Type] InstanceHead (Map Identifier a)
+  = TceInst Context InstanceHead (Map Identifier a)
   -- | A class entry consists of: a context, a constructor applied to one or more type variables,
-  -- and some function type signatures
-  | TceClass [Type] Identifier (NonEmpty Identifier) (Map Identifier TypeScheme)
+  -- member type signatures and superclass members
+  | TceClass Context Identifier (NonEmpty Identifier) (Map Identifier TypeScheme) [(Identifier, [Identifier])]
   deriving (Eq, Functor, Show)
 
 -- | Look up a class in the context
@@ -71,7 +57,7 @@ getClass
   -> Identifier -- ^ Class constructor
   -> Maybe (TypeclassEntry a)
 getClass [] _ = Nothing
-getClass (entry@(TceClass _ className' _ _):rest) className 
+getClass (entry@(TceClass _ className' _ _ _):rest) className 
   | className == className' = Just entry
   | otherwise = getClass rest className
 getClass (_:rest) className  = getClass rest className
@@ -89,6 +75,55 @@ getInst (entry@(TceInst _ instHead _) : rest) className argCons
   = Just entry
   | otherwise = getInst rest className argCons
 getInst (_:rest) className argCons = getInst rest className argCons
+
+-- | Get all superclasses implied by a class definition, with all type
+-- | variables renamed to match those of the original
+-- |
+-- | Returns Nothing if the class doesn't exist
+getAllSuperclasses
+  :: [TypeclassEntry a] -- ^ Typeclass context
+  -> Identifier
+  -> Maybe [TypeclassEntry a]
+getAllSuperclasses ctxt className = do
+  TceClass supers _ _ _ _ <- getClass ctxt className
+  join <$> traverse (go ctxt) supers
+  where
+    fromMapping :: [(Identifier, Identifier)] -> Identifier -> Identifier
+    fromMapping mapping a = fromJust $ lookup a mapping
+
+    rename :: [(Identifier, Identifier)] -> TypeScheme -> TypeScheme
+    rename mapping (Forall vars cons ty)
+      = let subs = Substitution $ second TyVar <$> mapping
+        in Forall
+          (S.map (fromMapping mapping) vars)
+          (substitute subs <$> cons)
+          (substitute subs ty)
+
+    go ctxt (className, tyVars') = do
+      TceClass supers constructor tyVars members superMembers <- getClass ctxt className
+      let mapping = N.toList $ N.zip tyVars tyVars'
+      let supers' = over (mapped._2.mapped) (fromMapping mapping) supers
+      let members' = fmap (rename mapping) members
+
+      (TceClass supers' constructor tyVars' members' superMembers :) . join <$> traverse (go ctxt) supers'
+
+-- | Get all the superclass instances implied by an instance
+-- |
+-- | Returns Nothing if the instance doesn't exist
+getSuperInsts
+  :: [TypeclassEntry a] -- ^ Typeclass context
+  -> Identifier -- ^ Class constructor
+  -> NonEmpty Identifier -- ^ Type constructors of the instance arguments
+  -> Maybe [TypeclassEntry a]
+getSuperInsts ctxt className instArgs = do
+  cls@(TceClass context _ tyArgs _ _) <- getClass ctxt className
+  let subs = M.fromList . N.toList $ N.zip tyArgs instArgs
+  let context' = second (fmap $ fromJust . flip M.lookup subs) <$> context
+  join <$> traverse (uncurry go) context'
+  where
+    go className instArgs = do
+      inst <- getInst ctxt className instArgs
+      (inst :) <$> getSuperInsts ctxt className instArgs
 
 class HasTcContext a s | s -> a where
   tcContext :: Lens' s [TypeclassEntry a]

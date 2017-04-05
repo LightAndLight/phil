@@ -4,6 +4,8 @@
 module Lambda.Core.AST.Types where
 
 import Data.Bifunctor
+import Data.Foldable
+import Data.Monoid
 import           Data.List                         (intercalate)
 import           Data.Set                          (Set)
 import qualified Data.Set                          as S
@@ -23,10 +25,16 @@ pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 pattern TyCtor con = TyCon (TypeCon con)
 
 -- | Split a Type into a type constructor and some arguments
-ctorAndArgs :: Type -> Maybe (Identifier, [Type])
-ctorAndArgs (TyCtor con) = Just (con, [])
-ctorAndArgs (TyApp rest arg) = second (++ [arg]) <$> ctorAndArgs rest
+ctorAndArgs :: (Applicative f, Monoid (f Type)) => Type -> Maybe (Identifier, f Type)
+ctorAndArgs (TyCtor con) = Just (con, mempty)
+ctorAndArgs (TyApp rest arg) = second (<> pure arg) <$> ctorAndArgs rest
 ctorAndArgs _ = Nothing
+
+toType :: Foldable f => (Identifier, f Type) -> Type
+toType (con, args) = foldl' TyApp (TyCtor con) args
+
+toTypeTyVars :: (Foldable f, Functor f) => (Identifier, f Identifier) -> Type
+toTypeTyVars (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
 
 data TypeScheme = Forall (Set Identifier) [Type] Type deriving (Eq, Show)
 
@@ -57,6 +65,7 @@ instance Unify Type where
   toVariable (TyVar name) = Just name
   toVariable _ = Nothing
 
+-- | Apply a substitution to the free variables in a typescheme
 subTypeScheme :: Substitution Type -> TypeScheme -> TypeScheme
 subTypeScheme (Substitution subs) scheme = go (freeInScheme scheme) subs scheme
   where
