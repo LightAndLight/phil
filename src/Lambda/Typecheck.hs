@@ -551,53 +551,68 @@ checkDefinition def@(ValidClass supers constructor params funcs _) = do
 
 checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params) _ impls) = do
   tctxt <- use tcContext
-  let entry = getClass tctxt constructor
   let params' = toTypeTyVars <$> params
   let constructorTy = toType (constructor, params')
   let supersTys = toTypeTyVars <$> supers
   tyVars <- M.fromList <$> traverse (\ty -> (,) ty <$> freshKindVar) (S.toList $ foldMap freeInType supersTys)
   kindTable %= M.union tyVars
   get >>= runReaderT (inferKind constructorTy)
-  (superInsts, impls') <- case entry of
-    Nothing -> throwError $ _NoSuchClass # constructor
-    Just (TceClass classSupers _ classArgs members _)
-      | let implNames = S.fromList (fmap bindingName impls)
-      , let memberNames = M.keysSet members
-      , let notImplemented = memberNames `S.difference` implNames
-      , notImplemented /= S.empty -> throwError $ _MissingClassFunctions # (constructor, params', notImplemented)
-      | otherwise -> do
-          let mapping = M.fromList . N.toList $ N.zip classArgs params
-          let classSupers' = over (mapped._2.mapped) (fromJust . flip M.lookup mapping) classSupers
-          let fromInstHead ih = (ih ^. ihClassName, fst <$> ih ^. ihInstArgs)
-          let maybeSuperInsts = getSuperInsts tctxt constructor $ fst <$> params
-          case maybeSuperInsts of
-            Nothing -> throwError $ _MissingSuperclassInsts # instHead
-            Just superInsts -> do
-              impls' <- for impls $ \(VariableBinding implName impl) ->
-                case M.lookup implName members of
-                  Nothing -> throwError $ _NonClassFunction # (constructor, params', implName)
-                  Just (Forall _ implCons implTy) -> do
-                    let inst = TceInst supers (InstanceHead constructor params) undefined
-                    st <- get
-                    flip runReaderT st . local (over tcContext (inst :)) $ do
-                      (impl', ty) <- inferType impl
-                      let subs = Substitution . N.toList $ N.zip classArgs params'
-                      let implTy' = substitute subs implTy
-                      let freeInImplTy' = freeInType implTy'
-                      let implCons'
-                            = fmap toTypeTyVars supers ++
-                              filter
-                                (\c -> freeInType c `S.isSubsetOf` freeInImplTy')
-                                implCons
-                      special ty $ Forall freeInImplTy' implCons' implTy'
-                      pure $ VariableBinding implName impl'
-              pure (getInstHead <$> superInsts, impls')
+  TceClass classSupers _ classArgs members _ <- tryGetClass tctxt constructor
+
+  let implNames = S.fromList (fmap bindingName impls)
+  let memberNames = M.keysSet members
+  let notImplemented = memberNames `S.difference` implNames
+  when (notImplemented /= S.empty) . throwError $
+    _MissingClassFunctions # (constructor, params', notImplemented)
+
+  let mapping = M.fromList . N.toList $ N.zip classArgs params
+  let classSupers' = over (mapped._2.mapped) (fromJust . flip M.lookup mapping) classSupers
+  superInsts <- tryGetSuperInsts tctxt constructor params
+
+  impls' <- for impls $ \(VariableBinding implName impl) -> do
+    Forall _ implCons implTy <- tryGetImpl constructor params' implName members 
+    let inst = TceInst supers (InstanceHead constructor params) undefined
+    st <- get
+    flip runReaderT st . local (over tcContext (inst :)) $ do
+      (impl', ty) <- inferType impl
+      let subs = Substitution . N.toList $ N.zip classArgs params'
+      let implTy' = substitute subs implTy
+      let freeInImplTy' = freeInType implTy'
+      let implCons'
+            = fmap toTypeTyVars supers ++
+              filter
+                (\c -> freeInType c `S.isSubsetOf` freeInImplTy')
+                implCons
+      special ty $ Forall freeInImplTy' implCons' implTy'
+      pure $ VariableBinding implName impl'
+
   let inst = TceInst supers (InstanceHead constructor params) . M.fromList $
         fmap (\(VariableBinding name expr) -> (name, toCoreExpr $ desugarExpr expr)) impls'
   tcContext %= (inst :)
-  pure (M.empty, ValidInstance supers instHead superInsts impls')
+  pure (M.empty, ValidInstance supers instHead (getInstHead <$> superInsts) impls')
   where
     getInstHead (TceInst _ ih _) = ih
+
+    tryGetClass :: (AsTypeError e, MonadError e m) => [TypeclassEntry a] -> Identifier -> m (TypeclassEntry a)
+    tryGetClass tctxt cons
+      = maybe
+          (throwError $ _NoSuchClass # cons)
+          pure
+          (getClass tctxt cons)
+
+    tryGetSuperInsts tctxt cons params
+      = maybe 
+          (throwError $ _MissingSuperclassInsts # InstanceHead cons params)
+          pure
+          (getSuperInsts tctxt constructor $ fst <$> params)
+
+    tryGetImpl :: (AsTypeError e, MonadError e m) => Identifier -> NonEmpty Type -> Identifier -> Map Identifier TypeScheme -> m TypeScheme
+    tryGetImpl cons params implName members
+      = maybe
+          (throwError $ _NonClassFunction # (cons, params, implName))
+          pure
+          (M.lookup implName members)
+          
 
 checkDefinition def@(Data tyCon tyVars decls) = do
   table <- use kindTable
