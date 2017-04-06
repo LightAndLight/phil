@@ -98,11 +98,16 @@ desugar (L.Function def) = pure . L.Function $ desugarBinding def
 desugar (L.Class constraints classType classMembers) = do
   (className, tyVars) <- asClassDef classType
   constraints' <- traverse asClassDef constraints
-  pure $ L.ValidClass constraints' className tyVars classMembers []
+  pure $ L.ValidClass constraints' className tyVars classMembers
 desugar (L.Instance constraints classType classImpls) = do
   instHead <- asClassInstance classType
   constraints' <- traverse asClassDef constraints
-  pure . L.ValidInstance constraints' instHead undefined $ fmap desugarBinding classImpls
+  pure $
+    L.ValidInstance
+      constraints'
+      instHead
+      (fmap desugarBinding classImpls)
+      []
   where
     sameConstructor name (TyApp (TyCon (TypeCon name')) _) = name == name'
     sameConstructor _ _ = False

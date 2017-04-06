@@ -20,8 +20,8 @@ data Definition
   -- | Function definition
   | Function (Binding Expr)
   -- | Class definition: constraints, class name, type variables, class members, superclass members
-  | Class Context Identifier (NonEmpty Identifier) [(Identifier, Type)] [(Identifier, [Identifier])]
+  | Class Context Identifier (NonEmpty Identifier) [(Identifier, Type)]
   -- | Class instance definition: constraints, class name, type arguments, 
-  -- | available superclasses, member implementations
-  | Instance Context InstanceHead [InstanceHead] [Binding Expr]
+  -- | member implementations, superclass dictionaries
+  | Instance Context InstanceHead [Binding Expr] [Expr]
   deriving (Eq, Show)

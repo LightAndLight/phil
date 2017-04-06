@@ -135,26 +135,30 @@ generalize
   -> [TypeclassEntry a] -- ^ Typeclass environment
   -> Expr -- ^ Expression to operate on
   -> [Type] -- ^ Constraints
-  -> [Placeholder] -- ^ Dictionary parameter environment
   -> Type -- ^ Type to generalize
   -> m (Expr, TypeScheme)
-generalize subs tcenv expr cons dictParams ty = do
+generalize subs tcenv expr cons ty = do
   ctxt <- view context
   let freeInCtxt = free $ typeScheme <$> ctxt
   let frees = (freeInType ty `S.union` foldMap freeInType cons)
         `S.difference` freeInCtxt
-  let (newCons, placeholderMapping) = simplify tcenv cons
+  let simplCons = simplify tcenv cons
 
-  let dictParams' = fmap N.fromList . fromJust . ctorAndArgs <$> newCons
-  (dictParams'', mapping) <- resolvePlaceholders tcenv dictParams' freeInCtxt
+  let expr' = everywhere subPlaceholders expr
 
-  let expr' = updatePlaceholders placeholderMapping $ everywhere subPlaceholders expr
-  let expr'' = everywhere (replacePlaceholders $ M.fromList mapping) expr'
+  let placeholders
+        = fromJust . ctorAndArgs <$> simplCons :: [(Identifier, [Type])]
+ 
+  (deferred, dictVars, expr'') <-
+    resolveAllPlaceholders
+      tcenv
+      freeInCtxt
+      (second N.fromList <$> placeholders)
+      expr'
 
-  let unresolved = foldr fromDictVar [] $ snd <$> mapping
+  let finalCons = filter ((S.empty /=) . freeInType) simplCons
 
-  let newCons' = filter ((S.empty /=) . freeInType) newCons
-  pure (foldr Abs expr'' unresolved, Forall frees newCons' ty)
+  pure (foldr Abs expr'' dictVars, Forall frees finalCons ty)
   where
     subPlaceholders (DictPlaceholder (className, tyArgs))
       = DictPlaceholder (className, substitute subs <$> tyArgs)
@@ -305,7 +309,7 @@ inferType :: (MonadW r s e m, HasTcContext C.Expr s) => Expr -> m (Expr, TypeSch
 inferType e = do
   (subs, cons, dictParams, ty, e') <- w e
   env <- use tcContext
-  generalize subs env e' (substitute subs <$> cons) dictParams (substitute subs ty)
+  generalize subs env e' (substitute subs <$> cons) (substitute subs ty)
   where
     w :: MonadW r s e m => Expr -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
     w e = case e of
@@ -403,7 +407,7 @@ inferType e = do
         (s1, cons1, env1, t1, e') <- w e
         (s2, cons2, env2, t2, rest', e'') <- local (over context $ fmap (subContextEntry s1)) $ do
           env <- use tcContext
-          (e'', t1') <- generalize s1 env e' cons1 env1 t1
+          (e'', t1') <- generalize s1 env e' cons1 t1
           (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ w rest 
           pure (s2, cons2, env2, t2, rest', e'')
         return
@@ -431,7 +435,6 @@ inferType e = do
               env
               (everywhere (replacePlaceholder replacement) value')
               cons1
-              env1
               (substitute s2 t1)
           local (over context $ M.insert name $ FEntry t1') $ do
             (sub, cons, env, ty, rest') <- w rest
@@ -504,7 +507,7 @@ checkDefinition
   => Definition
   -> m (Map Identifier C.Expr, Definition)
 
-checkDefinition def@(ValidClass supers constructor params funcs _) = do
+checkDefinition def@(ValidClass supers constructor params funcs) = do
   freshVar <- freshKindVar
   paramKinds <- for params (\param -> (,) param <$> freshKindVar)
   kindTable %= M.insert constructor (foldr KindArrow Constraint $ snd <$> paramKinds)
@@ -525,23 +528,19 @@ checkDefinition def@(ValidClass supers constructor params funcs _) = do
   kindTable %= subKindTable subs
   checkedFuncs <- for funcs $ \(name, ty) -> do
     env <- use tcContext
-    (expr, checkedFuncTy) <- get >>= runReaderT (generalize mempty env (Error "Not implemented") [constructorTy] [] ty)
+    (expr, checkedFuncTy) <- get >>= runReaderT (generalize mempty env (Error "Not implemented") [constructorTy] ty)
     context %= M.insert name (OEntry checkedFuncTy)
     pure ((name, checkedFuncTy), (name, toCoreExpr expr))
   tctxt <- use tcContext
-  let tempClass = TceClass supers constructor params undefined undefined
-  let superClasses = fromJust $ getAllSuperclasses (tempClass : tctxt) constructor
-  let supers' = fmap getSupers superClasses
   let members = M.fromList (fst <$> checkedFuncs)
-  let superMembers = getMembers <$> superClasses
-  let newClass = TceClass supers' constructor params members superMembers
+  let newClass = TceClass supers constructor params members
   tcContext %= (newClass :)
   pure
     ( M.fromList $ snd <$> checkedFuncs
-    , ValidClass supers' constructor params funcs superMembers)
+    , ValidClass supers constructor params funcs)
   where
-    getMembers (TceClass _ className _ members _) = (className, fst <$> M.toList members)
-    getSupers (TceClass _ className tyVars _ _) = (className, tyVars)
+    getMembers (TceClass _ className _ members) = (className, fst <$> M.toList members)
+    getSupers (TceClass _ className tyVars _) = (className, tyVars)
 
     checkSignatures [] = pure mempty
     checkSignatures (sig:rest) = do
@@ -549,7 +548,7 @@ checkDefinition def@(ValidClass supers constructor params funcs _) = do
       subs' <- checkSignatures rest
       pure $ subs' <> subs
 
-checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params) _ impls) = do
+checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params) impls _) = do
   tctxt <- use tcContext
   let params' = toTypeTyVars <$> params
   let constructorTy = toType (constructor, params')
@@ -557,17 +556,26 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   tyVars <- M.fromList <$> traverse (\ty -> (,) ty <$> freshKindVar) (S.toList $ foldMap freeInType supersTys)
   kindTable %= M.union tyVars
   get >>= runReaderT (inferKind constructorTy)
-  TceClass classSupers _ classArgs members _ <- tryGetClass tctxt constructor
+  TceClass classSupers _ classArgs members <- tryGetClass tctxt constructor
+
+  let mapping = M.fromList . N.toList $ N.zip classArgs params
+  let classSupers' = over (mapped._2.mapped) (fromJust . flip M.lookup mapping) classSupers
+
+  classSuperInsts <- traverse (uncurry $ tryGetInst tctxt) classSupers'
+
+  let buildSuperDicts (TceInst _ (InstanceHead className instArgs) _) = do
+        let supers' = zip (over (mapped._2.mapped) TyVar supers) $
+              Just . DictVar . ("dict" ++) . fst <$> supers
+        dict <- resolvePlaceholder tctxt S.empty supers' (className, toTypeTyVars <$> instArgs) 
+        pure $ fromJust dict
+  
+  supersDicts <- traverse buildSuperDicts classSuperInsts
 
   let implNames = S.fromList (fmap bindingName impls)
   let memberNames = M.keysSet members
   let notImplemented = memberNames `S.difference` implNames
   when (notImplemented /= S.empty) . throwError $
     _MissingClassFunctions # (constructor, params', notImplemented)
-
-  let mapping = M.fromList . N.toList $ N.zip classArgs params
-  let classSupers' = over (mapped._2.mapped) (fromJust . flip M.lookup mapping) classSupers
-  superInsts <- tryGetSuperInsts tctxt constructor params
 
   impls' <- for impls $ \(VariableBinding implName impl) -> do
     Forall _ implCons implTy <- tryGetImpl constructor params' implName members 
@@ -589,10 +597,8 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   let inst = TceInst supers (InstanceHead constructor params) . M.fromList $
         fmap (\(VariableBinding name expr) -> (name, toCoreExpr $ desugarExpr expr)) impls'
   tcContext %= (inst :)
-  pure (M.empty, ValidInstance supers instHead (getInstHead <$> superInsts) impls')
+  pure (M.empty, ValidInstance supers instHead impls' supersDicts)
   where
-    getInstHead (TceInst _ ih _) = ih
-
     tryGetClass :: (AsTypeError e, MonadError e m) => [TypeclassEntry a] -> Identifier -> m (TypeclassEntry a)
     tryGetClass tctxt cons
       = maybe
@@ -600,11 +606,11 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           pure
           (getClass tctxt cons)
 
-    tryGetSuperInsts tctxt cons params
+    tryGetInst tctxt cons params
       = maybe 
-          (throwError $ _MissingSuperclassInsts # InstanceHead cons params)
+          (throwError $ _MissingSuperclassInst # (cons, params))
           pure
-          (getSuperInsts tctxt constructor $ fst <$> params)
+          (getInst tctxt cons $ fst <$> params)
 
     tryGetImpl :: (AsTypeError e, MonadError e m) => Identifier -> NonEmpty Type -> Identifier -> Map Identifier TypeScheme -> m TypeScheme
     tryGetImpl cons params implName members
@@ -630,7 +636,7 @@ checkDefinition def@(Data tyCon tyVars decls) = do
           ctxt <- use context
           let conExpr = buildDataCon p
           env <- use tcContext
-          (conExpr', conTy') <- get >>= runReaderT (generalize mempty env conExpr [] [] conTy)
+          (conExpr', conTy') <- get >>= runReaderT (generalize mempty env conExpr [] conTy)
           context %= M.insert dataCon (CEntry conTy')
           return (dataCon, toCoreExpr $ desugarExpr conExpr')
 

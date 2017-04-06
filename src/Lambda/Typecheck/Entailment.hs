@@ -3,16 +3,16 @@
 
 module Lambda.Typecheck.Entailment
   ( entails
-  , replacePlaceholders
-  , resolvePlaceholders
+  , resolvePlaceholder
+  , resolveAllPlaceholders
   , simplify
-  , updatePlaceholders
   ) where
 
 import           Control.Applicative
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.Fresh
+import Control.Monad.State
 import           Data.Bifunctor
 import Data.Either
 import Data.List.NonEmpty (NonEmpty)
@@ -38,12 +38,6 @@ import           Lambda.Typeclasses
 applyMapping :: Map Placeholder Placeholder -> Placeholder -> Placeholder
 applyMapping mapping ty = fromMaybe ty (M.lookup ty mapping)
 
-updatePlaceholders :: Map Placeholder Placeholder -> Expr -> Expr
-updatePlaceholders mapping = everywhere updatePlaceholder 
-  where
-    updatePlaceholder (DictPlaceholder p) = DictPlaceholder $ applyMapping mapping p
-    updatePlaceholder a = a
-
 -- | Reduce a list of predicates to a normal form where no predicate
 -- | can be derived from the other predicates
 -- |
@@ -51,7 +45,7 @@ updatePlaceholders mapping = everywhere updatePlaceholder
 simplify
   :: [TypeclassEntry a] -- ^ Typeclass context
   -> [Type] -- ^ Predicates
-  -> ([Type], Map Placeholder Placeholder) -- ^ New predicates, and a mapping from old placeholders to new placeholders
+  -> [Type]
 simplify ctxt preds = go [] $ reverse preds
   where
     entailedBy [] goal = Nothing
@@ -59,14 +53,10 @@ simplify ctxt preds = go [] $ reverse preds
       | entails ctxt [pred] goal = Just pred
       | otherwise = entailedBy rest goal
 
-    go seen [] = (seen, M.empty)
+    go seen [] = seen
     go seen (pred : rest)
       | Just parent <- entailedBy (seen ++ rest) pred
-      = let mapping =
-              M.singleton
-                (fmap N.fromList . fromJust $ ctorAndArgs pred)
-                (fmap N.fromList . fromJust $ ctorAndArgs parent)
-        in M.union mapping . fmap (applyMapping mapping) <$> go seen rest
+      = go seen rest
       | otherwise = go (pred : seen) rest
 
 -- | Given a typeclass context, does the knowledge base always imply the
@@ -83,7 +73,7 @@ entails ctxt kb goal = goal `elem` kb || go ctxt goal
       | Right subs <- unify [(instHeadToType instHead, goal)]
       = all (entails ctxt kb) (substitute subs . toTypeTyVars <$> supers) || go rest goal
       | otherwise = go rest goal
-    go (TceClass supers className classArgs _ _ : rest) goal
+    go (TceClass supers className classArgs _ : rest) goal
       | (subs : _) <- rights $ fmap (\ty -> unify [(toTypeTyVars ty, goal)]) supers
       = let classTy = foldl' TyApp (TyCtor className) $ substitute subs . TyVar <$> classArgs
         in entails ctxt kb classTy || go rest goal
@@ -91,76 +81,103 @@ entails ctxt kb goal = goal `elem` kb || go ctxt goal
 
 -- | Replace the 'DictPlaceholder's in an expression using the specified
 -- | mapping
-replacePlaceholders :: Map (Identifier, NonEmpty Type) Expr -> Expr -> Expr
+replacePlaceholders :: Map Placeholder Expr -> Expr -> Expr
 replacePlaceholders mapping expr@(DictPlaceholder d)
   | Just expr' <- M.lookup d mapping = expr'
   | otherwise = expr 
 replacePlaceholders _ expr = expr
 
-resolvePlaceholders
+-- | Resolve as many placeholders as possible in the given expression.
+-- |
+-- | If the list of returned placeholders is empty, the resulting
+-- | expression should contain no more placeholder nodes (ie. no
+-- | placeholders were deferred
+resolveAllPlaceholders
   :: ( MonadFresh m
      , AsTypeError e
      , MonadError e m
      )
   => [TypeclassEntry a] -- ^ Typeclass environment
-  -> [Placeholder] -- ^ Dictionary parameter environment
   -> Set Identifier -- ^ Type variables bound in the outer context
-  -> m ([Placeholder], [(Placeholder, Expr)])
-resolvePlaceholders ctxt [] _ = pure ([], [])
-resolvePlaceholders ctxt (p@(con, args) : rest) bound
-  | foldMap freeInType args `S.intersection` bound /= S.empty
-  = first (p :) <$> resolvePlaceholders ctxt rest bound
+  -> [Placeholder] -- ^ Dictionary parameter environment
+  -> Expr -- ^ Target expression
+  -> m ([Placeholder], [Identifier], Expr) -- ^ Deferred placeholders, dictionary variables, resulting expression
+resolveAllPlaceholders ctxt bound env expr = do
+  (expr, (deferred, resolved)) <- runStateT (everywhereM go expr) ([], M.empty)
+  pure
+    ( deferred
+    , foldr fromDictVar [] resolved
+    , everywhere (replacePlaceholders resolved) expr
+    )
+  where
+    fromDictVar (DictVar a) as = a : as
+    fromDictVar _ as = as
 
-  | any isTyVar args
-  = do
-    (leftover, mapping) <- resolvePlaceholders ctxt rest bound
-    case lookup p mapping of
-      Nothing -> do
-        var <- ("dict" ++) <$> fresh
-        pure (leftover, (p, DictVar var) : mapping)
-      Just _ -> pure (leftover, mapping)
+    go (DictPlaceholder p) = do
+      mapping <- gets snd
+      let env' = fmap (\entry -> (entry, M.lookup entry mapping)) env
+      result <- resolvePlaceholder ctxt bound env' p
+      case result of
+        Nothing -> do
+          modify $ first (p :)
+          pure $ DictPlaceholder p
+        Just replacement -> do
+          modify $ second (M.insert p replacement)
+          pure replacement
+    go expr = pure expr
+
+-- | Construct a dictionary for a placeholder in terms of some others
+-- |
+-- | Returns Nothing if the dictionary construction must be deferred
+resolvePlaceholder
+  :: ( MonadFresh m
+     , AsTypeError e
+     , MonadError e m
+     )
+  => [TypeclassEntry a] -- ^ Typeclass environment
+  -> Set Identifier -- ^ Type variables bound in the outer context
+  -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
+  -> Placeholder -- ^ The placeholder to construct a dictionary for
+  -> m (Maybe Expr)
+resolvePlaceholder ctxt bound env goal@(con, args)
+  | goal `elem` fmap fst env
+  , foldMap freeInType args `S.intersection` bound /= S.empty
+  = pure Nothing
+
+  | Just value <- lookup goal env
+  , any isTyVar args
+  = case value of
+      Nothing -> Just . DictVar . ("dict" ++) <$> fresh
+      Just expr -> pure $ Just expr
 
   | otherwise = go ctxt
   where
-    toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
-    inputTy = foldl' TyApp (TyCtor con) args
+    inputTy = toType goal
 
-    go [] = throwError $ _NoSuchInstance # p
-    go (TceClass supers className tyVars _ _ : entries)
-      | (subs : _) <- rights $ fmap (\ty -> unify [(toTypeTyVars ty, inputTy)]) supers
+    go [] = throwError $ _NoSuchInstance # goal
+
+    go (TceClass supers className tyVars _ : entries)
+      | ((superName, subs) : _) <-
+        rights . zipWith (\a b -> (,) (fst a) <$> b) supers $ (\ty -> unify [(toTypeTyVars ty, inputTy)]) <$> supers
       = flip catchError (const $ go entries) $ do
           let tyArgs = substitute subs . TyVar <$> tyVars
-          (leftover, mapping) <- resolvePlaceholders ctxt ((className, tyArgs) : rest) bound
-          case lookup (className, tyArgs) mapping of
-            Nothing -> go entries
-            Just dict ->
-              pure (leftover, ((con, args), DictSuper className dict) : mapping)
+          res <- resolvePlaceholder ctxt bound env (className, tyArgs)
+          pure $ DictSuper superName <$> res
       | otherwise = go entries
 
     go (TceInst supers instHead _ : entries)
       | con == instHead ^. ihClassName
       , Right subs <- unify .
           N.toList $
-          N.zip (toType <$> instHead ^. ihInstArgs) args
-      = do
-        let supers' = over (mapped._2.mapped) (substitute subs . TyVar) supers
-        (leftover, mapping) <-
-          resolvePlaceholders
-            ctxt
-            (supers' ++ rest)
-            bound
-        let superDicts = traverse (`lookup` mapping) supers'
-        case superDicts of
-          Nothing -> throwError $ _NoSuchInstance # p
-          Just supers -> do
+          N.zip (toTypeTyVars <$> instHead ^. ihInstArgs) args
+      = flip catchError (const $ go entries) $ do
+          let supers' = over (mapped._2.mapped) (substitute subs . TyVar) supers
+          res <- traverse (resolvePlaceholder ctxt bound env) supers'
+          pure $ do
+            res' <- sequence res
             let args' = fromJust . ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
-            let dict = foldl' App (DictInst con $ fst <$> args') supers
-            pure (leftover, ((con, args), dict) : mapping)
+            pure $ foldl' App (DictInst con $ fst <$> args') res'
       | otherwise = go entries
-
-    newPlaceholders (con, args) = do
-      ident <- ("dict" ++) <$> fresh
-      pure (con, args)
 
     isTyVar TyVar{} = True
     isTyVar _ = False

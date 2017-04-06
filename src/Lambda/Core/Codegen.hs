@@ -91,29 +91,20 @@ genConstructor (ProdDecl name args) = [classDecl, funcDecl]
           pure $ PHPExprFunction [arg] scope [PHPStatementReturn res]
     funcDecl = PHPDeclStatement . PHPStatementExpr $ PHPExprAssign (PHPExprVar $ phpId name) func
 
-genDict :: Identifier -> [PHPId] -> [(Identifier, [Identifier])] -> [PHPDecl]
-genDict name members superMembers =
+genDict :: Identifier -> [PHPId] -> [PHPId] -> [PHPDecl]
+genDict name members superDicts =
   [ PHPDeclClass (phpId name)
-    [ PHPClassFunc False Public (phpId "__construct") (fmap PHPArgValue $ members ++ fmap (phpId . fst) superMembers) $
+    [ PHPClassFunc False Public (phpId "__construct") (fmap PHPArgValue $ members ++ superDicts) $
         fmap genMemberAssignment members ++
-        fmap genSuperMemberAssignment (superMembers >>= expand)
+        fmap genMemberAssignment superDicts
     ]
   ]
   where
-    expand :: (a, [b]) -> [(a, b)]
-    expand e = zip (repeat $ fst e) $ snd e
-
     genMemberAssignment ident
       = PHPStatementExpr $
         PHPExprAssign
           (PHPExprClassAccess (PHPExprVar $ phpId "this") ident Nothing)
           (PHPExprVar ident)
-
-    genSuperMemberAssignment (dName, ident)
-      = PHPStatementExpr $
-        PHPExprAssign
-          (PHPExprClassAccess (PHPExprVar $ phpId "this") (phpId ident) Nothing)
-          (PHPExprClassAccess (PHPExprVar $ phpId dName) (phpId ident) Nothing)
 
 genTypeName :: Type -> String
 genTypeName (TyApp con arg) = genTypeName con ++ genTypeName arg
@@ -131,34 +122,38 @@ genInst
      )
   => [(Identifier, NonEmpty Identifier)] -- ^ Dictionary parameters
   -> InstanceHead -- ^ Dictionary instance head
-  -> [InstanceHead] -- ^ Superclass instance heads
   -> [Binding Expr] -- ^ Member implementations
+  -> [Expr] -- ^ Superclass dictionaries
   -> m PHPDecl
-genInst supers instHead superClasses impls = do
+genInst supers instHead impls superDicts= do
   impls' <- traverse (toAnonymous . genImpl) impls
-  let superClasses' = genInstName <$> superClasses
-  sc <- uses scope (M.union . M.fromList . zip superClasses' $ repeat Value)
+  superDicts' <- traverse genPHPExpr superDicts
+  sc <- use scope
   pure . PHPDeclStatement . PHPStatementExpr .
     PHPExprAssign (PHPExprVar $ genInstName instHead) $
     genDict
-      (scopeToArgs . foldr M.delete sc $ phpId <$> supersDicts)
-      (impls' ++ (PHPExprVar <$> superClasses'))
+      sc
+      (impls' ++ superDicts')
   where
     supersDicts = fmap (("dict" ++) . genTypeName . toTypeTyVars) supers
     toAnonymous (Binding _ expr) = genPHPExpr expr
     genImpl = fmap (flip (foldl' App) $ Id <$> supersDicts)
     genDict scope = if null supersDicts
       then PHPExprNew (phpId $ _ihClassName instHead)
-      else PHPExprFunction (PHPArgValue . phpId <$> supersDicts) scope .
-        pure . PHPStatementReturn .
-        PHPExprNew (phpId $ _ihClassName instHead)
+      else
+        let supersDicts' = phpId <$> supersDicts
+        in PHPExprFunction
+          (PHPArgValue <$> supersDicts')
+          (scopeToArgs $ foldr M.delete scope supersDicts') .
+          pure .
+          PHPStatementReturn . PHPExprNew (phpId $ _ihClassName instHead)
 
 genPHPDecl :: (HasCode s, HasScope s, MonadState s m) => Definition -> m ()
-genPHPDecl (Class supers name args members superMembers) = do
-  let decls = genDict name (phpId . fst <$> members) $ zip (("super" ++) . show <$> [1..]) (snd <$> superMembers)
+genPHPDecl (Class supers name args members) = do
+  let decls = genDict name (phpId . fst <$> members) (phpId . fst <$> supers)
   code %= flip D.append (D.fromList decls)
-genPHPDecl (Instance supers instHead superClasses impls) = do
-  inst <- genInst supers instHead superClasses impls
+genPHPDecl (Instance supers instHead impls superDicts) = do
+  inst <- genInst supers instHead impls superDicts
   code %= flip D.snoc inst
 genPHPDecl (Data _ _ constructors) = do
   let decls = genConstructor =<< N.toList constructors

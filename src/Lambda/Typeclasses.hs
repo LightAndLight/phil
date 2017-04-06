@@ -47,8 +47,8 @@ data TypeclassEntry a
   -- | An instance entry consists of: a context, an instance head, and some function definitions
   = TceInst Context InstanceHead (Map Identifier a)
   -- | A class entry consists of: a context, a constructor applied to one or more type variables,
-  -- member type signatures and superclass members
-  | TceClass Context Identifier (NonEmpty Identifier) (Map Identifier TypeScheme) [(Identifier, [Identifier])]
+  -- member type signatures
+  | TceClass Context Identifier (NonEmpty Identifier) (Map Identifier TypeScheme)
   deriving (Eq, Functor, Show)
 
 -- | Look up a class in the context
@@ -57,7 +57,7 @@ getClass
   -> Identifier -- ^ Class constructor
   -> Maybe (TypeclassEntry a)
 getClass [] _ = Nothing
-getClass (entry@(TceClass _ className' _ _ _):rest) className 
+getClass (entry@(TceClass _ className' _ _):rest) className 
   | className == className' = Just entry
   | otherwise = getClass rest className
 getClass (_:rest) className  = getClass rest className
@@ -85,7 +85,7 @@ getAllSuperclasses
   -> Identifier
   -> Maybe [TypeclassEntry a]
 getAllSuperclasses ctxt className = do
-  TceClass supers _ _ _ _ <- getClass ctxt className
+  TceClass supers _ _ _ <- getClass ctxt className
   join <$> traverse (go ctxt) supers
   where
     fromMapping :: [(Identifier, Identifier)] -> Identifier -> Identifier
@@ -100,12 +100,12 @@ getAllSuperclasses ctxt className = do
           (substitute subs ty)
 
     go ctxt (className, tyVars') = do
-      TceClass supers constructor tyVars members superMembers <- getClass ctxt className
+      TceClass supers constructor tyVars members <- getClass ctxt className
       let mapping = N.toList $ N.zip tyVars tyVars'
       let supers' = over (mapped._2.mapped) (fromMapping mapping) supers
       let members' = fmap (rename mapping) members
 
-      (TceClass supers' constructor tyVars' members' superMembers :) . join <$> traverse (go ctxt) supers'
+      (TceClass supers' constructor tyVars' members' :) . join <$> traverse (go ctxt) supers'
 
 -- | Get all the superclass instances implied by an instance
 -- |
@@ -116,7 +116,7 @@ getSuperInsts
   -> NonEmpty Identifier -- ^ Type constructors of the instance arguments
   -> Maybe [TypeclassEntry a]
 getSuperInsts ctxt className instArgs = do
-  cls@(TceClass context _ tyArgs _ _) <- getClass ctxt className
+  cls@(TceClass context _ tyArgs _) <- getClass ctxt className
   let subs = M.fromList . N.toList $ N.zip tyArgs instArgs
   let context' = second (fmap $ fromJust . flip M.lookup subs) <$> context
   join <$> traverse (uncurry go) context'

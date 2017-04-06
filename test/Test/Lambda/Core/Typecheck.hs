@@ -135,7 +135,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
     describe "success" $ do
       let ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass [] "Constraint" (pure "b") undefined undefined
+              [ TceClass [] "Constraint" (pure "b") undefined 
               , TceInst [] (InstanceHead "Constraint" $ pure ("Int", [])) undefined
               ]
             }
@@ -148,7 +148,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
 
     describe "failure" $ do
       let ctxt = emptyContexts
-            { _testTcContext = [TceClass [] "Constraint" (pure "b") undefined undefined] }
+            { _testTcContext = [TceClass [] "Constraint" (pure "b") undefined ] }
       it "forall a. Constraint a => a -> a [>=] Int -> Int but there is no instance Constraint Int" $
         special ctxt constrainedId intToInt `shouldSatisfy` has (_Left . _CouldNotDeduce)
       let constrainedId = _Forall'
@@ -159,7 +159,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
             # _TyFun # (_TyVar # "a", _TyVar # "a")
           ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass [] "Constraint" (pure "b") undefined undefined
+              [ TceClass [] "Constraint" (pure "b") undefined 
               , TceInst [] (InstanceHead "Constraint" $ pure ("Int", [])) undefined
               ]
             }
@@ -190,7 +190,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
                     [TyApp (TyCon $ TypeCon "Eq") $ TyVar "a"]
                     # _TyFun # (_TyVar # "a", _TyFun # (_TyVar # "a", _TyCtor # "Bool"))
               , _testTcContext =
-                  [ TceClass [] "Eq" (pure "a") undefined undefined ]
+                  [ TceClass [] "Eq" (pure "a") undefined ]
               }
         it "\\x. \\y. eq y x : forall a. Eq a => a -> a -> Bool" $
           typeOf ctxt initialTestState (L.Abs "x" $ L.Abs "y" $ L.App (L.App (L.Id "eq") $ L.Id "y") $ L.Id "x")
@@ -225,7 +225,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
                   (TyFun (TyVar "t4") $ TyFun (TyVar "t13") $ TyCtor "Bool"))
           Test.Hspec.context "class Gt a where gt : a -> a -> Bool" $ do
             let ctxtWithGt = ctxtWithAnd
-                  & testTcContext <>~ [ TceClass [] "Gt" (pure "a") undefined undefined ]
+                  & testTcContext <>~ [ TceClass [] "Gt" (pure "a") undefined ]
                   & over testContext
                     ( M.insert "gt" . OEntry $
                         _Forall'

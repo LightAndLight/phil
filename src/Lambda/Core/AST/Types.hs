@@ -77,10 +77,10 @@ subTypeScheme (Substitution subs) scheme = go (freeInScheme scheme) subs scheme
       = go frees rest (Forall vars (fmap runSub cons) $ runSub ty)
 
 -- | Gets the C from a type of format: C a_1 a_2 .. a_n
-getConstructor :: Type -> Maybe TyCon
-getConstructor (TyCon con) = Just con
-getConstructor (TyApp con _) = getConstructor con
-getConstructor _ = Nothing
+getCtor :: Type -> Maybe TyCon
+getCtor (TyCon con) = Just con
+getCtor (TyApp con _) = getCtor con
+getCtor _ = Nothing
 
 freeInType :: Type -> Set Identifier
 freeInType (TyVar name) = S.singleton name

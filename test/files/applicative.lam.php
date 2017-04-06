@@ -7,10 +7,10 @@ class Functor {
 }
 
 class Applicative {
-    public function __construct($pure, $ap, $super1) {
+    public function __construct($pure, $ap, $Functor) {
         $this->pure = $pure;
         $this->ap = $ap;
-        $this->fmap = $super1->fmap;
+        $this->Functor = $Functor;
     }
 }
 
@@ -31,22 +31,22 @@ $Const = function($a1) {
     return new ConstCon($a1);
 };
 
-$pureConst = function($dict60) use ($Const) {
-    return function($a) use ($Const, $dict60) {
-        return $Const($dict60->mempty);
+$pureConst = function($dict55) use ($Const) {
+    return function($a) use ($Const, $dict55) {
+        return $Const($dict55->mempty);
     };
 };
 
-$apConst = function($dict106) use ($Const) {
-    return function($a) use ($Const, $dict106) {
-        return function($b) use ($Const, $a, $dict106) {
-            return (function() use ($Const, $a, $b, $dict106) {
+$apConst = function($dict101) use ($Const) {
+    return function($a) use ($Const, $dict101) {
+        return function($b) use ($Const, $a, $dict101) {
+            return (function() use ($Const, $a, $b, $dict101) {
                 if ($a instanceof ConstCon) {
                     $aa = $a->values[0];
-                    return (function() use ($Const, $a, $aa, $b, $dict106) {
+                    return (function() use ($Const, $a, $aa, $b, $dict101) {
                         if ($b instanceof ConstCon) {
                             $bb = $b->values[0];
-                            return $Const(($dict106->mappend)($aa)($bb));
+                            return $Const(($dict101->mappend)($aa)($bb));
                         }
                     })();
                 }
@@ -80,23 +80,21 @@ $functorConst = function($dictMonoid) use ($Const) {
 };
 
 $applicativeConst = function($dictMonoid) use ($Const, $apConst, $functorConst, $pureConst) {
-    return new Applicative((function($dict164) use ($Const, $dictMonoid, $pureConst) {
-        return $pureConst($dict164);
-    })($dictMonoid), (function($dict172) use ($Const, $apConst, $dictMonoid, $pureConst) {
-        return $apConst($dict172);
-    })($dictMonoid), $functorConst);
+    return new Applicative((function($dict159) use ($Const, $dictMonoid, $pureConst) {
+        return $pureConst($dict159);
+    })($dictMonoid), (function($dict167) use ($Const, $apConst, $dictMonoid, $pureConst) {
+        return $apConst($dict167);
+    })($dictMonoid), $functorConst($dictMonoid));
 };
 
-$liftA2 = function($dict219) {
-    return function($f) use ($dict219) {
-        return function($ma) use ($dict219, $f) {
-            return function($mb) use ($dict219, $f, $ma) {
-                return ($dict219->ap)(($dict219->fmap)($f)($ma))($mb);
+$liftA2 = function($dict214) {
+    return function($f) use ($dict214) {
+        return function($ma) use ($dict214, $f) {
+            return function($mb) use ($dict214, $f, $ma) {
+                return ($dict214->ap)(($dict214->Functor->fmap)($f)($ma))($mb);
             };
         };
     };
 };
-
-echo $liftA2($applicativeConst("b"))($Const("a"))($Const("b"))($Const("c"));
 
 ?>

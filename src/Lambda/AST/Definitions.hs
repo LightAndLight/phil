@@ -20,7 +20,7 @@ data Definition
   | TypeSignature Identifier TypeScheme
   | Function (Binding Expr)
   | Class [Type] Type [(Identifier, Type)]
-  | ValidClass Context Identifier (NonEmpty Identifier) [(Identifier, Type)] [(Identifier, [Identifier])]
+  | ValidClass Context Identifier (NonEmpty Identifier) [(Identifier, Type)]
   | Instance [Type] Type [Binding Expr]
-  | ValidInstance Context InstanceHead [InstanceHead] [Binding Expr]
+  | ValidInstance Context InstanceHead [Binding Expr] [Expr]
   deriving (Eq, Show)

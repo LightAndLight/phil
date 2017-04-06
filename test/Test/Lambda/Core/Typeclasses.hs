@@ -69,8 +69,8 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         ord a = TyApp (TyCon $ TypeCon "Ord") (TyVar a)
         num a = TyApp (TyCon $ TypeCon "Num") (TyVar a)
         context =
-          [ TceClass [] "Eq" (pure "a") undefined undefined
-          , TceClass [("Eq", pure "b")] "Ord" (pure "b") undefined undefined
+          [ TceClass [] "Eq" (pure "a") undefined 
+          , TceClass [("Eq", pure "b")] "Ord" (pure "b") undefined 
           ]
     it "P ||- {}" $
       all (entails [] [ord "c"]) [] `shouldBe` True
@@ -104,9 +104,9 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)
         context =
-          [ TceClass [] "Functor" (pure "a") undefined undefined
-          , TceClass [("Functor", pure "b")] "Applicative" (pure "b") undefined undefined
-          , TceClass [("Applicative", pure "c")] "Monad" (pure "c") undefined undefined
+          [ TceClass [] "Functor" (pure "a") undefined 
+          , TceClass [("Functor", pure "b")] "Applicative" (pure "b") undefined 
+          , TceClass [("Applicative", pure "c")] "Monad" (pure "c") undefined 
           ]
     it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Monad d` entails `Functor d, Applicative d`" $
       all (entails context [monad "d"]) [applicative "d", functor "d"] `shouldBe` True
@@ -116,9 +116,9 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
         monoid a = TyApp (TyCon $ TypeCon "Monoid") (TyVar a)
         context =
-          [ TceClass [] "Monoid" (pure "m") undefined undefined
-          , TceClass [("Functor", pure "f")] "Applicative" (pure "f") undefined undefined
-          , TceClass [] "Functor" (pure "f") undefined undefined
+          [ TceClass [] "Monoid" (pure "m") undefined 
+          , TceClass [("Functor", pure "f")] "Applicative" (pure "f") undefined 
+          , TceClass [] "Functor" (pure "f") undefined 
           ]
     it "given `Functor f`, `Functor f => Applicative f`, `Applicative d` entails `Applicative d, Functor d`" $
       all (entails context [applicative "d"]) [applicative "d", functor "d"] `shouldBe` True
