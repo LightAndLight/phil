@@ -35,9 +35,6 @@ import           Lambda.Typecheck.TypeError
 import           Lambda.Typecheck.Unification
 import           Lambda.Typeclasses
 
-applyMapping :: Map Placeholder Placeholder -> Placeholder -> Placeholder
-applyMapping mapping ty = fromMaybe ty (M.lookup ty mapping)
-
 -- | Reduce a list of predicates to a normal form where no predicate
 -- | can be derived from the other predicates
 -- |
@@ -97,32 +94,36 @@ resolveAllPlaceholders
      , AsTypeError e
      , MonadError e m
      )
-  => [TypeclassEntry a] -- ^ Typeclass environment
+  => Bool -- ^ Defer errors?
+  -> [TypeclassEntry a] -- ^ Typeclass environment
   -> Set Identifier -- ^ Type variables bound in the outer context
-  -> [Placeholder] -- ^ Dictionary parameter environment
+  -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
   -> Expr -- ^ Target expression
   -> m ([Placeholder], [Identifier], Expr) -- ^ Deferred placeholders, dictionary variables, resulting expression
-resolveAllPlaceholders ctxt bound env expr = do
-  (expr, (deferred, resolved)) <- runStateT (everywhereM go expr) ([], M.empty)
+resolveAllPlaceholders shouldDeferErrors ctxt bound env expr = do
+  (expr, (deferred, env')) <- runStateT (everywhereM go expr) ([], M.fromList env)
+  let resolved = M.foldrWithKey justs M.empty env'
   pure
     ( deferred
     , foldr fromDictVar [] resolved
     , everywhere (replacePlaceholders resolved) expr
     )
   where
+    justs k (Just v) rest = M.insert k v rest
+    justs _ Nothing as = as
+
     fromDictVar (DictVar a) as = a : as
     fromDictVar _ as = as
 
     go (DictPlaceholder p) = do
-      mapping <- gets snd
-      let env' = fmap (\entry -> (entry, M.lookup entry mapping)) env
-      result <- resolvePlaceholder ctxt bound env' p
+      env <- gets snd
+      result <- resolvePlaceholder shouldDeferErrors ctxt bound (M.toList env) p
       case result of
         Nothing -> do
           modify $ first (p :)
           pure $ DictPlaceholder p
         Just replacement -> do
-          modify $ second (M.insert p replacement)
+          modify $ second (M.insert p $ Just replacement)
           pure replacement
     go expr = pure expr
 
@@ -134,12 +135,13 @@ resolvePlaceholder
      , AsTypeError e
      , MonadError e m
      )
-  => [TypeclassEntry a] -- ^ Typeclass environment
+  => Bool -- ^ Defer errors?
+  -> [TypeclassEntry a] -- ^ Typeclass environment
   -> Set Identifier -- ^ Type variables bound in the outer context
   -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
   -> Placeholder -- ^ The placeholder to construct a dictionary for
   -> m (Maybe Expr)
-resolvePlaceholder ctxt bound env goal@(con, args)
+resolvePlaceholder shouldDeferErrors ctxt bound env goal@(con, args)
   | goal `elem` fmap fst env
   , foldMap freeInType args `S.intersection` bound /= S.empty
   = pure Nothing
@@ -154,14 +156,16 @@ resolvePlaceholder ctxt bound env goal@(con, args)
   where
     inputTy = toType goal
 
-    go [] = throwError $ _NoSuchInstance # goal
+    go []
+      | shouldDeferErrors = pure Nothing
+      | otherwise = throwError $ _NoSuchInstance # goal
 
     go (TceClass supers className tyVars _ : entries)
       | ((superName, subs) : _) <-
         rights . zipWith (\a b -> (,) (fst a) <$> b) supers $ (\ty -> unify [(toTypeTyVars ty, inputTy)]) <$> supers
       = flip catchError (const $ go entries) $ do
           let tyArgs = substitute subs . TyVar <$> tyVars
-          res <- resolvePlaceholder ctxt bound env (className, tyArgs)
+          res <- resolvePlaceholder shouldDeferErrors ctxt bound env (className, tyArgs)
           pure $ DictSuper superName <$> res
       | otherwise = go entries
 
@@ -172,7 +176,7 @@ resolvePlaceholder ctxt bound env goal@(con, args)
           N.zip (toTypeTyVars <$> instHead ^. ihInstArgs) args
       = flip catchError (const $ go entries) $ do
           let supers' = over (mapped._2.mapped) (substitute subs . TyVar) supers
-          res <- traverse (resolvePlaceholder ctxt bound env) supers'
+          res <- traverse (resolvePlaceholder shouldDeferErrors ctxt bound env) supers'
           pure $ do
             res' <- sequence res
             let args' = fromJust . ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
