@@ -33,6 +33,7 @@ library
                      , Lambda.AST.Binding
                      , Lambda.AST.Definitions
                      , Lambda.AST.Expr
+                     , Lambda.Exception
                      , Lambda.Lexer
                      , Lambda.Parser
                      , Lambda.PHP

@@ -149,7 +149,7 @@ generalize subs tcenv expr cons ty = do
   let expr' = everywhere (subPlaceholders subs) expr
 
   let placeholders
-        = fromJust . ctorAndArgs <$> simplCons :: [(Identifier, [Type])]
+        = ctorAndArgs <$> simplCons :: [(Identifier, [Type])]
  
   (deferred, dictVars, expr'') <-
     resolveAllPlaceholders
@@ -319,7 +319,7 @@ inferType e = case e of
   where
     consToPlaceholders [] = pure ([], [])
     consToPlaceholders (cons : rest)
-      = let Just (className, instArgs) = ctorAndArgs cons
+      = let (className, instArgs) = ctorAndArgs cons
         in bimap
             (DictPlaceholder (className, N.fromList instArgs) :)
             ((className, N.fromList instArgs) :)
@@ -589,7 +589,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           True
           tctxt
           S.empty
-          (flip (,) Nothing . second N.fromList . fromJust . ctorAndArgs <$> cons)
+          (flip (,) Nothing . second N.fromList . ctorAndArgs <$> cons)
           (everywhere (subPlaceholders subs) impl')
       (_, _, impl''') <-
         resolveAllPlaceholders

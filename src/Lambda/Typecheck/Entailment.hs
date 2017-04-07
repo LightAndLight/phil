@@ -179,7 +179,7 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal@(con, args)
           res <- traverse (resolvePlaceholder shouldDeferErrors ctxt bound env) supers'
           pure $ do
             res' <- sequence res
-            let args' = fromJust . ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
+            let args' = ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
             pure $ foldl' App (DictInst con $ fst <$> args') res'
       | otherwise = go entries
 

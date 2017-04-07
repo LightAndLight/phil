@@ -3,12 +3,18 @@
 
 module Lambda.Core.AST.Types where
 
+import Control.Exception
+import GHC.Stack
+import Lambda.Exception
+
 import Data.Bifunctor
 import Data.Foldable
 import Data.Monoid
 import           Data.List                         (intercalate)
+import Data.Typeable (Typeable)
 import           Data.Set                          (Set)
 import qualified Data.Set                          as S
+
 
 import           Lambda.Core.AST.Identifier
 import           Lambda.Typecheck.Unification
@@ -24,11 +30,21 @@ data Type
 pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 pattern TyCtor con = TyCon (TypeCon con)
 
+data TypeException
+  = InvalidTypeException Type
+  deriving (Show, Typeable)
+
+instance Exception TypeException where
+
 -- | Split a Type into a type constructor and some arguments
-ctorAndArgs :: (Applicative f, Monoid (f Type)) => Type -> Maybe (Identifier, f Type)
-ctorAndArgs (TyCtor con) = Just (con, mempty)
-ctorAndArgs (TyApp rest arg) = second (<> pure arg) <$> ctorAndArgs rest
-ctorAndArgs _ = Nothing
+-- |
+-- | Partial, throws a TypeException
+ctorAndArgs :: (HasCallStack, Applicative f, Monoid (f Type)) => Type -> (Identifier, f Type)
+ctorAndArgs ty = go ty
+  where
+    go (TyCtor con) = (con, mempty)
+    go (TyApp rest arg) = second (<> pure arg) $ go rest
+    go _ = internalError (InvalidTypeException ty)
 
 toType :: Foldable f => (Identifier, f Type) -> Type
 toType (con, args) = foldl' TyApp (TyCtor con) args
