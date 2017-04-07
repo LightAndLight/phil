@@ -5,6 +5,8 @@
 
 module Lambda.Typecheck where
 
+import Debug.Trace
+
 import           Control.Applicative
 import Control.Arrow ((***))
 import           Control.Lens
@@ -144,25 +146,23 @@ generalize subs tcenv expr cons ty = do
         `S.difference` freeInCtxt
   let simplCons = simplify tcenv cons
 
-  let expr' = everywhere subPlaceholders expr
+  let expr' = everywhere (subPlaceholders subs) expr
 
   let placeholders
         = fromJust . ctorAndArgs <$> simplCons :: [(Identifier, [Type])]
  
   (deferred, dictVars, expr'') <-
     resolveAllPlaceholders
+      False
       tcenv
       freeInCtxt
-      (second N.fromList <$> placeholders)
+      (flip (,) Nothing . second N.fromList <$> placeholders)
       expr'
 
   let finalCons = filter ((S.empty /=) . freeInType) simplCons
 
   pure (foldr Abs expr'' dictVars, Forall frees finalCons ty)
   where
-    subPlaceholders (DictPlaceholder (className, tyArgs))
-      = DictPlaceholder (className, substitute subs <$> tyArgs)
-    subPlaceholders expr = expr
 
     fromDictVar (DictVar a) as = a : as
     fromDictVar _ as = as
@@ -252,8 +252,8 @@ special scheme scheme'
               unifyTypes' con con' ctxt'
           | otherwise = throwError $ _TUnificationError # CannotUnify ty ty'
 
-runInferType :: Expr -> Either TypeError (Expr, TypeScheme)
-runInferType = runExcept . runFreshT . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . inferType
+runInferTypeScheme :: Expr -> Either TypeError (Expr, TypeScheme)
+runInferTypeScheme = runExcept . runFreshT . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . inferTypeScheme
 
 type MonadW r s e m
   = ( MonadFresh m
@@ -303,25 +303,27 @@ runWithContext
 runWithContext ctxt
   = runFreshT .
     flip evalStateT initialInferenceState .
-    flip runReaderT initialInferenceState { _isContext = ctxt } . inferType
+    flip runReaderT initialInferenceState { _isContext = ctxt } . inferTypeScheme
 
-inferType :: (MonadW r s e m, HasTcContext C.Expr s) => Expr -> m (Expr, TypeScheme)
-inferType e = do
-  (subs, cons, dictParams, ty, e') <- w e
-  env <- use tcContext
-  generalize subs env e' (substitute subs <$> cons) (substitute subs ty)
+inferType :: MonadW r s e m => Expr -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
+inferType e = case e of
+  Error _ -> (,,,,) mempty [] [] <$> freshTyVar <*> pure e
+  Id name -> inferIdent name
+  Lit lit -> inferLiteral lit
+  App f x -> inferApp f x
+  Abs x expr -> inferAbs x expr
+  Let binding rest -> inferLet binding rest
+  Rec binding rest -> inferRec binding rest
+  Case input bs -> inferCase input bs
+  _ -> error $ "inferType: invalid expression: " ++ show e
   where
-    w :: MonadW r s e m => Expr -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
-    w e = case e of
-      Error _ -> (,,,,) mempty [] [] <$> freshTyVar <*> pure e
-      Id name -> inferIdent name
-      Lit lit -> inferLiteral lit
-      App f x -> inferApp f x
-      Abs x expr -> inferAbs x expr
-      Let binding rest -> inferLet binding rest
-      Rec binding rest -> inferRec binding rest
-      Case input bs -> inferCase input bs
-      _ -> error $ "inferType: invalid expression: " ++ show e
+    consToPlaceholders [] = pure ([], [])
+    consToPlaceholders (cons : rest)
+      = let Just (className, instArgs) = ctorAndArgs cons
+        in bimap
+            (DictPlaceholder (className, N.fromList instArgs) :)
+            ((className, N.fromList instArgs) :)
+            <$> consToPlaceholders rest
 
     inferIdent :: MonadW r e s m => Identifier -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
     inferIdent name = do
@@ -358,17 +360,6 @@ inferType e = do
             , foldl' App (Id name) placeholders
             )
 
-      where
-        consToPlaceholders [] = pure ([], [])
-        consToPlaceholders (cons : rest)
-          = let Just (className, instArgs) = ctorAndArgs cons
-            in do
-              dvar <- ("dict" ++) <$> fresh
-              bimap
-                (DictPlaceholder (className, N.fromList instArgs) :)
-                ((className, N.fromList instArgs) :)
-                <$> consToPlaceholders rest
-
     inferLiteral lit = case lit of
       LitInt _ -> return (mempty, [], [], TyCtor "Int", Lit lit)
       LitString _ -> return (mempty, [], [], TyCtor "String", Lit lit)
@@ -376,8 +367,8 @@ inferType e = do
       LitBool _ -> return (mempty, [], [], TyCtor "Bool", Lit lit)
 
     inferApp f x = do
-      (s1, cons1, env1, t1, f') <- w f
-      (s2, cons2, env2, t2, x') <- local (over context $ fmap (subContextEntry s1)) $ w x
+      (s1, cons1, env1, t1, f') <- inferType f
+      (s2, cons2, env2, t2, x') <- local (over context $ fmap (subContextEntry s1)) $ inferType x
       b <- freshTyVar
       s3 <- either (throwError . review _TUnificationError) pure $ unify [(TyFun t2 b,substitute s2 t1)]
       let subs = s1 <> s2 <> s3
@@ -392,7 +383,7 @@ inferType e = do
     inferAbs x expr = do
       b <- freshTyVar
       (s1, cons, env, t1, expr') <-
-        local (over context $ M.insert x (FEntry $ Forall S.empty [] b)) $ w expr
+        local (over context $ M.insert x (FEntry $ Forall S.empty [] b)) $ inferType expr
       return
         ( s1
         , cons
@@ -404,11 +395,11 @@ inferType e = do
     inferLet :: MonadW r e s m => Binding Expr -> Expr -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
     inferLet binding rest = case binding of
       VariableBinding x e -> do
-        (s1, cons1, env1, t1, e') <- w e
+        (s1, cons1, env1, t1, e') <- inferType e
         (s2, cons2, env2, t2, rest', e'') <- local (over context $ fmap (subContextEntry s1)) $ do
           env <- use tcContext
           (e'', t1') <- generalize s1 env e' cons1 t1
-          (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ w rest 
+          (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ inferType rest 
           pure (s2, cons2, env2, t2, rest', e'')
         return
           ( s1 <> s2
@@ -424,7 +415,7 @@ inferType e = do
       VariableBinding name value -> do
         freshVar <- freshTyVar
         (s1, cons1, env1, t1, value') <-
-          local (over context . M.insert name . REntry $ Forall S.empty [] freshVar) $ w value
+          local (over context . M.insert name . REntry $ Forall S.empty [] freshVar) $ inferType value
         s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
         (s3, cons2, env2, t2, rest', value'') <- local (over context $ fmap (subContextEntry s1)) $ do
           env <- use tcContext
@@ -437,7 +428,7 @@ inferType e = do
               cons1
               (substitute s2 t1)
           local (over context $ M.insert name $ FEntry t1') $ do
-            (sub, cons, env, ty, rest') <- w rest
+            (sub, cons, env, ty, rest') <- inferType rest
             pure (sub, cons, env, ty, rest', value'')
         pure
           ( s1 <> s3
@@ -463,11 +454,11 @@ inferType e = do
         inferBranch (pat,branch) (subs,bTypes) = do
           (boundVars,patternType) <- patType pat
           local (over context $ M.union boundVars) $ do
-            (branchSubs,preds,env,branchType,branch') <- w branch
+            (branchSubs,preds,env,branchType,branch') <- inferType branch
             pure (subs <> branchSubs, (patternType, preds, env, branchType, branch'):bTypes)
 
     inferCase input bs = do
-      (s1, cons, env, inputType, input') <- w input
+      (s1, cons, env, inputType, input') <- inferType input
       (bSubs,bs') <- inferBranches bs
       outputType <- freshTyVar
       let equations = foldr (\(p,_,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
@@ -482,6 +473,12 @@ inferType e = do
         , substitute subs outputType
         , Case input' bs''
         )
+
+inferTypeScheme :: (MonadW r s e m, HasTcContext C.Expr s) => Expr -> m (Expr, TypeScheme)
+inferTypeScheme e = do
+  (subs, cons, dictParams, ty, e') <- inferType e
+  env <- use tcContext
+  generalize subs env e' (substitute subs <$> cons) (substitute subs ty)
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
@@ -566,7 +563,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   let buildSuperDicts (TceInst _ (InstanceHead className instArgs) _) = do
         let supers' = zip (over (mapped._2.mapped) TyVar supers) $
               Just . DictVar . ("dict" ++) . fst <$> supers
-        dict <- resolvePlaceholder tctxt S.empty supers' (className, toTypeTyVars <$> instArgs) 
+        dict <- resolvePlaceholder False tctxt S.empty supers' (className, toTypeTyVars <$> instArgs) 
         pure $ fromJust dict
   
   supersDicts <- traverse buildSuperDicts classSuperInsts
@@ -582,7 +579,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
     let inst = TceInst supers (InstanceHead constructor params) undefined
     st <- get
     flip runReaderT st . local (over tcContext (inst :)) $ do
-      (impl', ty) <- inferType impl
+      (_, ty) <- inferTypeScheme impl
       let subs = Substitution . N.toList $ N.zip classArgs params'
       let implTy' = substitute subs implTy
       let freeInImplTy' = freeInType implTy'
@@ -592,13 +589,48 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
                 (\c -> freeInType c `S.isSubsetOf` freeInImplTy')
                 implCons
       special ty $ Forall freeInImplTy' implCons' implTy'
-      pure $ VariableBinding implName impl'
+      tctxt <- view tcContext
+      (_, cons, _, ty, impl') <- inferType impl
+      let subs = findMatchingCons (toTypeTyVars <$> supers) cons
+      let supers' = (\s -> (over (_2.mapped) TyVar s, Just . DictVar $ "dict" ++ fst s)) <$> supers
+      (_, dictVars, impl'') <-
+        resolveAllPlaceholders
+          True
+          tctxt
+          S.empty
+          (flip (,) Nothing . second N.fromList . fromJust . ctorAndArgs <$> cons)
+          (everywhere (subPlaceholders subs) impl')
+      (_, _, impl''') <-
+        resolveAllPlaceholders
+          False
+          tctxt
+          S.empty
+          supers'
+          impl''
+      pure $ VariableBinding implName $ foldr Abs impl''' dictVars
 
   let inst = TceInst supers (InstanceHead constructor params) . M.fromList $
         fmap (\(VariableBinding name expr) -> (name, toCoreExpr $ desugarExpr expr)) impls'
   tcContext %= (inst :)
   pure (M.empty, ValidInstance supers instHead impls' supersDicts)
   where
+    -- | Find a substitution that will rewrite a member's inferred
+    -- | constraints in terms of the instance's parameters
+    findMatchingCons
+      :: [Type] -- ^ Instance superclass constraints
+      -> [Type] -- ^ Class member constraints
+      -> Substitution Type
+    findMatchingCons [] cons = mempty
+    findMatchingCons (con : rest) cons
+      = case go con cons of
+          Just (sub, rest') -> sub <> findMatchingCons rest rest'
+          Nothing -> findMatchingCons rest cons
+      where
+        go con [] = Nothing
+        go con (con' : rest) = case unify [(con', con)] of
+          Right sub -> Just (sub, rest)
+          Left _ -> second (con' :) <$> go con rest
+
     tryGetClass :: (AsTypeError e, MonadError e m) => [TypeclassEntry a] -> Identifier -> m (TypeclassEntry a)
     tryGetClass tctxt cons
       = maybe
@@ -645,7 +677,7 @@ checkDefinition (Function (VariableBinding name expr)) = do
   case maybeVar of
     Nothing -> do
       ctxt <- use context
-      (expr', ty) <- get >>= runReaderT (inferType expr)
+      (expr', ty) <- get >>= runReaderT (inferTypeScheme expr)
       maybeSig <- use (typesignatures . at name)
       case maybeSig of
         Nothing -> context %= M.insert name (FEntry ty)

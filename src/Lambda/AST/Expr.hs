@@ -7,8 +7,13 @@ import Lambda.Core.AST.Identifier
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Pattern
 import Lambda.Core.AST.Types
+import Lambda.Typecheck.Unification
 
 type Placeholder = (Identifier, NonEmpty Type)
+
+subPlaceholders subs (DictPlaceholder (className, tyArgs))
+  = DictPlaceholder (className, substitute subs <$> tyArgs)
+subPlaceholders subs expr = expr
 
 data Expr
   = Id Identifier

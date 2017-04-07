@@ -42,3 +42,15 @@ instance Monoid m => Applicative (Const m) where {
 
 liftA2 : forall f a b c. Applicative f => (a -> b -> c) -> f a -> f b -> f c
 liftA2 f ma mb = ap (fmap f ma) mb
+
+and a b = case a of {
+  true -> b;
+  _ -> false
+  }
+
+instance Monoid Bool where {
+  mempty = true;
+  mappend = and
+}
+
+test = liftA2 and (Const true) (Const false)

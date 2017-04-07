@@ -70,14 +70,14 @@ special ctxts scheme scheme'
     T.special scheme scheme'
 
 hasType :: L.Expr -> TypeScheme -> Expectation
-hasType expr ty = snd <$> runInferType expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
+hasType expr ty = snd <$> runInferTypeScheme expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
 
 typeOf :: TestContexts -> TestState -> L.Expr -> Either TypeError TypeScheme
 typeOf ctxt st expr
   = flip runReader ctxt .
     runFreshT .
     flip evalStateT st .
-    runExceptT $ snd <$> inferType expr
+    runExceptT $ snd <$> inferTypeScheme expr
 
 typecheckSpec = describe "Lambda.Core.Typecheck" $ do
   describe "special" $ do
@@ -179,7 +179,7 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
 
     describe "failure" $
       it "\\x. x x" $
-        runInferType (L.Abs "x" $ L.App (L.Id "x") $ L.Id "x") `shouldSatisfy` has (_Left . _TUnificationError)
+        runInferTypeScheme (L.Abs "x" $ L.App (L.Id "x") $ L.Id "x") `shouldSatisfy` has (_Left . _TUnificationError)
 
     describe "typeclasses" $
       Test.Hspec.context "class Eq a where eq : a -> a -> Bool where ..." $ do

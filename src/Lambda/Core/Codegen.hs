@@ -126,7 +126,7 @@ genInst
   -> [Expr] -- ^ Superclass dictionaries
   -> m PHPDecl
 genInst supers instHead impls superDicts= do
-  impls' <- traverse (toAnonymous . genImpl) impls
+  impls' <- traverse toAnonymous impls
   superDicts' <- traverse genPHPExpr superDicts
   sc <- use scope
   pure . PHPDeclStatement . PHPStatementExpr .
@@ -137,7 +137,6 @@ genInst supers instHead impls superDicts= do
   where
     supersDicts = fmap (("dict" ++) . genTypeName . toTypeTyVars) supers
     toAnonymous (Binding _ expr) = genPHPExpr expr
-    genImpl = fmap (flip (foldl' App) $ Id <$> supersDicts)
     genDict scope = if null supersDicts
       then PHPExprNew (phpId $ _ihClassName instHead)
       else
