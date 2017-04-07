@@ -25,7 +25,7 @@ data TypeError
   | NoSuchClass Identifier
   | NoSuchInstance Identifier (NonEmpty Type)
   | NonClassFunction Identifier (NonEmpty Type) Identifier
-  | MissingClassFunctions Identifier (NonEmpty Type) (Set Identifier)
+  | MissingClassFunctions Identifier (NonEmpty (Identifier, [Identifier])) (Set Identifier)
   | MissingSuperclassInst Identifier (NonEmpty (Identifier, [Identifier]))
   | TypeMismatch TypeScheme TypeScheme
   | TUnificationError (UnificationError Type)

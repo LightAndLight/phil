@@ -218,11 +218,11 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
             typeOf ctxtWithAnd initialTestState (L.Abs "x" $ L.Abs "y" $ L.App (L.App (L.Id "and") eqxx) eqyy)
               `shouldBe` (Right $
                 Forall
-                  (S.fromList ["t4", "t13"])
+                  (S.fromList ["t4", "t12"])
                   [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t4")
-                  , TyApp (TyCon $ TypeCon "Eq") (TyVar "t13")
+                  , TyApp (TyCon $ TypeCon "Eq") (TyVar "t12")
                   ]
-                  (TyFun (TyVar "t4") $ TyFun (TyVar "t13") $ TyCtor "Bool"))
+                  (TyFun (TyVar "t4") $ TyFun (TyVar "t12") $ TyCtor "Bool"))
           Test.Hspec.context "class Gt a where gt : a -> a -> Bool" $ do
             let ctxtWithGt = ctxtWithAnd
                   & testTcContext <>~ [ TceClass [] "Gt" (pure "a") undefined ]
@@ -239,8 +239,8 @@ typecheckSpec = describe "Lambda.Core.Typecheck" $ do
               typeOf ctxtWithGt initialTestState (L.Abs "x" $ L.App (L.App (L.Id "and") eqxx) gtxx)
                 `shouldBe` (Right $
                   Forall
-                    (S.singleton "t11")
-                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t11")
-                    , TyApp (TyCon $ TypeCon "Gt") (TyVar "t11")
+                    (S.singleton "t10")
+                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t10")
+                    , TyApp (TyCon $ TypeCon "Gt") (TyVar "t10")
                     ]
-                    (TyFun (TyVar "t11") $ TyCtor "Bool"))
+                    (TyFun (TyVar "t10") $ TyCtor "Bool"))

@@ -559,20 +559,12 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   let classSupers' = over (mapped._2.mapped) (fromJust . flip M.lookup mapping) classSupers
 
   classSuperInsts <- traverse (uncurry $ tryGetInst tctxt) classSupers'
+      
+  let supersPlaceholders =
+        zip (over (mapped._2.mapped) TyVar supers) $
+        Just . DictVar . ("dict" ++) . fst <$> supers
 
-  let buildSuperDicts (TceInst _ (InstanceHead className instArgs) _) = do
-        let supers' = zip (over (mapped._2.mapped) TyVar supers) $
-              Just . DictVar . ("dict" ++) . fst <$> supers
-        dict <- resolvePlaceholder False tctxt S.empty supers' (className, toTypeTyVars <$> instArgs) 
-        pure $ fromJust dict
-  
-  supersDicts <- traverse buildSuperDicts classSuperInsts
-
-  let implNames = S.fromList (fmap bindingName impls)
-  let memberNames = M.keysSet members
-  let notImplemented = memberNames `S.difference` implNames
-  when (notImplemented /= S.empty) . throwError $
-    _MissingClassFunctions # (constructor, params', notImplemented)
+  checkAllMembersImplemented members impls
 
   impls' <- for impls $ \(VariableBinding implName impl) -> do
     Forall _ implCons implTy <- tryGetImpl constructor params' implName members 
@@ -592,7 +584,6 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
       tctxt <- view tcContext
       (_, cons, _, ty, impl') <- inferType impl
       let subs = findMatchingCons (toTypeTyVars <$> supers) cons
-      let supers' = (\s -> (over (_2.mapped) TyVar s, Just . DictVar $ "dict" ++ fst s)) <$> supers
       (_, dictVars, impl'') <-
         resolveAllPlaceholders
           True
@@ -605,15 +596,35 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           False
           tctxt
           S.empty
-          supers'
+          supersPlaceholders
           impl''
       pure $ VariableBinding implName $ foldr Abs impl''' dictVars
 
   let inst = TceInst supers (InstanceHead constructor params) . M.fromList $
         fmap (\(VariableBinding name expr) -> (name, toCoreExpr $ desugarExpr expr)) impls'
+
+  supersDicts <- traverse (buildSuperDicts tctxt supersPlaceholders) classSuperInsts
+
   tcContext %= (inst :)
   pure (M.empty, ValidInstance supers instHead impls' supersDicts)
+
   where
+    checkAllMembersImplemented members impls = do
+      let implNames = S.fromList (fmap bindingName impls)
+      let memberNames = M.keysSet members
+      let notImplemented = memberNames `S.difference` implNames
+      when (notImplemented /= S.empty) . throwError $
+        _MissingClassFunctions # (constructor, params, notImplemented)
+
+    buildSuperDicts tctxt placeholders (TceInst _ (InstanceHead className instArgs) _)
+      = fromJust <$>
+        resolvePlaceholder
+          False
+          tctxt
+          S.empty
+          placeholders
+          (className, toTypeTyVars <$> instArgs) 
+  
     -- | Find a substitution that will rewrite a member's inferred
     -- | constraints in terms of the instance's parameters
     findMatchingCons
