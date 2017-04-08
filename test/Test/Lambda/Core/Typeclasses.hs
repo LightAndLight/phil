@@ -1,6 +1,7 @@
 module Test.Lambda.Core.Typeclasses (typeclassesSpec) where
 
 import           Control.Lens                      hiding (elements)
+import           Control.Monad.Fresh
 import           Control.Monad.State
 import           Data.Maybe
 import           Data.Set                          (Set)
@@ -64,33 +65,43 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
         \(ElementUpToRenaming a b) ->
           let Just res = elementUpToRenaming a b
           in substitute res a `S.member` S.fromList (fmap (substitute res) b)
+
+  let eq a = TyApp (TyCon $ TypeCon "Eq") (TyVar a)
+      ord a = TyApp (TyCon $ TypeCon "Ord") (TyVar a)
+      num a = TyApp (TyCon $ TypeCon "Num") (TyVar a)
+      functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
+      applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
+      monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)
+      monoid a = TyApp (TyCon $ TypeCon "Monoid") (TyVar a)
+
   describe "entails" $ do
-    let eq a = TyApp (TyCon $ TypeCon "Eq") (TyVar a)
-        ord a = TyApp (TyCon $ TypeCon "Ord") (TyVar a)
-        num a = TyApp (TyCon $ TypeCon "Num") (TyVar a)
-        context =
+    let context =
           [ TceClass [] "Eq" (pure "a") undefined 
-          , TceClass [("Eq", pure "b")] "Ord" (pure "b") undefined 
+          , TceClass [("Eq", pure "a")] "Ord" (pure "a") undefined 
           ]
     it "P ||- {}" $
       all (entails [] [ord "c"]) [] `shouldBe` True
-    it "given `Eq a` and `Eq b => Ord b`, `Ord c` entails `Eq c`" $
+    it "given `Eq a` and `Eq a => Ord a`, `Eq c` entails `Eq c`" $
+      entails context [eq "c"] (eq "c") `shouldBe` True
+    it "given `Eq a` and `Eq a => Ord a`, `Ord c` entails `Eq c`" $
       entails context [ord "c"] (eq "c") `shouldBe` True
-    it "given `Eq a` and `Eq b => Ord b`, `Ord c` entails `Ord c`" $
+    it "given `Eq a` and `Eq a => Ord a`, `Ord c` entails `Ord c`" $
       entails context [ord "c"] (ord "c") `shouldBe` True
-    it "given `Eq a` and `Eq b => Ord b`, `Ord c` does not entail `Eq d`" $
+    it "given `Eq a` and `Eq a => Ord a`, `[]` does not entail `Eq a`" $
+      entails context [] (eq "a") `shouldBe` False
+    it "given `Eq a` and `Eq a => Ord a`, `Ord c` does not entail `Eq d`" $
       entails context [ord "c"] (eq "d") `shouldBe` False
-    it "given `Eq a` and `Eq b => Ord b`, `Ord c` does not entail `Num d`" $
+    it "given `Eq a` and `Eq a => Ord a`, `Ord c` does not entail `Num d`" $
       entails context [ord "c"] (num "d") `shouldBe` False
     let eq = TyApp (TyCon $ TypeCon "Eq")
         ord = TyApp (TyCon $ TypeCon "Ord")
         context' = context ++ [TceInst [] (InstanceHead "Eq" $ pure ("Int", [])) undefined]
         list = TyApp (TyCon $ TypeCon "List")
-    it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` entails `Eq Int`" $
+    it "given `Eq a`, `Eq a => Ord a`, and `Eq Int`, `Eq c` entails `Eq Int`" $
       entails context' [eq $ TyVar "c"] (eq $ TyCtor "Int") `shouldBe` True
-    it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Eq Bool`" $
+    it "given `Eq a`, `Eq a => Ord a`, and `Eq Int`, `Eq c` does not entail `Eq Bool`" $
       entails context' [eq $ TyVar "c"] (eq $ TyCtor "Bool") `shouldBe` False
-    it "given `Eq a`, `Eq b => Ord b`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
+    it "given `Eq a`, `Eq a => Ord a`, and `Eq Int`, `Eq c` does not entail `Ord Int`" $
       entails context' [eq $ TyVar "c"] (ord $ TyCtor "Int") `shouldBe` False
     let context' = context ++
           [ TceInst [("Eq", pure "b")] (InstanceHead "Eq" $ pure ("List", ["b"])) undefined
@@ -100,25 +111,40 @@ typeclassesSpec = describe "Lambda.Core.Typeclasses" $ do
       entails context' [eq $ TyVar "c"] (eq $ TyApp (TyCon $ TypeCon "List") (TyVar "c")) `shouldBe` True
     it "given `Eq a`, `Eq b => Eq (List b)`, and `Eq Int`, `Eq c` entails `Eq (List Int)`" $
       entails context' [eq $ TyVar "c"] (eq $ TyApp (TyCon $ TypeCon "List") (TyCtor "Int")) `shouldBe` True
-    let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
-        applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
-        monad a = TyApp (TyCon $ TypeCon "Monad") (TyVar a)
-        context =
+    let context =
           [ TceClass [] "Functor" (pure "a") undefined 
           , TceClass [("Functor", pure "b")] "Applicative" (pure "b") undefined 
           , TceClass [("Applicative", pure "c")] "Monad" (pure "c") undefined 
           ]
-    it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Monad d` entails `Functor d, Applicative d`" $
-      all (entails context [monad "d"]) [applicative "d", functor "d"] `shouldBe` True
+    it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Monad d` entails `Applicative d`" $
+      all (entails context [monad "d"]) [applicative "d"] `shouldBe` True
+    it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Monad d` entails `Functor d`" $
+      entails context [monad "d"] (functor "d") `shouldBe` True
     it "given `Functor a`, `Functor b => Applicative b` and `Applicative c => Monad c`, `Applicative d` does not entail `Monad d`" $
       entails context [applicative "d"] (monad "d") `shouldBe` False
-    let functor a = TyApp (TyCon $ TypeCon "Functor") (TyVar a)
-        applicative a = TyApp (TyCon $ TypeCon "Applicative") (TyVar a)
-        monoid a = TyApp (TyCon $ TypeCon "Monoid") (TyVar a)
-        context =
+    let context =
           [ TceClass [] "Monoid" (pure "m") undefined 
           , TceClass [("Functor", pure "f")] "Applicative" (pure "f") undefined 
           , TceClass [] "Functor" (pure "f") undefined 
           ]
     it "given `Functor f`, `Functor f => Applicative f`, `Applicative d` entails `Applicative d, Functor d`" $
       all (entails context [applicative "d"]) [applicative "d", functor "d"] `shouldBe` True
+  describe "simplify" $ do
+    let context =
+          [ TceClass [] "Eq" (pure "a") undefined 
+          ]
+    it "(Eq a, Eq a) === Eq a" $
+      runIdentity (runFreshT $ simplify context [eq "a", eq "a"]) `shouldBe` [eq "a"]
+    let context =
+          [ TceClass [] "Functor" (pure "f") undefined 
+          , TceClass [("Functor", pure "f")] "Applicative" (pure "f") undefined 
+          , TceClass [("Applicative", pure "f")] "Monad" (pure "f") undefined 
+          ]
+    it "Given {} => Functor f and Functor f => Applicative f, (Functor a, Applicative a) === Applicative a" $
+      runIdentity (runFreshT $ simplify context [functor "a", applicative "a"]) `shouldBe` [applicative "a"]
+    it (unwords
+      [ "Given {} => Functor f, Functor f => Applicative f and Applicative f => Monad f,"
+      , "(Functor a, Applicative a, Functor b, Applicative b, Monad b) === (Applicative a, Monad b)"
+      ]) $
+      runIdentity (runFreshT $ simplify context [functor "a", applicative "a", functor "b", applicative "b", monad "b"])
+        `shouldBe` [applicative "a", monad "b"]
