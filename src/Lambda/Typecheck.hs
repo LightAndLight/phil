@@ -5,8 +5,6 @@
 
 module Lambda.Typecheck where
 
-import Debug.Trace
-
 import           Control.Applicative
 import Control.Arrow ((***))
 import           Control.Lens
@@ -144,13 +142,14 @@ generalize subs tcenv expr cons ty = do
   let freeInCtxt = free $ typeScheme <$> ctxt
   let frees = (freeInType ty `S.union` foldMap freeInType cons)
         `S.difference` freeInCtxt
-  let simplCons = simplify tcenv cons
+
+  simplCons <- simplify tcenv cons
 
   let expr' = everywhere (subPlaceholders subs) expr
 
   let placeholders
         = ctorAndArgs <$> simplCons :: [(Identifier, [Type])]
- 
+
   (deferred, dictVars, expr'') <-
     resolveAllPlaceholders
       False
@@ -232,6 +231,7 @@ special scheme scheme'
     subs <- Substitution . M.toList <$> unifyTypes vars ty ty'
     tctxt <- view tcContext
     let consSubbed = substitute subs <$> cons
+
     unless (all (entails tctxt cons') consSubbed) .
       throwError $ _CouldNotDeduce # (consSubbed, cons')
   | otherwise = throwError $ _TypeMismatch # (scheme, scheme')
@@ -418,14 +418,17 @@ inferType e = case e of
           local (over context . M.insert name . REntry $ Forall S.empty [] freshVar) $ inferType value
         s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
         (s3, cons2, env2, t2, rest', value'') <- local (over context $ fmap (subContextEntry s1)) $ do
-          env <- use tcContext
-          let replacement = foldl' App (Id name) $ fmap DictPlaceholder env1
+
+          let replacement = foldl' App (Id name) $
+                fmap (DictPlaceholder . over (_2.mapped) (substitute s2)) env1
+
+          tcenv <- use tcContext
           (value'', t1') <-
             generalize
               s1
-              env
-              (everywhere (replacePlaceholder replacement) value')
-              cons1
+              tcenv
+              (everywhere (subPlaceholders s2 . replacePlaceholder replacement) value')
+              (substitute s2 <$> cons1)
               (substitute s2 t1)
           local (over context $ M.insert name $ FEntry t1') $ do
             (sub, cons, env, ty, rest') <- inferType rest
@@ -461,11 +464,12 @@ inferType e = case e of
       (s1, cons, env, inputType, input') <- inferType input
       (bSubs,bs') <- inferBranches bs
       outputType <- freshTyVar
-      let equations = foldr (\(p,_,_,b,_) eqs -> (p,inputType):(b,outputType):eqs) [] bs'
+      let equations = foldr (\(p,_,_,b,_) eqs -> (inputType,p):(outputType,b):eqs) [] bs'
       subs <- either (throwError . review _TUnificationError) pure $ unify equations
       let cons' = substitute subs <$> cons ++ join (fmap (\(_, c, _, _, _) -> c) bs')
       let env' = over (mapped._2.mapped) (substitute subs) $ env ++ join (fmap (\(_, _, e, _, _) -> e) bs')
       let bs'' = N.zip (fst <$> bs) ((\(_, _, _, _, b) -> b) <$> N.fromList bs')
+
       pure
         ( s1 <> bSubs <> subs
         , cons'
@@ -478,7 +482,7 @@ inferTypeScheme :: (MonadW r s e m, HasTcContext C.Expr s) => Expr -> m (Expr, T
 inferTypeScheme e = do
   (subs, cons, dictParams, ty, e') <- inferType e
   env <- use tcContext
-  generalize subs env e' (substitute subs <$> cons) (substitute subs ty)
+  generalize subs env (everywhere (subPlaceholders subs) e') (substitute subs <$> cons) (substitute subs ty)
 
 -- [_,_,_,_] -> Abs "a1" (Abs "a2" (Abs "a3" (Abs "a4" (Prod name [Id "a1", Id "a2", Id "a3", Id "a4"]))))
 -- _:xs -> ([Id "a1"], Abs "a1")
@@ -534,7 +538,8 @@ checkDefinition def@(ValidClass supers constructor params funcs) = do
   tcContext %= (newClass :)
   pure
     ( M.fromList $ snd <$> checkedFuncs
-    , ValidClass supers constructor params funcs)
+    , ValidClass supers constructor params funcs
+    )
   where
     getMembers (TceClass _ className _ members) = (className, fst <$> M.toList members)
     getSupers (TceClass _ className tyVars _) = (className, tyVars)
@@ -617,7 +622,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
         _MissingClassFunctions # (constructor, params, notImplemented)
 
     buildSuperDicts tctxt placeholders (TceInst _ (InstanceHead className instArgs) _)
-      = fromJust <$>
+      = fromJust . snd <$>
         resolvePlaceholder
           False
           tctxt

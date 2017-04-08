@@ -9,6 +9,9 @@ import Lambda.Exception
 
 import Data.Bifunctor
 import Data.Foldable
+import qualified Data.Map as M
+import Data.Map (Map)
+import Data.Maybe
 import Data.Monoid
 import           Data.List                         (intercalate)
 import Data.Typeable (Typeable)
@@ -91,6 +94,15 @@ subTypeScheme (Substitution subs) scheme = go (freeInScheme scheme) subs scheme
       | Forall vars cons ty <- scheme
       , let runSub = substitute (Substitution [sub])
       = go frees rest (Forall vars (fmap runSub cons) $ runSub ty)
+
+-- | Rename the bound type variables in a type scheme
+renameTypeScheme :: Map Identifier Identifier -> TypeScheme -> TypeScheme
+renameTypeScheme subs (Forall vars cons ty)
+  = let subs' = Substitution . M.toList $ TyVar <$> subs
+    in Forall
+      (S.map (\var -> fromMaybe var $ M.lookup var subs) vars)
+      (substitute subs' <$> cons)
+      (substitute subs' ty)
 
 -- | Gets the C from a type of format: C a_1 a_2 .. a_n
 getCtor :: Type -> Maybe TyCon

@@ -35,26 +35,56 @@ import           Lambda.Typecheck.TypeError
 import           Lambda.Typecheck.Unification
 import           Lambda.Typeclasses
 
+-- | Rename all the type variables in a class / instance declaration to fresh
+-- | and return the substitution that was created
+standardizeApart
+  :: MonadFresh m
+  => TypeclassEntry a
+  -> m (Map Identifier Identifier, TypeclassEntry a)
+standardizeApart entry = case entry of
+  TceInst supers instHead impls -> do
+    let frees = foldr S.insert S.empty . fold $ snd <$> (instHead ^. ihInstArgs)
+    subs <- makeSubs frees
+    let inst = TceInst
+          (over (mapped._2.mapped) (fromMapping subs) supers)
+          (over (ihInstArgs.mapped._2.mapped) (fromMapping subs) instHead)
+          impls
+    pure (subs, inst)
+  TceClass supers className tyArgs members -> do
+    let frees = foldr S.insert S.empty tyArgs
+    subs <- makeSubs frees 
+    let cls = TceClass
+          (over (mapped._2.mapped) (fromMapping subs) supers)
+          className
+          (fromMapping subs <$> tyArgs)
+          (renameTypeScheme subs <$> members)
+    pure (subs, cls)
+
+  where
+    fromMapping subs a = fromJust $ M.lookup a subs
+    makeSubs
+      = foldrM
+          (\var subs -> M.insert var <$> (("t" ++) <$> fresh) <*> pure subs)
+          M.empty
+
 -- | Reduce a list of predicates to a normal form where no predicate
 -- | can be derived from the other predicates
 -- |
 -- | The resulting elements will retain their respective order
 simplify
-  :: [TypeclassEntry a] -- ^ Typeclass context
+  :: MonadFresh m
+  => [TypeclassEntry a] -- ^ Typeclass context
   -> [Type] -- ^ Predicates
-  -> [Type]
-simplify ctxt preds = go [] $ reverse preds
+  -> m [Type]
+simplify ctxt preds = do
+  ctxt' <- traverse standardizeApart ctxt
+  pure . go (snd <$> ctxt') [] $ reverse preds
   where
-    entailedBy [] goal = Nothing
-    entailedBy (pred : rest) goal
-      | entails ctxt [pred] goal = Just pred
-      | otherwise = entailedBy rest goal
-
-    go seen [] = seen
-    go seen (pred : rest)
-      | Just parent <- entailedBy (seen ++ rest) pred
-      = go seen rest
-      | otherwise = go (pred : seen) rest
+    go ctxt seen [] = seen
+    go ctxt seen (pred : rest)
+      | entails ctxt (seen ++ rest) pred 
+      = go ctxt seen rest
+      | otherwise = go ctxt (pred : seen) rest
 
 -- | Given a typeclass context, does the knowledge base always imply the
 -- | goal?
@@ -63,18 +93,17 @@ entails
   -> [Type] -- ^ Knowledge base
   -> Type -- ^ Goal
   -> Bool
-entails ctxt kb goal = goal `elem` kb || go ctxt goal
-  where
-    go [] goal = False
-    go (TceInst supers instHead _ : rest) goal
-      | Right subs <- unify [(instHeadToType instHead, goal)]
-      = all (entails ctxt kb) (substitute subs . toTypeTyVars <$> supers) || go rest goal
-      | otherwise = go rest goal
-    go (TceClass supers className classArgs _ : rest) goal
-      | (subs : _) <- rights $ fmap (\ty -> unify [(toTypeTyVars ty, goal)]) supers
-      = let classTy = foldl' TyApp (TyCtor className) $ substitute subs . TyVar <$> classArgs
-        in entails ctxt kb classTy || go rest goal
-      | otherwise = go rest goal
+entails ctxt kb goal
+  = let res = runExcept . runFreshT $ 
+          resolvePlaceholder
+            False
+            ctxt
+            S.empty
+            (zip (second N.fromList . ctorAndArgs <$> kb) $ repeat Nothing)
+            (second N.fromList $ ctorAndArgs goal)
+    in case (res :: Either TypeError ([(Placeholder, Maybe Expr)], Maybe Expr)) of
+      Left _ -> False
+      Right _ -> True
 
 -- | Replace the 'DictPlaceholder's in an expression using the specified
 -- | mapping
@@ -117,7 +146,8 @@ resolveAllPlaceholders shouldDeferErrors ctxt bound env expr = do
 
     go (DictPlaceholder p) = do
       env <- gets snd
-      result <- resolvePlaceholder shouldDeferErrors ctxt bound (M.toList env) p
+      (extra, result) <- resolvePlaceholder shouldDeferErrors ctxt bound (M.toList env) p
+      modify $ second (M.union $ M.fromList extra)
       case result of
         Nothing -> do
           modify $ first (p :)
@@ -140,48 +170,66 @@ resolvePlaceholder
   -> Set Identifier -- ^ Type variables bound in the outer context
   -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
   -> Placeholder -- ^ The placeholder to construct a dictionary for
-  -> m (Maybe Expr)
-resolvePlaceholder shouldDeferErrors ctxt bound env goal@(con, args)
-  | goal `elem` fmap fst env
-  , foldMap freeInType args `S.intersection` bound /= S.empty
-  = pure Nothing
-
-  | Just value <- lookup goal env
-  , any isTyVar args
-  = case value of
-      Nothing -> Just . DictVar . ("dict" ++) <$> fresh
-      Just expr -> pure $ Just expr
-
-  | otherwise = go ctxt
+  -> m ([(Placeholder, Maybe Expr)], Maybe Expr)
+resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
+  ctxt' <- traverse standardizeApart ctxt
+  loop shouldDeferErrors (snd <$> ctxt') bound env goal
   where
     inputTy = toType goal
 
-    go []
-      | shouldDeferErrors = pure Nothing
-      | otherwise = throwError $ _NoSuchInstance # goal
-
-    go (TceClass supers className tyVars _ : entries)
-      | ((superName, subs) : _) <-
-        rights . zipWith (\a b -> (,) (fst a) <$> b) supers $ (\ty -> unify [(toTypeTyVars ty, inputTy)]) <$> supers
-      = flip catchError (const $ go entries) $ do
-          let tyArgs = substitute subs . TyVar <$> tyVars
-          res <- resolvePlaceholder shouldDeferErrors ctxt bound env (className, tyArgs)
-          pure $ DictSuper superName <$> res
-      | otherwise = go entries
-
-    go (TceInst supers instHead _ : entries)
-      | con == instHead ^. ihClassName
-      , Right subs <- unify .
-          N.toList $
-          N.zip (toTypeTyVars <$> instHead ^. ihInstArgs) args
-      = flip catchError (const $ go entries) $ do
-          let supers' = over (mapped._2.mapped) (substitute subs . TyVar) supers
-          res <- traverse (resolvePlaceholder shouldDeferErrors ctxt bound env) supers'
-          pure $ do
-            res' <- sequence res
-            let args' = ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
-            pure $ foldl' App (DictInst con $ fst <$> args') res'
-      | otherwise = go entries
-
     isTyVar TyVar{} = True
     isTyVar _ = False
+
+    loop shouldDeferErrors ctxt bound env goal@(con, args)
+      | goal `elem` fmap fst env
+      , foldMap freeInType args `S.intersection` bound /= S.empty
+      = pure ([], Nothing)
+
+      | Just value <- lookup goal env
+      , any isTyVar args
+      = case value of
+          Nothing -> do
+            dictVar <- DictVar . ("dict" ++) <$> fresh
+            pure ([], Just dictVar)
+          Just expr -> pure ([], Just expr)
+
+      | otherwise = go goal ctxt
+      where
+        go _ []
+          | shouldDeferErrors = pure ([], Nothing)
+          | otherwise = throwError $ _NoSuchInstance # goal
+
+        go goal@(con, args) (entry : entries) =
+          case entry of
+            TceClass supers className tyVars _
+              | let supers' = filter ((== con) . fst) supers
+              , ((superName, subs) : _) <-
+                  over (mapped._2) (`N.zip` args) supers'
+
+              -> flip catchError (const $ go goal entries) $ do
+                  let tyArgs = substitute (Substitution $ N.toList subs) .
+                        TyVar <$> tyVars
+                  (others, res) <- loop shouldDeferErrors ctxt bound env (className, tyArgs)
+                  pure (((className, tyArgs), res) : others, DictSuper superName <$> res)
+
+              | otherwise -> go goal entries
+
+            TceInst supers instHead _
+              | con == instHead ^. ihClassName
+              , all (not . isTyVar) args
+              , Right subs <- unify .
+                  N.toList $
+                  N.zip (toTypeTyVars <$> instHead ^. ihInstArgs) args
+
+              -> flip catchError (const $ go goal entries) $ do
+                  let supers' = over (mapped._2.mapped) (substitute subs . TyVar) supers
+                  res <- traverse (loop shouldDeferErrors ctxt bound env) supers'
+                  pure
+                    ( join $ fst <$> res
+                    , do
+                      res' <- sequence (snd <$> res)
+                      let args' = ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
+                      pure $ foldl' App (DictInst con $ fst <$> args') res'
+                    )
+
+              | otherwise -> go goal entries

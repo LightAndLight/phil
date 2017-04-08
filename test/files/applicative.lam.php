@@ -31,22 +31,22 @@ $Const = function($a1) {
     return new ConstCon($a1);
 };
 
-$pureConst = function($dict54) use ($Const) {
-    return function($a) use ($Const, $dict54) {
-        return $Const($dict54->mempty);
+$pureConst = function($dict69) use ($Const) {
+    return function($a) use ($Const, $dict69) {
+        return $Const($dict69->mempty);
     };
 };
 
-$apConst = function($dict99) use ($Const) {
-    return function($a) use ($Const, $dict99) {
-        return function($b) use ($Const, $a, $dict99) {
-            return (function() use ($Const, $a, $b, $dict99) {
+$apConst = function($dict120) use ($Const) {
+    return function($a) use ($Const, $dict120) {
+        return function($b) use ($Const, $a, $dict120) {
+            return (function() use ($Const, $a, $b, $dict120) {
                 if ($a instanceof ConstCon) {
                     $aa = $a->values[0];
-                    return (function() use ($Const, $a, $aa, $b, $dict99) {
+                    return (function() use ($Const, $a, $aa, $b, $dict120) {
                         if ($b instanceof ConstCon) {
                             $bb = $b->values[0];
-                            return $Const(($dict99->mappend)($aa)($bb));
+                            return $Const(($dict120->mappend)($aa)($bb));
                         }
                     })();
                 }
@@ -83,11 +83,11 @@ $applicativeConst = function($dictMonoid) use ($Const, $apConst, $functorConst, 
     return new Applicative($pureConst($dictMonoid), $apConst($dictMonoid), $functorConst($dictMonoid));
 };
 
-$liftA2 = function($dict234) {
-    return function($f) use ($dict234) {
-        return function($ma) use ($dict234, $f) {
-            return function($mb) use ($dict234, $f, $ma) {
-                return ($dict234->ap)(($dict234->Functor->fmap)($f)($ma))($mb);
+$liftA2 = function($dict311) {
+    return function($f) use ($dict311) {
+        return function($ma) use ($dict311, $f) {
+            return function($mb) use ($dict311, $f, $ma) {
+                return ($dict311->ap)(($dict311->Functor->fmap)($f)($ma))($mb);
             };
         };
     };

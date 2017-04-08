@@ -28,9 +28,9 @@ $eqBool = new Eq(function($a) use ($not) {
     };
 });
 
-$asdf = function($dict36) {
-    return function($a) use ($dict36) {
-        return ($dict36->eq)($a)($a);
+$asdf = function($dict47) {
+    return function($a) use ($dict47) {
+        return ($dict47->eq)($a)($a);
     };
 };
 
@@ -68,39 +68,37 @@ $Cons = function($a1) {
 };
 
 $eqList = function($dictEq) use ($and) {
-    return new Eq((function($dict100) use ($and) {
-        return (function() use ($and, $dict100) {
-            $eqPrime = function($dict94) use ($and, &$eqPrime) {
-                return function($la) use ($and, $dict94, &$eqPrime) {
-                    return function($lb) use ($and, $dict94, &$eqPrime, $la) {
-                        return (function() use ($and, $dict94, &$eqPrime, $la, $lb) {
-                            if ($la instanceof NilCon) {
-                                return (function() use (&$eqPrime, $la, $lb) {
-                                    if ($lb instanceof NilCon) {
-                                        return true;
-                                    }
-                                    return false;
-                                })();
-                            }
-                            if ($la instanceof ConsCon) {
-                                $a = $la->values[0];
-                                $laPrime = $la->values[1];
-                                return (function() use ($a, $and, $dict94, &$eqPrime, $la, $laPrime, $lb) {
-                                    if ($lb instanceof ConsCon) {
-                                        $b = $lb->values[0];
-                                        $lbPrime = $lb->values[1];
-                                        return $and(($dict94->eq)($a)($b))($eqPrime($dict94)($laPrime)($lbPrime));
-                                    }
-                                    return false;
-                                })();
-                            }
-                        })();
-                    };
+    return new Eq((function() use ($and, $dictEq) {
+        $eqPrime = function($dict157) use ($and, &$eqPrime) {
+            return function($la) use ($and, $dict157, &$eqPrime) {
+                return function($lb) use ($and, $dict157, &$eqPrime, $la) {
+                    return (function() use ($and, $dict157, &$eqPrime, $la, $lb) {
+                        if ($la instanceof NilCon) {
+                            return (function() use (&$eqPrime, $la, $lb) {
+                                if ($lb instanceof NilCon) {
+                                    return true;
+                                }
+                                return false;
+                            })();
+                        }
+                        if ($la instanceof ConsCon) {
+                            $a = $la->values[0];
+                            $laPrime = $la->values[1];
+                            return (function() use ($a, $and, $dict157, &$eqPrime, $la, $laPrime, $lb) {
+                                if ($lb instanceof ConsCon) {
+                                    $b = $lb->values[0];
+                                    $lbPrime = $lb->values[1];
+                                    return $and(($dict157->eq)($a)($b))($eqPrime($dict157)($laPrime)($lbPrime));
+                                }
+                                return false;
+                            })();
+                        }
+                    })();
                 };
             };
-            return $eqPrime($dict100);
-        })();
-    })($dictEq));
+        };
+        return $eqPrime($dictEq);
+    })());
 };
 
 $shouldBeFalse = ($eqList($eqBool)->eq)($Cons(true)($Nil))($Nil);

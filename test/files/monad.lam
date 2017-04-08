@@ -65,7 +65,12 @@ instance Show a => Show (Maybe a) where {
   }
 }
 
-asdf = liftM2 and (Just true) (Just false)
+not a = case a of {
+  true -> false;
+  _ -> true
+  }
+
+asdf a b = fmap not (liftM2 and a b)
 
 test : String
-test = show asdf
+test = show (asdf (Just true) (Just true))
