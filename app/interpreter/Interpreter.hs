@@ -287,7 +287,6 @@ repl ::
   , HasSymbolTable s
   , HasTcContext C.Expr s
   , MonadFree ReplF m
-  , Show e
   , AsLexError e
   , AsParseError e
   , AsTypeError e
