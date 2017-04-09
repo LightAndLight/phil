@@ -170,10 +170,10 @@ Arg : NoArgCon { $1 }
 Patterns : Arg { [$1] }
          | Arg Patterns { $1:$2 }
 
-Branch : Pattern '->' Expr { ($1,$3) }
+Branch : Pattern '->' Expr eol { ($1,$3) }
 
 Branches : Branch { $1 :| [] }
-         | Branch eol Branches { $1 <| $3 }
+         | Branch Branches { $1 <| $2 }
 
 Let : let FunctionDefinition in Expr { Let $2 $4 }
 Rec : rec FunctionDefinition in Expr { Rec $2 $4 }

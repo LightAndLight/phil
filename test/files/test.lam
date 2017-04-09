@@ -42,3 +42,14 @@ instance Eq a => Eq (List a) where {
 
 shouldBeFalse = eq (Cons true Nil) Nil
 shouldBeTrue = eq (Cons true Nil) (Cons true Nil)
+
+filter : forall a. (a -> Bool) -> List a -> List a
+filter = rec filterRec pred input = case input of {
+    Nil -> Nil;
+    Cons a rest -> case pred a of {
+        true -> Cons a (filterRec pred rest);
+        false -> filterRec pred rest;
+    };
+} in filterRec
+
+test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
