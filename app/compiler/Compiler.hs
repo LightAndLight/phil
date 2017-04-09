@@ -9,6 +9,7 @@ import Control.Monad.Except
 import Control.Monad.Trans
 import           Options.Applicative
 import           System.Environment
+import           System.Exit
 
 import           Lambda.AST
 import           Lambda.Core.Codegen
@@ -72,7 +73,7 @@ compile ::
   )
   => CompileOpts
   -> m ()
-compile opts = flip catchError (liftIO . print) $ do
+compile opts = do
   content <- liftIO . readFile $ filepath opts
   tokens <- tokenize content
   initialAST <- parseProgram tokens
@@ -85,8 +86,13 @@ compile opts = flip catchError (liftIO . print) $ do
     then print phpSource
     else writeFile (filepath opts <> ".php") phpSource
 
-main :: IO (Either CompilerError ())
-main = execParser opts >>= runExceptT . compile
+main :: IO ()
+main = do
+  opts' <- execParser opts
+  res <- runExceptT $ compile opts'
+  case (res :: Either CompilerError ()) of
+    Right _ -> exitSuccess
+    Left err -> die $ show err
   where
     opts = info (helper <*> parseCompileOpts)
       (fullDesc <> progDesc "Compile a Lambda source file" <> header "lambdac - Compiler for the Lambda language")
