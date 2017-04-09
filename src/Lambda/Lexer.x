@@ -1,8 +1,10 @@
 {
-module Lambda.Lexer (AsLexError(..), LexError(..), Token(..), TokenType(..), tokenize) where
+module Lambda.Lexer (Token(..), TokenType(..), tokenize) where
 
 import Control.Lens
 import Control.Monad.Except
+
+import Lambda.Lexer.LexError
 }
 
 %wrapper "monad"
@@ -102,18 +104,6 @@ data TokenType
     | TokFalse
     | TokWildcard
     deriving Show
-
-newtype LexError = MkLexError { getLexError :: String } deriving Show
-
-class AsLexError e where
-  _LexError :: Prism' e LexError
-  _MkLexError :: Prism' e String
-
-  _MkLexError = _LexError . _MkLexError
-
-instance AsLexError LexError where
-  _LexError = prism' id Just
-  _MkLexError = prism' MkLexError (Just . getLexError)
 
 alexEOF = return TokEOF
 

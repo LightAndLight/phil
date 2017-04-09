@@ -110,7 +110,7 @@ lookupId name = do
   maybeTy <- view (context . at name)
   case maybeTy of
     Just ty -> return ty
-    Nothing -> throwError $ _NotInScope # [name]
+    Nothing -> throwError $ _NotInScope # name
 
 conArgTypes :: Type -> (Type,[Type])
 conArgTypes (TyFun from to) = (from :) <$> conArgTypes to
@@ -252,8 +252,30 @@ special scheme scheme'
               unifyTypes' con con' ctxt'
           | otherwise = throwError $ _TUnificationError # CannotUnify ty ty'
 
-runInferTypeScheme :: Expr -> Either TypeError (Expr, TypeScheme)
-runInferTypeScheme = runExcept . runFreshT . flip evalStateT initialInferenceState . flip runReaderT initialInferenceState . inferTypeScheme
+newtype TypeOrKindError
+  = TypeOrKindError
+  { getTOKError :: Either TypeError KindError
+  }
+
+instance AsTypeError TypeOrKindError where
+  _TypeError = prism' (TypeOrKindError . Left) $
+    \s -> case getTOKError s of
+      Left a -> Just a
+      _ -> Nothing
+
+instance AsKindError TypeOrKindError where
+  _KindError = prism' (TypeOrKindError . Right) $
+    \s -> case getTOKError s of
+      Right a -> Just a
+      _ -> Nothing
+
+runInferTypeScheme :: Expr -> Either TypeOrKindError (Expr, TypeScheme)
+runInferTypeScheme
+  = runExcept .
+    runFreshT .
+    flip evalStateT initialInferenceState .
+    flip runReaderT initialInferenceState .
+    inferTypeScheme
 
 type MonadW r s e m
   = ( MonadFresh m
@@ -284,9 +306,10 @@ patType (PatId name) = do
 patType (PatCon conName args) = do
   (_,conTy) <- instantiate . typeScheme =<< lookupId conName
   let (retTy,argTys) = conArgTypes conTy
-      argsLen = length args
-      argTysLen = length argTys
-  when (argsLen /= argTysLen) . throwError $ _PatternArgMismatch # (argsLen,argTysLen)
+      actualArgs = length args
+      expectedArgs = length argTys
+  when (actualArgs /= expectedArgs) .
+    throwError $ _PatternArgMismatch # (conName, actualArgs, expectedArgs)
   let boundVars = foldr (\(arg,argTy) -> M.insert arg (FEntry $ Forall S.empty [] argTy)) M.empty $ zip args argTys
   return (boundVars,retTy)
 patType (PatLit (LitInt p)) = return (M.empty, TyCtor "Int")
@@ -654,16 +677,17 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           pure
           (getClass tctxt cons)
 
-    tryGetInst tctxt cons params
+    tryGetInst tctxt targetCons targetParams
       = maybe 
-          (throwError $ _MissingSuperclassInst # (cons, params))
+          (throwError $ _MissingSuperclassInst #
+              ((constructor, params), (targetCons, targetParams)))
           pure
-          (getInst tctxt cons $ fst <$> params)
+          (getInst tctxt targetCons $ fst <$> targetParams)
 
     tryGetImpl :: (AsTypeError e, MonadError e m) => Identifier -> NonEmpty Type -> Identifier -> Map Identifier TypeScheme -> m TypeScheme
     tryGetImpl cons params implName members
       = maybe
-          (throwError $ _NonClassFunction # (cons, params, implName))
+          (throwError $ _NonClassFunction # (cons, implName))
           pure
           (M.lookup implName members)
           

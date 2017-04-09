@@ -6,8 +6,7 @@ homepage:            https://github.com/githubuser/hindley-milner#readme
 license:             BSD3
 license-file:        LICENSE
 author:              Author name here
-maintainer:          example@example.com
-copyright:           2016 Author name here
+maintainer:          example@example.com copyright:           2016 Author name here
 category:            Web
 build-type:          Simple
 -- extra-source-files:
@@ -29,16 +28,22 @@ library
                      , Lambda.Core.AST.ProdDecl
                      , Lambda.Core.Codegen
                      , Lambda.Core.Kinds
+                     , Lambda.Core.Kinds.Kind
+                     , Lambda.Core.Kinds.KindError
                      , Lambda.AST
                      , Lambda.AST.Binding
                      , Lambda.AST.Definitions
                      , Lambda.AST.Expr
+                     , Lambda.ErrorMsg
                      , Lambda.Exception
                      , Lambda.Lexer
+                     , Lambda.Lexer.LexError
                      , Lambda.Parser
+                     , Lambda.Parser.ParseError
                      , Lambda.PHP
                      , Lambda.PHP.AST
                      , Lambda.Sugar
+                     , Lambda.Sugar.SyntaxError
                      , Lambda.Typecheck
                      , Lambda.Typecheck.Entailment
                      , Lambda.Typecheck.Unification
@@ -52,6 +57,7 @@ library
                      , free
                      , lens
                      , mtl
+                     , pretty
                      , semigroups
   default-language:    Haskell2010
   build-tools:         alex
@@ -70,6 +76,7 @@ executable lambdai
                      , hindley-milner
                      , lens
                      , mtl
+                     , pretty
                      , semigroups
   default-language:    Haskell2010
 
@@ -83,6 +90,7 @@ executable lambdac
                      , lens
                      , mtl
                      , optparse-applicative
+                     , pretty
   default-language:    Haskell2010
 
 test-suite hindley-milner-test

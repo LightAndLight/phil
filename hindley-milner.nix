@@ -1,6 +1,6 @@
 { mkDerivation, alex, array, base, bifunctors, containers
 , directory, dlist, filepath, free, happy, haskeline, hspec, lens
-, mtl, optparse-applicative, QuickCheck, semigroups, stdenv
+, mtl, optparse-applicative, pretty, QuickCheck, semigroups, stdenv
 }:
 mkDerivation {
   pname = "hindley-milner";
@@ -9,7 +9,8 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [
-    array base bifunctors containers dlist lens mtl semigroups
+    array base bifunctors containers dlist free lens mtl pretty
+    semigroups
   ];
   libraryToolDepends = [ alex happy ];
   executableHaskellDepends = [

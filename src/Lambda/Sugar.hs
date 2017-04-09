@@ -1,10 +1,5 @@
-{-# language TemplateHaskell #-}
-{-# language DeriveFunctor #-}
-
 module Lambda.Sugar
-  ( AsSyntaxError(..)
-  , SyntaxError(..)
-  , asClassDef
+  ( asClassDef
   , asClassInstance
   , asClassInstanceP
   , desugar
@@ -32,16 +27,8 @@ import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Types
 import Lambda.Core.AST.Pattern
 import Lambda.Core.AST.ProdDecl
+import Lambda.Sugar.SyntaxError
 import Lambda.Typeclasses
-
-data SyntaxError
-  = MalformedHead Type
-  | InvalidInstanceArg Type
-  | NoInstanceArgs Type
-  | InvalidClassArg Type
-  deriving (Eq, Show)
-
-makeClassyPrisms ''SyntaxError
 
 -- | Naive generalization that closes over every free variable
 generalize :: [Type] -> Type -> TypeScheme

@@ -2,9 +2,7 @@
 {-# language TemplateHaskell #-}
 
 module Lambda.Parser
-  ( AsParseError(..)
-  , ParseError(..)
-  , ReplInput(..)
+  ( ReplInput(..)
   , parseProgram
   , parseExpression
   , parseExprOrData
@@ -24,6 +22,7 @@ import Lambda.Core.AST.Types
 import Lambda.AST.Binding
 import Lambda.AST.Definitions
 import Lambda.AST.Expr
+import Lambda.Parser.ParseError
 
 }
 
@@ -198,28 +197,6 @@ Expr : FunExpr { $1 }
      | Rec { $1 }
 
 {
-
-data ParseError
-    = NoMoreTokens
-    | Unexpected Token
-    deriving Show
-
-class AsParseError e where
-  _ParseError :: Prism' e ParseError
-  _NoMoreTokens :: Prism' e ()
-  _Unexpected :: Prism' e Token
-
-  _NoMoreTokens = _ParseError . _NoMoreTokens
-  _Unexpected = _ParseError . _Unexpected
-
-instance AsParseError ParseError where
-  _ParseError = prism' id Just
-  _NoMoreTokens = prism' (const NoMoreTokens) $ \x -> case x of
-    NoMoreTokens -> Just ()
-    _ -> Nothing
-  _Unexpected = prism' Unexpected $ \x -> case x of
-    Unexpected tok -> Just tok
-    _ -> Nothing
 
 data ReplInput
   = ReplDef Definition

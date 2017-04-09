@@ -29,7 +29,8 @@ import           Lambda.Core.AST.ProdDecl
 import           Lambda.Core.AST.Types
 import Lambda.Typecheck
 import           Lambda.PHP.AST
-import           Lambda.Sugar (SyntaxError, asClassInstanceP)
+import           Lambda.Sugar (asClassInstanceP)
+import           Lambda.Sugar.SyntaxError
 
 data ArgType = Reference | Value
 

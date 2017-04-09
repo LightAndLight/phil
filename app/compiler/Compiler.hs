@@ -5,27 +5,32 @@ import           Control.Monad
 import Control.Monad.Fresh
 import Control.Monad.Reader
 import Control.Monad.State
+import Control.Monad.Error.Lens
 import Control.Monad.Except
 import Control.Monad.Trans
 import           Options.Applicative
 import           System.Environment
 import           System.Exit
+import Text.PrettyPrint hiding ((<>))
 
 import           Lambda.AST
 import           Lambda.Core.Codegen
 import           Lambda.Core.Kinds
 import           Lambda.Lexer
+import           Lambda.Lexer.LexError
 import           Lambda.Parser         (parseProgram)
-import qualified Lambda.Parser         as P (ParseError)
-import Lambda.Parser         hiding (ParseError)
+import Lambda.Parser.ParseError         hiding (ParseError)
+import qualified Lambda.Parser.ParseError         as P (ParseError)
 import           Lambda.PHP
 import           Lambda.Sugar
+import           Lambda.Sugar.SyntaxError
 import           Lambda.Typecheck
 import           Lambda.Typecheck.TypeError
 
 data CompilerError
   = CompilerParseError P.ParseError
   | CompilerLexError LexError
+  | CompilerKindError KindError
   | CompilerTypeError TypeError
   | CompilerSyntaxError SyntaxError
   deriving Show
@@ -36,7 +41,7 @@ instance AsTypeError CompilerError where
   _TypeError = _CompilerTypeError . _TypeError
 
 instance AsKindError CompilerError where
-  _KindError = _CompilerTypeError . _KindError
+  _KindError = _CompilerKindError . _KindError
 
 instance AsParseError CompilerError where
   _ParseError = _CompilerParseError . _ParseError
@@ -61,8 +66,7 @@ parseCompileOpts = CompileOpts <$>
     (long "stdout" <> help "Print source to stdout")
 
 compile ::
-  ( Show e
-  , AsLexError e
+  ( AsLexError e
   , AsParseError e
   , AsTypeError e
   , AsKindError e
@@ -73,7 +77,7 @@ compile ::
   )
   => CompileOpts
   -> m ()
-compile opts = do
+compile opts = flip catches handlers $ do
   content <- liftIO . readFile $ filepath opts
   tokens <- tokenize content
   initialAST <- parseProgram tokens
@@ -85,6 +89,14 @@ compile opts = do
   liftIO $ if useStdout opts
     then print phpSource
     else writeFile (filepath opts <> ".php") phpSource
+  where
+    handlers =
+      [ handler _LexError $ liftIO . putStrLn . render . lexErrorMsg
+      , handler _ParseError $ liftIO . putStrLn . render . parseErrorMsg
+      , handler _TypeError $ liftIO . putStrLn . render . typeErrorMsg
+      , handler _KindError $ liftIO . putStrLn . render . kindErrorMsg
+      , handler _SyntaxError $ liftIO . putStrLn . render . syntaxErrorMsg
+      ]
 
 main :: IO ()
 main = do

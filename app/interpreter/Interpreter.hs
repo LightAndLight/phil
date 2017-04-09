@@ -6,6 +6,7 @@
 import Control.Lens
 import Data.Foldable
 import Data.Bifunctor
+import Control.Monad.Error.Lens
 import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.Fresh
@@ -17,11 +18,12 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
-import System.Console.Haskeline
+import System.Console.Haskeline hiding (catches)
 import System.Directory
 import System.Exit
 import System.FilePath
 import System.IO
+import Text.PrettyPrint
 
 import qualified Lambda.AST.Definitions as L
 import qualified Lambda.AST.Expr as L
@@ -34,12 +36,15 @@ import qualified Lambda.Core.AST.Expr as C
 import Lambda.Core.AST.Types
 import Lambda.Core.AST.Pattern
 import Lambda.Core.Kinds
-import Lambda.Sugar (AsSyntaxError(..), SyntaxError, desugar, desugarExpr)
+import Lambda.Lexer
+import Lambda.Lexer.LexError
+import Lambda.Parser
+import Lambda.Parser.ParseError
+import Lambda.Sugar (desugar, desugarExpr)
+import Lambda.Sugar.SyntaxError
 import Lambda.Typecheck
 import Lambda.Typecheck.TypeError
 import Lambda.Typeclasses
-import Lambda.Lexer
-import Lambda.Parser
 
 data Value
   = VLiteral Literal
@@ -91,6 +96,7 @@ data InterpreterError
   = NotBound String
   | RuntimeError String
   | InterpreterTypeError TypeError
+  | InterpreterKindError KindError
   | InterpreterLexError LexError
   | InterpreterParseError ParseError
   | InterpreterSyntaxError SyntaxError
@@ -102,7 +108,7 @@ instance AsTypeError InterpreterError where
   _TypeError = _InterpreterTypeError . _TypeError
 
 instance AsKindError InterpreterError where
-  _KindError = _InterpreterTypeError . _KindError
+  _KindError = _InterpreterKindError . _KindError
 
 instance AsParseError InterpreterError where
   _ParseError = _InterpreterParseError . _ParseError
@@ -194,9 +200,6 @@ readLine = liftF $ Read id
 
 printLine :: MonadFree ReplF m => String -> m ()
 printLine str = liftF $ PrintLine str ()
-
-printString :: MonadFree ReplF m => String -> m ()
-printString str = liftF $ PrintString str ()
 
 evaluate ::
   ( MonadFresh m
@@ -295,37 +298,40 @@ repl ::
   , MonadState s m
   )
   => m ()
-repl = flip catchError handleError $ do
+repl = do
   input <- readLine
-  output <- case input of
-    ':':'q':_ -> quit
-    ':':'t':' ':rest -> do
-      toks <- tokenize rest
-      expr <- parseExpression toks
-      showTypeScheme <$> typeCheck (desugarExpr expr)
-    ':':'k':' ':rest -> do
-      kind <- kindOf rest
-      pure $ unwords [rest, ":", showKind kind]
-    rest -> do
-      toks <- tokenize rest
-      input <- parseExprOrData toks
-      case input of
-        ReplExpr expr -> showValue <$> evaluate (desugarExpr expr)
-        ReplDef dat -> define dat $> ""
-  printLine output
+  printLine ""
+  flip catches handlers $ do
+    output <- case input of
+      ':':'q':_ -> quit
+      ':':'t':' ':rest -> do
+        toks <- tokenize rest
+        expr <- parseExpression toks
+        showTypeScheme <$> typeCheck (desugarExpr expr)
+      ':':'k':' ':rest -> do
+        kind <- kindOf rest
+        pure $ unwords [rest, ":", showKind kind]
+      rest -> do
+        toks <- tokenize rest
+        input <- parseExprOrData toks
+        case input of
+          ReplExpr expr -> showValue <$> evaluate (desugarExpr expr)
+          ReplDef dat -> define dat $> ""
+    printLine output
+  printLine ""
   repl
   where
-    handleError e = do
-      printLine $ show e
-      repl
+    handlers =
+      [ handler _LexError $ printLine . render . lexErrorMsg
+      , handler _ParseError $ printLine . render . parseErrorMsg
+      , handler _TypeError $ printLine . render . typeErrorMsg
+      , handler _KindError $ printLine . render . kindErrorMsg
+      , handler _SyntaxError $ printLine . render . syntaxErrorMsg
+      ]
 
 replIO :: ReplF a -> InputT IO a
 replIO (Read a) = a . fromMaybe "" <$> getInputLine "> "
-replIO (PrintLine str a) = outputStrLn str >> outputStrLn "" $> a
-replIO (PrintString str a) = do
-  outputStr str
-  -- liftIO $ hFlush stdout
-  return a
+replIO (PrintLine str a) = outputStrLn str $> a
 replIO Quit = liftIO exitSuccess
 
 main :: IO (Either InterpreterError ())
