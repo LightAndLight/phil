@@ -29,14 +29,16 @@ test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
 
 ### Features
 
-- Decidable type checking
+- Decidable type inference
 - ADTs
 - let, rec, and case statements
 - Type signatures
 - Higher kinded polymorphism
+- Typeclasses
 
 ### Coming Soon
 
-- Typeclasses
+- Records
 - Significant whitespace
+- Infix operators
 - see [full gitlab backlog](https://gitlab.com/LightAndLight/hindley-milner/boards) for more
