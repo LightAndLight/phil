@@ -1,8 +1,10 @@
 {
-module Lambda.Lexer (AsLexError(..), LexError(..), Token(..), TokenType(..), tokenize) where
+module Lambda.Lexer (Token(..), TokenType(..), tokenize) where
 
 import Control.Lens
 import Control.Monad.Except
+
+import Lambda.Lexer.LexError
 }
 
 %wrapper "monad"
@@ -18,6 +20,9 @@ tokens :-
     <0> $eol+ { \(p,_,_,_) _ -> return $ Token p TokEOL }
     <0> $white+;
     <0> "--".*;
+    <0> class { \(p,_,_,_) _ -> return $ Token p TokClass }
+    <0> instance { \(p,_,_,_) _ -> return $ Token p TokInstance }
+    <0> where { \(p,_,_,_) _ -> return $ Token p TokWhere }
     <0> case { \(p,_,_,_) _ -> return $ Token p TokCase }
     <0> data { \(p,_,_,_) _ -> return $ Token p TokData }
     <0> of { \(p,_,_,_) _ -> return $ Token p TokOf }
@@ -27,17 +32,15 @@ tokens :-
     <0> forall { \(p,_,_,_) _ -> return $ Token p TokForall }
     <0> true { \(p,_,_,_) _ -> return $ Token p TokTrue }
     <0> false { \(p,_,_,_) _ -> return $ Token p TokFalse }
-    <0> Int { \(p,_,_,_) _ -> return $ Token p TokIntType }
-    <0> String { \(p,_,_,_) _ -> return $ Token p TokStringType }
-    <0> Char { \(p,_,_,_) _ -> return $ Token p TokCharType }
-    <0> Bool { \(p,_,_,_) _ -> return $ Token p TokBoolType }
     <0> "=" { \(p,_,_,_) _ -> return $ Token p TokEq }
     <0> "_" { \(p,_,_,_) _ -> return $ Token p TokWildcard }
     <0> \\ { \(p,_,_,_) _ -> return $ Token p TokLam }
     <0> "." { \(p,_,_,_) _ -> return $ Token p TokDot }
+    <0> "," { \(p,_,_,_) _ -> return $ Token p TokComma }
     <0> "|" { \(p,_,_,_) _ -> return $ Token p TokPipe }
     <0> ":" { \(p,_,_,_) _ -> return $ Token p TokType }
     <0> "->" { \(p,_,_,_) _ -> return $ Token p TokArr }
+    <0> "=>" { \(p,_,_,_) _ -> return $ Token p TokConstraint }
     <0> "(" { \(p,_,_,_) _ -> return $ Token p TokLParen }
     <0> ")" { \(p,_,_,_) _ -> return $ Token p TokRParen }
     <0> "{" { \(p,_,_,_) _ -> return $ Token p TokLBrace }
@@ -67,6 +70,9 @@ data Token = Token AlexPosn TokenType
 
 data TokenType
     = TokCase
+    | TokClass
+    | TokInstance
+    | TokWhere
     | TokOf
     | TokData
     | TokLet
@@ -77,7 +83,9 @@ data TokenType
     | TokLam
     | TokForall
     | TokDot
+    | TokComma
     | TokArr
+    | TokConstraint
     | TokType
     | TokEOL
     | TokLParen
@@ -95,23 +103,7 @@ data TokenType
     | TokTrue
     | TokFalse
     | TokWildcard
-    | TokIntType
-    | TokStringType
-    | TokCharType
-    | TokBoolType
     deriving Show
-
-newtype LexError = MkLexError { getLexError :: String } deriving Show
-
-class AsLexError e where
-  _LexError :: Prism' e LexError
-  _MkLexError :: Prism' e String
-
-  _MkLexError = _LexError . _MkLexError
-
-instance AsLexError LexError where
-  _LexError = prism' id Just
-  _MkLexError = prism' MkLexError (Just . getLexError)
 
 alexEOF = return TokEOF
 

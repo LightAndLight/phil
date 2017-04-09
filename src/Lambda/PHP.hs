@@ -250,3 +250,9 @@ binOpToSource And = "&&"
 binOpToSource Or = "||"
 binOpToSource Concat = "."
 binOpToSource InstanceOf = "instanceof"
+
+
+test a
+  | Just b <- a, b == 0 = 0
+  | Just b <- a, b == 1 = 1
+  | otherwise = 2

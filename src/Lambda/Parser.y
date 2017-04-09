@@ -2,9 +2,7 @@
 {-# language TemplateHaskell #-}
 
 module Lambda.Parser
-  ( AsParseError(..)
-  , ParseError(..)
-  , ReplInput(..)
+  ( ReplInput(..)
   , parseProgram
   , parseExpression
   , parseExprOrData
@@ -17,8 +15,14 @@ import Data.List.NonEmpty (NonEmpty(..), (<|))
 import qualified Data.Set as S
 
 import Lambda.Lexer
-import Lambda.Core.AST hiding (Expr(..), Definition(..))
-import Lambda.Sugar
+import Lambda.Core.AST.Literal
+import Lambda.Core.AST.Pattern
+import Lambda.Core.AST.ProdDecl
+import Lambda.Core.AST.Types
+import Lambda.AST.Binding
+import Lambda.AST.Definitions
+import Lambda.AST.Expr
+import Lambda.Parser.ParseError
 
 }
 
@@ -32,7 +36,10 @@ import Lambda.Sugar
 %token
     eol { Token _ TokEOL }
     data { Token _ TokData }
+    where { Token _ TokWhere }
     case { Token _ TokCase }
+    class { Token _ TokClass }
+    instance { Token _ TokInstance }
     of { Token _ TokOf }
     let { Token _ TokLet }
     rec { Token _ TokRec }
@@ -48,14 +55,12 @@ import Lambda.Sugar
     char_lit { Token _ (TokChar $$) }
     eof { TokEOF }
     lam { Token _ TokLam }
-    intType { Token _ TokIntType }
-    stringType { Token _ TokStringType }
-    charType { Token _ TokCharType }
-    boolType { Token _ TokBoolType }
     '=' { Token _ TokEq }
     '_' { Token _ TokWildcard }
     '.' { Token _ TokDot }
+    ',' { Token _ TokComma }
     '->' { Token _ TokArr }
+    '=>' { Token _ TokConstraint }
     ':' { Token _ TokType }
     '(' { Token _ TokLParen }
     ')' { Token _ TokRParen }
@@ -78,16 +83,9 @@ Ty : A { $1 }
 A : A B { TyApp $1 $2 }
   | B { $1 }
 
-B : ident { TyVar $1 }
-  | PrimType { TyPrim $1 }
-  | cons { TyCon (TypeCon $1) }
-  | '(' '->' ')' { TyCon FunCon }
+B : TyCon { $1 }
   | '(' Ty ')' { $2 }
-
-PrimType : intType { Int }
-         | stringType { String }
-         | charType { Char }
-         | boolType { Bool }
+  | ident { TyVar $1 }
 
 TypeArgs : { [] }
          | B TypeArgs { $1:$2 }
@@ -100,12 +98,21 @@ Constructors : Constructor { $1 :| [] }
 DataDefinition : data cons Args '=' Constructors { Data $2 $3 $5 }
                | data cons '=' Constructors { Data $2 [] $4 }
 
-QuantifiedType : Ty { Base $1 }
-               | forall Args '.' Ty { Forall (S.fromList $2) $4 }
+Predicates : A ',' A { [$1,$3] }
+           | A ',' Predicates { $1:$3 }
 
-TypeSignature : ident ':' QuantifiedType { TypeSignature $1 $3 }
+Constraint : A { [$1] }
+           | '(' Predicates ')' { $2 }
 
-FunctionDefinition : ident FunctionArgs '=' Expr { FunctionDefinition $1 $2 $4 }
+Qualified : Ty { ([], $1) }
+          | Constraint '=>' Ty { ($1, $3) }
+
+TypeScheme : Ty { Forall S.empty [] $1 }
+           | forall Args '.' Qualified { uncurry (Forall (S.fromList $2)) $4 }
+
+TypeSignature : ident ':' TypeScheme { TypeSignature $1 $3 }
+
+FunctionDefinition : ident FunctionArgs '=' Expr { FunctionBinding $1 $2 $4 }
 
 ExprOrDef : DataDefinition eof { ReplDef $1 }
           | Expr eof { ReplExpr $1 }
@@ -113,9 +120,28 @@ ExprOrDef : DataDefinition eof { ReplDef $1 }
 FunctionArgs : { [] }
              | ident FunctionArgs { $1:$2 }
 
+ClassMembers : { [] }
+             | ident ':' Ty { [($1, $3)] }
+             | ident ':' Ty eol ClassMembers { ($1, $3):$5 }
+
+ClassDefinition : class A where '{' ClassMembers '}' { Class [] $2 $5 }
+                | class Constraint '=>' A where '{' ClassMembers '}' { Class $2 $4 $7 }
+
+FunctionDefinitions : { [] }
+                    | FunctionDefinition { [$1] }
+                    | FunctionDefinition eol FunctionDefinitions { $1:$3 }
+
+TyCon : cons { TyCon (TypeCon $1) }
+      | '(' '->' ')' { TyCon FunCon }
+
+InstanceDefinition : instance A where '{' FunctionDefinitions '}' { Instance [] $2 $5 }
+                   | instance Constraint '=>' A where '{' FunctionDefinitions '}' { Instance $2 $4 $7 }
+
 Definition : DataDefinition { $1 }
            | FunctionDefinition { Function $1 }
            | TypeSignature { $1 }
+           | ClassDefinition { $1 }
+           | InstanceDefinition { $1 }
 
 Definitions : { [] }
             | Definition eol Definitions { $1:$3 }
@@ -171,28 +197,6 @@ Expr : FunExpr { $1 }
      | Rec { $1 }
 
 {
-
-data ParseError
-    = NoMoreTokens
-    | Unexpected Token
-    deriving Show
-
-class AsParseError e where
-  _ParseError :: Prism' e ParseError
-  _NoMoreTokens :: Prism' e ()
-  _Unexpected :: Prism' e Token
-
-  _NoMoreTokens = _ParseError . _NoMoreTokens
-  _Unexpected = _ParseError . _Unexpected
-
-instance AsParseError ParseError where
-  _ParseError = prism' id Just
-  _NoMoreTokens = prism' (const NoMoreTokens) $ \x -> case x of
-    NoMoreTokens -> Just ()
-    _ -> Nothing
-  _Unexpected = prism' Unexpected $ \x -> case x of
-    Unexpected tok -> Just tok
-    _ -> Nothing
 
 data ReplInput
   = ReplDef Definition

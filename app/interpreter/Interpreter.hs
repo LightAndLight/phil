@@ -1,12 +1,15 @@
 {-# language DeriveFunctor #-}
 {-# language FlexibleContexts #-}
+{-# language MultiParamTypeClasses #-}
 {-# language TemplateHaskell #-}
 
 import Control.Lens
 import Data.Foldable
 import Data.Bifunctor
+import Control.Monad.Error.Lens
 import Control.Monad.Except
 import Control.Monad.Free
+import Control.Monad.Fresh
 import Control.Monad.Trans
 import Control.Monad.Reader
 import Control.Monad.State
@@ -15,19 +18,33 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
-import System.Console.Haskeline
+import System.Console.Haskeline hiding (catches)
 import System.Directory
 import System.Exit
 import System.FilePath
 import System.IO
+import Text.PrettyPrint
 
-import Lambda.Core.AST hiding (Definition, Expr)
+import qualified Lambda.AST.Definitions as L
+import qualified Lambda.AST.Expr as L
+import Lambda.AST (toCore, toCoreExpr)
+import qualified Lambda.Core.AST.Binding as C
+import qualified Lambda.Core.AST.Definitions as C
+import Lambda.Core.AST.Literal
+import Lambda.Core.AST.Identifier
+import qualified Lambda.Core.AST.Expr as C
+import Lambda.Core.AST.Types
+import Lambda.Core.AST.Pattern
 import Lambda.Core.Kinds
-import qualified Lambda.Core.AST as C (Definition(..), Expr(..))
-import qualified Lambda.Sugar as S (Definition(..), Expr(..), desugar, desugarExpr)
-import Lambda.Core.Typecheck
 import Lambda.Lexer
+import Lambda.Lexer.LexError
 import Lambda.Parser
+import Lambda.Parser.ParseError
+import Lambda.Sugar (desugar, desugarExpr)
+import Lambda.Sugar.SyntaxError
+import Lambda.Typecheck
+import Lambda.Typecheck.TypeError
+import Lambda.Typeclasses
 
 data Value
   = VLiteral Literal
@@ -45,13 +62,20 @@ data InterpreterState
     { _interpSymbolTable :: Map Identifier Value
     , _interpKindTable :: Map Identifier Kind
     , _interpTypesignatures :: Map Identifier TypeScheme
-    , _interpContext :: Map Identifier TypeScheme
-    , _interpFreshCount :: Int
+    , _interpContext :: Map Identifier ContextEntry
+    , _interpTcContext :: [TypeclassEntry C.Expr]
     }
 
 makeClassy ''InterpreterState
 
-initialInterpreterState = InterpreterState M.empty M.empty M.empty M.empty 0
+initialInterpreterState
+  = InterpreterState
+  { _interpSymbolTable = M.empty
+  , _interpKindTable = M.empty
+  , _interpTypesignatures = M.empty
+  , _interpContext = M.empty
+  , _interpTcContext = []
+  }
 
 instance HasSymbolTable InterpreterState where
   symbolTable = interpreterState . interpSymbolTable
@@ -62,18 +86,20 @@ instance HasContext InterpreterState where
 instance HasTypesignatures InterpreterState where
   typesignatures = interpreterState . interpTypesignatures
 
-instance HasFreshCount InterpreterState where
-  freshCount = interpreterState . interpFreshCount
-
 instance HasKindTable InterpreterState where
   kindTable = interpreterState . interpKindTable
+
+instance HasTcContext C.Expr InterpreterState where
+  tcContext = interpreterState . interpTcContext
 
 data InterpreterError
   = NotBound String
   | RuntimeError String
   | InterpreterTypeError TypeError
+  | InterpreterKindError KindError
   | InterpreterLexError LexError
   | InterpreterParseError ParseError
+  | InterpreterSyntaxError SyntaxError
   deriving Show
 
 makeClassyPrisms ''InterpreterError
@@ -82,13 +108,16 @@ instance AsTypeError InterpreterError where
   _TypeError = _InterpreterTypeError . _TypeError
 
 instance AsKindError InterpreterError where
-  _KindError = _InterpreterTypeError . _KindError
+  _KindError = _InterpreterKindError . _KindError
 
 instance AsParseError InterpreterError where
   _ParseError = _InterpreterParseError . _ParseError
 
 instance AsLexError InterpreterError where
   _LexError = _InterpreterLexError . _LexError
+
+instance AsSyntaxError InterpreterError where
+  _SyntaxError = _InterpreterSyntaxError . _SyntaxError
 
 tryAll :: MonadError e m => m a -> [m a] -> m a
 tryAll e [] = e
@@ -99,8 +128,8 @@ withBinding ::
   , AsInterpreterError e
   , MonadError e m
   )
-  => Binding -> m a -> m a
-withBinding (Binding name expr) m = do
+  => C.Binding C.Expr -> m a -> m a
+withBinding (C.Binding name expr) m = do
   expr' <- eval expr
   local (M.insert name expr') m
 
@@ -111,9 +140,9 @@ eval ::
   )
   => C.Expr
   -> m Value
-eval (Lit lit) = pure $ VLiteral lit
-eval (Error message) = throwError $ _RuntimeError # message
-eval (Id name) = do
+eval (C.Lit lit) = pure $ VLiteral lit
+eval (C.Error message) = throwError $ _RuntimeError # message
+eval (C.Id name) = do
   maybeExpr <- view $ at name
   case maybeExpr of
     Just (VPointer expr) -> eval expr
@@ -121,18 +150,18 @@ eval (Id name) = do
     Nothing -> do
       table <- ask
       throwError $ _NotBound # name
-eval (Abs name output) = VClosure <$> ask <*> pure name <*> pure output
-eval (App func input) = do
+eval (C.Abs name output) = VClosure <$> ask <*> pure name <*> pure output
+eval (C.App func input) = do
   func' <- eval func
   case func' of
     VClosure env name output -> do
       input' <- eval input
       local (M.insert name input' . const env) $ eval output
-    VPointer expr -> eval (App expr input)
+    VPointer expr -> eval (C.App expr input)
     _ -> error $ "Tried to apply a value to a non-function expression: " ++ show func'
-eval (Let binding rest) = withBinding binding $ eval rest
-eval (Rec (Binding name value) rest) = local (M.insert name $ VPointer value) $ eval rest
-eval c@(Case var (b :| bs)) = do
+eval (C.Let binding rest) = withBinding binding $ eval rest
+eval (C.Rec (C.Binding name value) rest) = local (M.insert name $ VPointer value) $ eval rest
+eval c@(C.Case var (b :| bs)) = do
   var' <- eval var
   tryBranch var' b bs
   where
@@ -154,7 +183,7 @@ eval c@(Case var (b :| bs)) = do
       case res of
         VError _ -> tryBranch val b bs
         _ -> pure res
-eval (Prod name args) = VProduct name <$> traverse eval args
+eval (C.Prod name args) = VProduct name <$> traverse eval args
 
 data ReplF a
   = Read (String -> a)
@@ -172,59 +201,60 @@ readLine = liftF $ Read id
 printLine :: MonadFree ReplF m => String -> m ()
 printLine str = liftF $ PrintLine str ()
 
-printString :: MonadFree ReplF m => String -> m ()
-printString str = liftF $ PrintString str ()
-
 evaluate ::
-  ( HasKindTable s
+  ( MonadFresh m
+  , HasKindTable s
   , HasContext s
-  , HasFreshCount s
   , HasSymbolTable s
   , AsTypeError e
+  , AsKindError e
   , AsInterpreterError e
   , MonadError e m
   , MonadState s m
-  ) => C.Expr
+  ) => L.Expr
   -> m Value
 evaluate expr = do
   ctxt <- use context
-  runWithContext ctxt expr
+  let expr' = desugarExpr expr
+  runWithContext ctxt expr'
   table <- use symbolTable
-  runReaderT (eval expr) table
+  runReaderT (eval $ toCoreExpr expr') table
 
 define ::
-  ( HasKindTable s
+  ( MonadFresh m
+  , HasKindTable s
   , HasSymbolTable s
-  , HasFreshCount s
   , HasContext s
   , HasTypesignatures s
+  , HasTcContext C.Expr s
   , AsInterpreterError e
+  , AsTypeError e
+  , AsKindError e
+  , AsSyntaxError e
+  , MonadError e m
+  , MonadState s m
+  )
+  => L.Definition
+  -> m ()
+define def = do
+  (exprs, _) <- checkDefinition =<< desugar def
+  exprs' <- runReaderT (traverse eval exprs) =<< use symbolTable
+  symbolTable %= M.union exprs'
+
+typeCheck ::
+  ( MonadFresh m
+  , HasKindTable s
+  , HasContext s
   , AsTypeError e
   , AsKindError e
   , MonadError e m
   , MonadState s m
   )
-  => S.Definition
-  -> m ()
-define def = do
-  exprs <- checkDefinition $ S.desugar def
-  exprs' <- runReaderT (traverse eval exprs) =<< use symbolTable
-  symbolTable %= M.union exprs'
-
-typeCheck ::
-  ( HasKindTable s
-  , HasContext s
-  , HasFreshCount s
-  , AsTypeError e
-  , MonadError e m
-  , MonadState s m
-  )
-  => C.Expr
+  => L.Expr
   -> m TypeScheme
 typeCheck expr = do
-  freshCount .= 0
   ctxt <- use context
-  runWithContext ctxt expr
+  snd <$> runWithContext ctxt (desugarExpr expr)
 
 kindOf ::
   ( HasKindTable s
@@ -234,7 +264,7 @@ kindOf ::
   )
   => Identifier
   -> m Kind
-kindOf name = runInferKind (TyCon $ TypeCon name) =<< use kindTable
+kindOf name = fmap snd $ runInferKind (TyCon $ TypeCon name) =<< use kindTable
 
 quit :: MonadFree ReplF m => m a
 quit = liftF Quit
@@ -250,57 +280,62 @@ showValue (VError message) = "Runtime Error: " ++ message
 showValue (VProduct name args) = unwords . (:) name $ fmap showNestedValue args
 
 repl ::
-  ( HasKindTable s
+  ( MonadFresh m
+  , HasKindTable s
   , HasContext s
   , HasTypesignatures s
   , HasSymbolTable s
-  , HasFreshCount s
+  , HasTcContext C.Expr s
   , MonadFree ReplF m
-  , Show e
   , AsLexError e
   , AsParseError e
   , AsTypeError e
   , AsKindError e
+  , AsSyntaxError e
   , AsInterpreterError e
   , MonadError e m
   , MonadState s m
   )
   => m ()
-repl = flip catchError handleError $ do
+repl = do
   input <- readLine
-  output <- case input of
-    ':':'q':_ -> quit
-    ':':'t':' ':rest -> do
-      toks <- tokenize rest
-      expr <- parseExpression toks
-      showTypeScheme <$> typeCheck (S.desugarExpr expr)
-    ':':'k':' ':rest -> do
-      kind <- kindOf rest
-      pure $ unwords [rest, ":", showKind kind]
-    rest -> do
-      toks <- tokenize rest
-      input <- parseExprOrData toks
-      case input of
-        ReplExpr expr -> showValue <$> evaluate (S.desugarExpr expr)
-        ReplDef dat -> define dat $> ""
-  printLine output
+  printLine ""
+  flip catches handlers $ do
+    output <- case input of
+      ':':'q':_ -> quit
+      ':':'t':' ':rest -> do
+        toks <- tokenize rest
+        expr <- parseExpression toks
+        showTypeScheme <$> typeCheck (desugarExpr expr)
+      ':':'k':' ':rest -> do
+        kind <- kindOf rest
+        pure $ unwords [rest, ":", showKind kind]
+      rest -> do
+        toks <- tokenize rest
+        input <- parseExprOrData toks
+        case input of
+          ReplExpr expr -> showValue <$> evaluate (desugarExpr expr)
+          ReplDef dat -> define dat $> ""
+    printLine output
+  printLine ""
   repl
   where
-    handleError e = do
-      printLine $ show e
-      repl
+    handlers =
+      [ handler _LexError $ printLine . render . lexErrorMsg
+      , handler _ParseError $ printLine . render . parseErrorMsg
+      , handler _TypeError $ printLine . render . typeErrorMsg
+      , handler _KindError $ printLine . render . kindErrorMsg
+      , handler _SyntaxError $ printLine . render . syntaxErrorMsg
+      ]
 
 replIO :: ReplF a -> InputT IO a
 replIO (Read a) = a . fromMaybe "" <$> getInputLine "> "
-replIO (PrintLine str a) = outputStrLn str >> outputStrLn "" $> a
-replIO (PrintString str a) = do
-  outputStr str
-  -- liftIO $ hFlush stdout
-  return a
+replIO (PrintLine str a) = outputStrLn str $> a
 replIO Quit = liftIO exitSuccess
 
 main :: IO (Either InterpreterError ())
 main = do
   tempDir <- getTemporaryDirectory
   runInputT defaultSettings
-    { historyFile = Just $ tempDir </> "lambdai_history" } $ foldFree replIO (runExceptT . flip evalStateT initialInterpreterState $ repl)
+    { historyFile = Just $ tempDir </> "lambdai_history" } $
+    foldFree replIO (runExceptT . runFreshT . flip evalStateT initialInterpreterState $ repl)

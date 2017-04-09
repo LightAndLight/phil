@@ -1,0 +1,56 @@
+class Functor f where {
+  fmap : (a -> b) -> f a -> f b
+}
+
+class Functor f => Applicative f where {
+  pure : a -> f a;
+  ap : f (a -> b) -> f a -> f b
+}
+
+class Monoid m where {
+  mempty : m;
+  mappend : m -> m -> m
+}
+
+data Const b a = Const b
+
+pureConst : forall m a. Monoid m => a -> Const m a
+pureConst a = Const mempty
+
+apConst : forall m a b. Monoid m => Const m (a -> b) -> Const m a -> Const m b
+apConst a b = case a of {
+  Const aa -> case b of {
+    Const bb -> Const (mappend aa bb)
+    }
+  }
+
+fmapConst : forall m a b. Monoid m => (a -> b) -> Const m a -> Const m b
+fmapConst f cm = case cm of {
+  Const m -> Const m
+  }
+
+instance Monoid m => Functor (Const m) where {
+  fmap f cm = case cm of {
+    Const m -> Const m
+  }
+}
+
+instance Monoid m => Applicative (Const m) where {
+  pure = pureConst;
+  ap = apConst
+}
+
+liftA2 : forall f a b c. Applicative f => (a -> b -> c) -> f a -> f b -> f c
+liftA2 f ma mb = ap (fmap f ma) mb
+
+and a b = case a of {
+  true -> b;
+  _ -> false
+  }
+
+instance Monoid Bool where {
+  mempty = true;
+  mappend = and
+}
+
+test = liftA2 and (Const true) (Const false)

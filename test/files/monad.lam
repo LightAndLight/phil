@@ -1,0 +1,76 @@
+class Functor f where {
+  fmap : (a -> b) -> f a -> f b
+}
+
+class Functor f => Applicative f where {
+  pure : a -> f a;
+  ap : f (a -> b) -> f a -> f b
+}
+
+class Applicative f => Monad f where {
+  bind : f a -> (a -> f b) -> f b
+}
+
+liftM2 : forall a b c m. Monad m => (a -> b -> c) -> m a -> m b -> m c
+liftM2 f ma mb = bind ma (\a. bind mb (\b. pure (f a b)))
+
+data Maybe a = Nothing | Just a
+
+instance Functor Maybe where {
+  fmap f ma = case ma of {
+    Nothing -> Nothing;
+    Just a -> Just (f a)
+  }
+}
+
+instance Applicative Maybe where {
+  pure = Just;
+  ap mf ma = case mf of {
+    Nothing -> Nothing;
+    Just f -> case ma of {
+      Nothing -> Nothing;
+      Just a -> Just (f a)
+    }
+  }
+}
+
+instance Monad Maybe where {
+  bind ma f = case ma of {
+    Nothing -> Nothing;
+    Just a -> f a
+  }
+}
+
+and : Bool -> Bool -> Bool
+and a b = case a of {
+  true -> b;
+  _ -> false
+  }
+
+class Show a where {
+  show : a -> String
+}
+
+instance Show Bool where {
+  show a = case a of {
+    true -> "true";
+    false -> "false"
+  }
+}
+
+instance Show a => Show (Maybe a) where {
+  show a = case a of {
+    Nothing -> "Nothing";
+    Just a -> show a
+  }
+}
+
+not a = case a of {
+  true -> false;
+  _ -> true
+  }
+
+asdf a b = fmap not (liftM2 and a b)
+
+test : String
+test = show (asdf (Just true) (Just true))

@@ -6,7 +6,7 @@ let
 
   f = { mkDerivation, alex, array, base, bifunctors, containers
       , directory, dlist, filepath, free, happy, haskeline, hspec, lens
-      , mtl, optparse-applicative, QuickCheck, semigroups, stdenv
+      , mtl, optparse-applicative, pretty, QuickCheck, semigroups, stdenv
       }:
       mkDerivation {
         pname = "hindley-milner";
@@ -15,7 +15,8 @@ let
         isLibrary = true;
         isExecutable = true;
         libraryHaskellDepends = [
-          array base bifunctors containers dlist lens mtl semigroups
+          array base bifunctors containers dlist free lens mtl pretty
+          semigroups
         ];
         libraryToolDepends = [ alex happy ];
         executableHaskellDepends = [
@@ -23,7 +24,7 @@ let
           mtl optparse-applicative semigroups
         ];
         testHaskellDepends = [
-          base containers hspec mtl QuickCheck semigroups
+          base containers hspec lens mtl QuickCheck semigroups
         ];
         testToolDepends = [ alex happy ];
         homepage = "https://github.com/githubuser/hindley-milner#readme";

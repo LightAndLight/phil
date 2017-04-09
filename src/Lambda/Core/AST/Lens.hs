@@ -4,22 +4,51 @@
 module Lambda.Core.AST.Lens where
 
 import           Control.Lens
+import           Control.Monad.Except
+import           Data.Set                   (Set)
+import qualified Data.Set                   as S (fromList)
 
-import           Lambda.Core.AST
+import           Lambda.Core.AST.Binding
+import           Lambda.Core.AST.Expr
+import           Lambda.Core.AST.Identifier
+import           Lambda.Core.AST.Literal
+import           Lambda.Core.AST.Pattern
+import           Lambda.Core.AST.Types
 
-makePrisms ''Prim
+ast :: Prism' Expr () -> Expr
+ast p = p # ()
+
 makePrisms ''TyCon
 makePrisms ''Type
 
- -- pattern TyFun from to = TyApp (TyApp (TyCon FunCon) from) to
 _TyFun :: Prism' Type (Type,Type)
 _TyFun = prism' (uncurry TyFun) $ \ty -> case ty of { TyFun from to -> Just (from,to); _ -> Nothing }
 
+_TyFun' :: Type -> Type -> Prism' Type ()
+_TyFun' ty ty' = only $ TyFun ty ty'
+
+_TyCtor :: Prism' Type Identifier
+_TyCtor = prism' TyCtor $ \ty -> case ty of { TyCtor con -> Just con; _ -> Nothing }
+
 makePrisms ''TypeScheme
+
+_Forall' :: [Identifier] -> [Type] -> Prism' TypeScheme Type
+_Forall' vars cons = prism' (Forall (S.fromList vars) cons) $
+  \scheme -> case scheme of
+    Forall vars' cons' ty
+      | S.fromList vars == vars' && cons == cons' -> Just ty
+      | otherwise -> Nothing
+    _ -> Nothing
+
 makePrisms ''Literal
 
 makePrisms ''Pattern
 makePrisms ''Expr
+makePrisms ''Binding
+
+_Binding' :: Identifier -> Prism' (Binding Expr) Expr
+_Binding' name = prism' (Binding name) $
+  \(Binding name' e) -> if name == name' then Just e else Nothing
 
 _Id' :: Identifier -> Prism' Expr ()
 _Id' = only . Id
