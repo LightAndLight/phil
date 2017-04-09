@@ -141,4 +141,6 @@ showConstraints cons
        else cons') ++ "=> "
 
 showTypeScheme :: TypeScheme -> String
-showTypeScheme (Forall vars cons ty) = unwords ("forall" : S.toList vars) ++ ". " ++ showConstraints cons ++ showType ty
+showTypeScheme (Forall vars cons ty)
+  | vars == S.empty = showConstraints cons ++ showType ty
+  | otherwise = unwords ("forall" : S.toList vars) ++ ". " ++ showConstraints cons ++ showType ty
