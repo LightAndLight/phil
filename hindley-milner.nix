@@ -15,7 +15,7 @@ mkDerivation {
   libraryToolDepends = [ alex happy ];
   executableHaskellDepends = [
     base bifunctors containers directory filepath free haskeline lens
-    mtl optparse-applicative semigroups
+    mtl optparse-applicative pretty semigroups
   ];
   testHaskellDepends = [
     base containers hspec lens mtl QuickCheck semigroups

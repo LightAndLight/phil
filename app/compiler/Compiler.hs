@@ -9,8 +9,10 @@ import Control.Monad.Error.Lens
 import Control.Monad.Except
 import Control.Monad.Trans
 import           Options.Applicative
+import           System.Directory
 import           System.Environment
 import           System.Exit
+import           System.FilePath.Posix
 import Text.PrettyPrint hiding ((<>))
 
 import           Lambda.AST
@@ -55,15 +57,19 @@ instance AsSyntaxError CompilerError where
 data CompileOpts
   = CompileOpts
   { filepath  :: FilePath
-  , useStdout :: Bool
+  , outputDir :: FilePath
   }
 
 parseCompileOpts :: Parser CompileOpts
 parseCompileOpts = CompileOpts <$>
   strArgument
     (metavar "SOURCE" <> help "Source file") <*>
-  switch
-    (long "stdout" <> help "Print source to stdout")
+  strOption
+    (long "output" <>
+    short 'o' <>
+    metavar "OUTPUT_DIR" <>
+    value "output/" <>
+    help "Output directory")
 
 compile ::
   ( AsLexError e
@@ -86,9 +92,10 @@ compile opts = flip catches handlers $ do
   let coreAST = fmap toCore typecheckedAST
   let phpAST = genPHP coreAST
   let phpSource = toSource "    " phpAST
-  liftIO $ if useStdout opts
-    then print phpSource
-    else writeFile (filepath opts <> ".php") phpSource
+  let destination = outputDir opts </> (takeBaseName (filepath opts) <> ".php")
+  liftIO $ do
+    createDirectoryIfMissing True $ outputDir opts
+    writeFile destination phpSource
   where
     handlers =
       [ handler _LexError $ liftIO . putStrLn . render . lexErrorMsg

@@ -42,6 +42,7 @@ library
                      , Lambda.Parser.ParseError
                      , Lambda.PHP
                      , Lambda.PHP.AST
+                     , Lambda.PHP.Import
                      , Lambda.Sugar
                      , Lambda.Sugar.SyntaxError
                      , Lambda.Typecheck
@@ -86,6 +87,8 @@ executable lambdac
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , bifunctors
+                     , directory
+                     , filepath
                      , hindley-milner
                      , lens
                      , mtl
