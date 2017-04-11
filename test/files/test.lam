@@ -1,3 +1,7 @@
+module Test where
+
+import MyModule
+
 class Eq a where {
   eq : a -> a -> Bool
 }
@@ -5,13 +9,13 @@ class Eq a where {
 not : Bool -> Bool
 not b = case b of {
   true -> false;
-  _ -> true
+  _ -> true;
   }
 
 instance Eq Bool where {
   eq a b = case a of {
     true -> b;
-    false -> not b
+    false -> not b;
     }
 }
 
@@ -22,7 +26,7 @@ test = asdf true
 
 and a b = case a of {
   true -> b;
-  _ -> false
+  _ -> false;
   }
 
 data List a = Nil | Cons a (List a)
@@ -31,12 +35,12 @@ instance Eq a => Eq (List a) where {
   eq = rec eq' la lb = case la of {
     Nil -> case lb of {
       Nil -> true;
-      _ -> false
+      _ -> false;
       };
     Cons a la' -> case lb of {
       Cons b lb' -> and (eq a b) (eq' la' lb');
-      _ -> false
-      }
+      _ -> false;
+      };
   } in eq'
 }
 
@@ -52,4 +56,4 @@ filter = rec filterRec pred input = case input of {
     };
 } in filterRec
 
-test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
+test2 = filter (\x. x) (Cons true (Cons false (Cons true Nil)))

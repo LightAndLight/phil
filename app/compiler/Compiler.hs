@@ -8,6 +8,7 @@ import Control.Monad.State
 import Control.Monad.Error.Lens
 import Control.Monad.Except
 import Control.Monad.Trans
+import Data.Traversable
 import           Options.Applicative
 import           System.Directory
 import           System.Environment
@@ -16,14 +17,17 @@ import           System.FilePath.Posix
 import Text.PrettyPrint hiding ((<>))
 
 import           Lambda.AST
+import           Lambda.AST.Definitions (Definition)
+import           Lambda.AST.Modules (Module(..))
 import           Lambda.Core.Codegen
 import           Lambda.Core.Kinds
 import           Lambda.Lexer
 import           Lambda.Lexer.LexError
-import           Lambda.Parser         (parseProgram)
+import           Lambda.Parser         (parseModule)
 import Lambda.Parser.ParseError         hiding (ParseError)
 import qualified Lambda.Parser.ParseError         as P (ParseError)
 import           Lambda.PHP
+import           Lambda.PHP.AST
 import           Lambda.Sugar
 import           Lambda.Sugar.SyntaxError
 import           Lambda.Typecheck
@@ -71,26 +75,41 @@ parseCompileOpts = CompileOpts <$>
     value "output/" <>
     help "Output directory")
 
-compile ::
-  ( AsLexError e
-  , AsParseError e
-  , AsTypeError e
-  , AsKindError e
-  , AsSyntaxError e
-  , AsCompilerError e
-  , MonadError e m
-  , MonadIO m
-  )
+compileModule
+  :: ( AsLexError e
+     , AsParseError e
+     , AsTypeError e
+     , AsKindError e
+     , AsSyntaxError e
+     , AsCompilerError e
+     , MonadError e m
+     , MonadIO m
+     )
+  => FilePath
+  -> m PHP
+compileModule file = do
+  content <- liftIO $ readFile file
+  tokens <- tokenize content
+  moduleAST <- parseModule tokens
+  desugaredModule <- traverseOf (traverse.traverse) desugar moduleAST
+  typecheckedModule <- for desugaredModule $ \defs -> runFreshT $ evalStateT (checkDefinitions defs) initialInferenceState
+  let coreModule = over (mapped.mapped) toCore typecheckedModule
+  pure . genPHP $ moduleDefinitions coreModule 
+
+compile
+  :: ( AsLexError e
+     , AsParseError e
+     , AsTypeError e
+     , AsKindError e
+     , AsSyntaxError e
+     , AsCompilerError e
+     , MonadError e m
+     , MonadIO m
+     )
   => CompileOpts
   -> m ()
 compile opts = flip catches handlers $ do
-  content <- liftIO . readFile $ filepath opts
-  tokens <- tokenize content
-  initialAST <- parseProgram tokens
-  desugaredAST <- traverse desugar initialAST
-  typecheckedAST <- runFreshT $ evalStateT (checkDefinitions desugaredAST) initialInferenceState
-  let coreAST = fmap toCore typecheckedAST
-  let phpAST = genPHP coreAST
+  phpAST <- compileModule $ filepath opts
   let phpSource = toSource "    " phpAST
   let destination = outputDir opts </> (takeBaseName (filepath opts) <> ".php")
   liftIO $ do

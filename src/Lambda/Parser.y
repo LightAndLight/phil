@@ -3,7 +3,7 @@
 
 module Lambda.Parser
   ( ReplInput(..)
-  , parseProgram
+  , parseModule
   , parseExpression
   , parseExprOrData
   )
@@ -22,11 +22,12 @@ import Lambda.Core.AST.Types
 import Lambda.AST.Binding
 import Lambda.AST.Definitions
 import Lambda.AST.Expr
+import Lambda.AST.Modules
 import Lambda.Parser.ParseError
 
 }
 
-%name parseProgramI Start
+%name parseModuleI Start
 %name parseExpressionI SingleExpr
 %name parseExprOrDataI ExprOrDef
 %monad { Either ParseError }
@@ -40,6 +41,8 @@ import Lambda.Parser.ParseError
     case { Token _ TokCase }
     class { Token _ TokClass }
     instance { Token _ TokInstance }
+    import { Token _ TokImport }
+    module { Token _ TokModule }
     of { Token _ TokOf }
     let { Token _ TokLet }
     rec { Token _ TokRec }
@@ -72,7 +75,25 @@ import Lambda.Parser.ParseError
 
 %%
 
-Start : Definitions eof { $1 }
+Start : Module Definitions eof { $1 $2 }
+
+Qualifier : cons { $1 :| [] }
+          | cons '.' Qualifier { $1 <| $3 }
+
+Module : module Qualifier Exports where eol { Module $2 $3 [] }
+       | module Qualifier Exports where eol Imports { Module $2 $3 $6 }
+
+Name : cons { $1 }
+     | ident { $1 }
+
+Exports : { Nothing }
+        | '(' ExportList ')' { Just $2 }
+
+ExportList : Name { $1 :| [] }
+           | Name ',' ExportList  { $1 <| $3 }
+
+Imports : import Qualifier eol { [$2] }
+        | import Qualifier eol Imports { $2 : $4 }
 
 Args : ident { [$1] }
      | ident Args { $1:$2 }
@@ -104,11 +125,11 @@ Predicates : A ',' A { [$1,$3] }
 Constraint : A { [$1] }
            | '(' Predicates ')' { $2 }
 
-Qualified : Ty { ([], $1) }
+QualifiedType : Ty { ([], $1) }
           | Constraint '=>' Ty { ($1, $3) }
 
 TypeScheme : Ty { Forall S.empty [] $1 }
-           | forall Args '.' Qualified { uncurry (Forall (S.fromList $2)) $4 }
+           | forall Args '.' QualifiedType { uncurry (Forall (S.fromList $2)) $4 }
 
 TypeSignature : ident ':' TypeScheme { TypeSignature $1 $3 }
 
@@ -211,6 +232,6 @@ parseExpression = either (throwError . review _ParseError) pure . parseExpressio
 parseExprOrData :: (AsParseError e, MonadError e m) => [Token] -> m ReplInput
 parseExprOrData = either (throwError . review _ParseError) pure . parseExprOrDataI
 
-parseProgram :: (AsParseError e, MonadError e m) => [Token] -> m [Definition]
-parseProgram = either (throwError . review _ParseError) pure . parseProgramI
+parseModule :: (AsParseError e, MonadError e m) => [Token] -> m (Module [Definition])
+parseModule = either (throwError . review _ParseError) pure . parseModuleI
 }

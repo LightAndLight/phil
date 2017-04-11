@@ -34,6 +34,7 @@ library
                      , Lambda.AST.Binding
                      , Lambda.AST.Definitions
                      , Lambda.AST.Expr
+                     , Lambda.AST.Modules
                      , Lambda.ErrorMsg
                      , Lambda.Exception
                      , Lambda.Lexer

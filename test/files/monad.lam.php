@@ -164,4 +164,6 @@ $asdf = function($dict396) use ($and, $liftM2, $not) {
 
 $test = ($showMaybe($showBool)->show)($asdf($monadMaybe)($Just(true))($Just(true)));
 
+echo $test;
+
 ?>

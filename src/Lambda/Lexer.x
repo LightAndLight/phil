@@ -23,6 +23,8 @@ tokens :-
     <0> class { \(p,_,_,_) _ -> return $ Token p TokClass }
     <0> instance { \(p,_,_,_) _ -> return $ Token p TokInstance }
     <0> where { \(p,_,_,_) _ -> return $ Token p TokWhere }
+    <0> import { \(p,_,_,_) _ -> return $ Token p TokImport }
+    <0> module { \(p,_,_,_) _ -> return $ Token p TokModule }
     <0> case { \(p,_,_,_) _ -> return $ Token p TokCase }
     <0> data { \(p,_,_,_) _ -> return $ Token p TokData }
     <0> of { \(p,_,_,_) _ -> return $ Token p TokOf }
@@ -103,6 +105,8 @@ data TokenType
     | TokTrue
     | TokFalse
     | TokWildcard
+    | TokImport
+    | TokModule
     deriving Show
 
 alexEOF = return TokEOF
