@@ -9,8 +9,8 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [
-    array base bifunctors containers dlist free lens mtl pretty
-    semigroups
+    array base bifunctors containers dlist filepath free lens mtl
+    pretty semigroups
   ];
   libraryToolDepends = [ alex happy ];
   executableHaskellDepends = [

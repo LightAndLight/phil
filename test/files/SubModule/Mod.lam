@@ -1,0 +1,3 @@
+module SubModule.Mod (one) where
+
+one = 1

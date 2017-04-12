@@ -219,6 +219,9 @@ phpStatementToSource (PHPStatementThrow expr) = do
   expr' <- phpExprToSource expr
   semicolon line $ unwords ["throw", expr']
 phpStatementToSource (PHPStatementExpr expr) = semicolon line =<< phpExprToSource expr
+phpStatementToSource (PHPStatementInclude expr) = do
+  expr' <- phpExprToSource expr
+  semicolon line $ unwords ["include", expr']
 
 phpLiteralToSource :: PHPLiteral -> SourceM String
 phpLiteralToSource (PHPBool b) = return $ if b then "true" else "false"

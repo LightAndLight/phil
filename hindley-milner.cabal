@@ -56,6 +56,7 @@ library
                      , array
                      , containers
                      , dlist
+                     , filepath
                      , free
                      , lens
                      , mtl

@@ -1,23 +1,28 @@
 {-# language FlexibleContexts #-}
 {-# language TemplateHaskell #-}
+{-# language RecordWildCards #-}
 
 module Lambda.Core.Codegen (genPHP) where
 
-import Control.Lens
+import Control.Lens hiding ((<.>))
 import Control.Monad.Reader
 import           Control.Monad.State
 import Data.Foldable
 import Data.Char
+import Data.List
 import qualified Data.List.NonEmpty as N
 import Data.List.NonEmpty (NonEmpty)
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
+import Data.Monoid
 import Data.DList (DList)
 import           qualified Data.DList as D
 import Data.Set (Set)
 import qualified Data.Set as S
+import System.FilePath.Posix
 
+import           Lambda.AST.Modules
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Expr
@@ -54,10 +59,55 @@ instance HasScope CodegenState where
 instance HasCode CodegenState where
   code = codegenState . codegenCode
 
-genPHP :: [Definition] -> PHP
-genPHP defs
-  = let finalState = execState (traverse_ genPHPDecl defs) (CodegenState M.empty D.empty)
+genPHP :: Module [Definition] -> PHP
+genPHP mod
+  = let finalState = execState (genPHPModule mod) (CodegenState M.empty D.empty)
     in PHP $ D.toList (finalState ^. code)
+
+genPHPExports :: NonEmpty Identifier -> [PHPDecl]
+genPHPExports exports
+  = emptyExport : fmap toExport (N.toList exports)
+  where
+    emptyExport
+      = PHPDeclStatement .
+        PHPStatementExpr $
+        PHPExprAssign
+          (PHPExprVar $ phpId "exports")
+          (PHPExprLiteral $ PHPArray [])
+    toExport ident
+      = PHPDeclStatement .
+        PHPStatementExpr $
+        PHPExprAssign
+          (PHPExprArrayAccess
+            (PHPExprVar $ phpId "exports")
+            (PHPExprLiteral $ PHPString ident))
+          (PHPExprVar $ phpId ident)
+
+genPHPImport :: NonEmpty Identifier -> PHPDecl
+genPHPImport ident
+  = PHPDeclStatement .
+    PHPStatementExpr $
+    PHPExprAssign 
+      (PHPExprVar . phpId $ "module__" <> fold (intersperse "_" $ N.toList ident))
+      (PHPExprFunctionCall
+        (PHPExprVar $ phpId "import")
+        [PHPExprLiteral . PHPString $ foldr1 (</>) ident <.> "php"])
+
+genPHPModule
+  :: ( HasCode s
+     , HasScope s
+     , MonadState s m
+     )
+  => Module [Definition] -> m ()
+genPHPModule Module{..} = do
+  let imports = fmap genPHPImport _moduleImports
+  code %= flip D.append (D.fromList imports)
+  traverse genPHPDecl _moduleData
+  case _moduleExports of
+    Nothing -> pure ()
+    Just exports -> do
+      let exports' = genPHPExports exports
+      code %= flip D.append (D.fromList exports')
 
 toFunction :: Expr -> Maybe (Expr, Identifier)
 toFunction (Abs varName expr) = Just (expr,varName)

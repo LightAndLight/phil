@@ -1,6 +1,6 @@
 {-# language TemplateHaskell #-}
 
-import Control.Lens
+import Control.Lens hiding ((<.>))
 import           Control.Monad
 import Control.Monad.Fresh
 import Control.Monad.Reader
@@ -8,6 +8,9 @@ import Control.Monad.State
 import Control.Monad.Error.Lens
 import Control.Monad.Except
 import Control.Monad.Trans
+import Data.Foldable
+import Data.List.NonEmpty
+import qualified Data.List.NonEmpty as N
 import Data.Traversable
 import           Options.Applicative
 import           System.Directory
@@ -18,7 +21,8 @@ import Text.PrettyPrint hiding ((<>))
 
 import           Lambda.AST
 import           Lambda.AST.Definitions (Definition)
-import           Lambda.AST.Modules (Module(..))
+import           Lambda.AST.Modules
+import           Lambda.Core.AST.Identifier
 import           Lambda.Core.Codegen
 import           Lambda.Core.Kinds
 import           Lambda.Lexer
@@ -28,6 +32,7 @@ import Lambda.Parser.ParseError         hiding (ParseError)
 import qualified Lambda.Parser.ParseError         as P (ParseError)
 import           Lambda.PHP
 import           Lambda.PHP.AST
+import           Lambda.PHP.Import
 import           Lambda.Sugar
 import           Lambda.Sugar.SyntaxError
 import           Lambda.Typecheck
@@ -83,18 +88,95 @@ compileModule
      , AsSyntaxError e
      , AsCompilerError e
      , MonadError e m
-     , MonadIO m
      )
-  => FilePath
-  -> m PHP
-compileModule file = do
-  content <- liftIO $ readFile file
-  tokens <- tokenize content
-  moduleAST <- parseModule tokens
+  => Module [Definition]
+  -> m (Module PHP)
+compileModule moduleAST = do
   desugaredModule <- traverseOf (traverse.traverse) desugar moduleAST
   typecheckedModule <- for desugaredModule $ \defs -> runFreshT $ evalStateT (checkDefinitions defs) initialInferenceState
   let coreModule = over (mapped.mapped) toCore typecheckedModule
-  pure . genPHP $ moduleDefinitions coreModule 
+  pure (coreModule & moduleData .~ genPHP coreModule)
+
+modulePath :: NonEmpty Identifier -> FilePath
+modulePath = foldr1 (</>)
+
+compileDependencies
+  :: ( AsLexError e
+     , AsParseError e
+     , AsTypeError e
+     , AsKindError e
+     , AsSyntaxError e
+     , AsCompilerError e
+     , MonadError e m
+     , MonadIO m
+     )
+  => FilePath -- ^ Absolute path of output directory
+  -> FilePath -- ^ Absolute path to working directory
+  -> NonEmpty Identifier -- ^ Primary module name
+  -> m (Module PHP)
+compileDependencies outputDir workingDir mainModuleName = do
+  (mainModule : dependencies) <- go [] mainModuleName
+  traverse_ (writeModule outputDir) dependencies
+  pure mainModule
+  where
+    go parents currentModule = do
+      content <- liftIO . readFile $ (workingDir </> modulePath currentModule) <.> "lam"
+      tokens <- tokenize content
+      moduleAST <- parseModule tokens
+      compiledModule <- compileModule moduleAST
+      case moduleAST ^. moduleImports of
+        [] -> pure [compiledModule]
+        childs -> (compiledModule :) <$>
+          foldrM
+            (\child rest -> do
+                new <- go (moduleAST ^. moduleName : parents) child
+                pure $ new <> rest
+            )
+            []
+            childs
+
+-- | Entry point to compiling the module graph
+-- 
+-- Compiles file & dependencies then inserts bootstrapping components
+compileMainModule
+  :: ( AsLexError e
+     , AsParseError e
+     , AsTypeError e , AsKindError e
+     , AsSyntaxError e
+     , AsCompilerError e
+     , MonadError e m
+     , MonadIO m
+     )
+  => FilePath -- ^ Absolute path of output directory
+  -> FilePath -- ^ Absolute path of the file containing the module
+  -> m ()
+compileMainModule outputDir mainPath = do
+  liftIO $ createDirectoryIfMissing True outputDir
+  mainModule <- compileDependencies
+    outputDir
+    (takeDirectory mainPath)
+    (pure $ takeBaseName mainPath)
+  bootstrapImport $ outputDir </> "import.php"
+  let includeImport
+        = PHPDeclStatement .
+          PHPStatementInclude .
+          PHPExprLiteral $
+          PHPString "import.php"
+  let mainModule' = fmap (consPHPDecl includeImport) mainModule
+  liftIO $ writeModule outputDir mainModule'
+
+-- | Write a PHP module to a file in a specific directory. Assumes the
+-- directory exists.
+writeModule
+  :: MonadIO m
+  => FilePath -- ^ Output directory
+  -> Module PHP
+  -> m ()
+writeModule outputDir phpModule = do
+  let path = (outputDir </> modulePath (phpModule ^. moduleName)) <.> "php"
+  liftIO . createDirectoryIfMissing True $ takeDirectory path
+  let moduleSource = toSource "    " (phpModule ^. moduleData)
+  liftIO $ writeFile path moduleSource
 
 compile
   :: ( AsLexError e
@@ -108,13 +190,8 @@ compile
      )
   => CompileOpts
   -> m ()
-compile opts = flip catches handlers $ do
-  phpAST <- compileModule $ filepath opts
-  let phpSource = toSource "    " phpAST
-  let destination = outputDir opts </> (takeBaseName (filepath opts) <> ".php")
-  liftIO $ do
-    createDirectoryIfMissing True $ outputDir opts
-    writeFile destination phpSource
+compile opts = flip catches handlers $
+  compileMainModule (outputDir opts) (filepath opts)
   where
     handlers =
       [ handler _LexError $ liftIO . putStrLn . render . lexErrorMsg

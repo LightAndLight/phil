@@ -1,6 +1,7 @@
 module Test where
 
 import MyModule
+import SubModule.Mod
 
 class Eq a where {
   eq : a -> a -> Bool

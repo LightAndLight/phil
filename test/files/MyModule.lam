@@ -1,0 +1,3 @@
+module MyModule (hello) where
+
+hello = "Hello"

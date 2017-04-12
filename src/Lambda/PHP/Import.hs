@@ -1,13 +1,15 @@
 module Lambda.PHP.Import where
 
-bootstrapImport :: FilePath -> IO ()
+import Control.Monad.IO.Class
+
+bootstrapImport :: MonadIO m => FilePath -> m ()
 bootstrapImport fp
-  = writeFile fp $
+  = liftIO . writeFile fp $
     unlines
       [ "<?php"
       , ""
-      , "function import($module_name) {"
-      , "    include $module_name . \".php\";"
+      , "$import = function ($module_name) {"
+      , "    include $module_name;"
       , "    return $exports;"
       , "}"
       , ""
