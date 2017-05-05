@@ -5,12 +5,14 @@
 
 module Control.Monad.Fresh
   ( runFreshT
+  , FreshT
   , module Fresh
   ) where
 
 import Control.Monad.Except
 import Control.Monad.Free
 import Control.Monad.Fresh.Class as Fresh
+import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Trans
@@ -37,6 +39,9 @@ instance MonadWriter w m => MonadWriter w (FreshT m) where
   writer = FreshT . writer
   listen (FreshT m) = FreshT $ listen m
   pass (FreshT m) = FreshT $ pass m
+
+instance MonadIO m => MonadIO (FreshT m) where
+  liftIO = FreshT . liftIO
 
 instance Monad m => MonadFresh (FreshT m) where
   reset = FreshT $ put 0

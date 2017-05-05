@@ -4,12 +4,15 @@ module Lambda.Typecheck.TypeError where
 
 import Control.Applicative
 import Control.Lens
+import Data.Foldable
 import Data.List
+import qualified Data.List.NonEmpty as N
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.Set as S
 import Data.Set (Set)
 import Text.PrettyPrint
 
+import Lambda.AST.Modules
 import Lambda.Core.AST.Identifier
 import Lambda.Core.AST.InstanceHead
 import Lambda.Core.AST.Types
@@ -31,6 +34,8 @@ data TypeError
       (Identifier, NonEmpty (Identifier, [Identifier]))
   | TypeMismatch TypeScheme TypeScheme
   | TUnificationError (UnificationError Type)
+  | ModuleCycle [NonEmpty Identifier]
+  | ModuleNameMismatch (NonEmpty Identifier) (NonEmpty Identifier)
   deriving (Eq, Show)
 
 makeClassyPrisms ''TypeError
@@ -158,4 +163,21 @@ typeErrorMsg = toMessage
         hsep
           [ text "Cannot constuct infinite type"
           , quotes $ hsep [text var, text "=", text $ showType ty]
+          ]
+
+    toMessage (ModuleCycle modules)
+      = errorMsg "Module cycle" .
+        hsep . fmap text .
+          intersperse "->" $
+          fmap asQualified modules
+      where
+        asQualified = fold . intersperse "." . N.toList
+
+    toMessage (ModuleNameMismatch actual required)
+      = errorMsg "Incorrect module name" $
+        hsep
+          [ text "Filename"
+          , quotes . text $ toModulePath actual
+          , text "does not match module name"
+          , quotes . text $ toModuleName required
           ]

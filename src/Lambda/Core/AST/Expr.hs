@@ -13,7 +13,7 @@ import           Lambda.Core.AST.Pattern
 import           Lambda.Core.AST.Types
 
 data Expr
-  = Id Identifier
+  = Id (Maybe (NonEmpty Identifier)) Identifier
   | Lit Literal
   | Prod Identifier [Expr]
   | App Expr Expr

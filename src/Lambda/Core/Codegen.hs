@@ -23,6 +23,7 @@ import qualified Data.Set as S
 import System.FilePath.Posix
 
 import           Lambda.AST.Modules
+import           Lambda.AST.Modules.ModuleName
 import           Lambda.Core.AST.Binding
 import           Lambda.Core.AST.Definitions
 import           Lambda.Core.AST.Expr
@@ -220,11 +221,27 @@ genPHPLiteral (LitString s) = PHPString s
 genPHPLiteral (LitChar c) = PHPString [c]
 genPHPLiteral (LitBool b) = PHPBool b
 
+withModName
+  :: ( HasScope s
+     , MonadState s m
+     )
+  => ModuleName
+  -> Identifier
+  -> m PHPExpr
+withModName modName name = do
+  let modName' = phpId $ "module__" <> intercalate "_" (N.toList modName)
+  scope %= M.insertWith (flip const) modName' Value
+  pure $
+    PHPExprArrayAccess (PHPExprVar modName') (PHPExprLiteral $ PHPString name)
+
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
-genPHPExpr (Id name) = do
-  let name' = phpId name
-  scope %= M.insertWith (flip const) name' Value
-  pure $ PHPExprVar name'
+genPHPExpr (Id modName name) = do
+  case modName of
+    Just modName -> withModName modName name
+    Nothing -> do
+      let name' = phpId name
+      scope %= M.insertWith (flip const) name' Value
+      pure $ PHPExprVar name'
 genPHPExpr (Lit lit) = pure . PHPExprLiteral $ genPHPLiteral lit
 genPHPExpr (Prod name args)
   = foldr f (pure $ PHPExprFunctionCall (PHPExprName $ phpId name) []) args

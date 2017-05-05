@@ -1,4 +1,5 @@
 {-# language TemplateHaskell #-}
+{-# language FlexibleContexts #-}
 
 import Control.Lens hiding ((<.>))
 import           Control.Monad
@@ -10,7 +11,6 @@ import Control.Monad.Except
 import Control.Monad.Trans
 import Data.Foldable
 import Data.List.NonEmpty
-import qualified Data.List.NonEmpty as N
 import Data.Traversable
 import           Options.Applicative
 import           System.Directory
@@ -18,6 +18,8 @@ import           System.Environment
 import           System.Exit
 import           System.FilePath.Posix
 import Text.PrettyPrint hiding ((<>))
+
+import qualified Data.List.NonEmpty as N
 
 import           Lambda.AST
 import           Lambda.AST.Definitions (Definition)
@@ -29,14 +31,16 @@ import           Lambda.Lexer
 import           Lambda.Lexer.LexError
 import           Lambda.Parser         (parseModule)
 import Lambda.Parser.ParseError         hiding (ParseError)
-import qualified Lambda.Parser.ParseError         as P (ParseError)
 import           Lambda.PHP
 import           Lambda.PHP.AST
 import           Lambda.PHP.Import
 import           Lambda.Sugar
 import           Lambda.Sugar.SyntaxError
 import           Lambda.Typecheck
+import           Lambda.Typecheck.Module
 import           Lambda.Typecheck.TypeError
+
+import qualified Lambda.Parser.ParseError         as P (ParseError)
 
 data CompilerError
   = CompilerParseError P.ParseError
@@ -80,6 +84,7 @@ parseCompileOpts = CompileOpts <$>
     value "output/" <>
     help "Output directory")
 
+-- | Compile a desugared, typechecked module
 compileModule
   :: ( AsLexError e
      , AsParseError e
@@ -91,9 +96,7 @@ compileModule
      )
   => Module [Definition]
   -> m (Module PHP)
-compileModule moduleAST = do
-  desugaredModule <- traverseOf (traverse.traverse) desugar moduleAST
-  typecheckedModule <- for desugaredModule $ \defs -> runFreshT $ evalStateT (checkDefinitions defs) initialInferenceState
+compileModule typecheckedModule = do
   let coreModule = over (mapped.mapped) toCore typecheckedModule
   pure (coreModule & moduleData .~ genPHP coreModule)
 
@@ -115,25 +118,31 @@ compileDependencies
   -> NonEmpty Identifier -- ^ Primary module name
   -> m (Module PHP)
 compileDependencies outputDir workingDir mainModuleName = do
-  (mainModule : dependencies) <- go [] mainModuleName
+  (mainModule : dependencies) <-
+    flip evalStateT initialInferenceState .
+    runFreshT $ go [] mainModuleName
   traverse_ (writeModule outputDir) dependencies
   pure mainModule
   where
     go parents currentModule = do
-      content <- liftIO . readFile $ (workingDir </> modulePath currentModule) <.> "lam"
-      tokens <- tokenize content
-      moduleAST <- parseModule tokens
-      compiledModule <- compileModule moduleAST
+      moduleAST <- checkModule workingDir currentModule
+
+      let modName = moduleAST ^. moduleName
+      when (modName `elem` parents) .
+        throwError $ _ModuleCycle # (modName : parents)
+
       case moduleAST ^. moduleImports of
-        [] -> pure [compiledModule]
-        childs -> (compiledModule :) <$>
-          foldrM
+        [] -> pure <$> compileModule moduleAST
+        childs -> do
+          dependencies <- foldrM
             (\child rest -> do
-                new <- go (moduleAST ^. moduleName : parents) child
+                new <- go (modName : parents) child
                 pure $ new <> rest
             )
             []
             childs
+          compiled <- compileModule moduleAST
+          pure $ compiled : dependencies
 
 -- | Entry point to compiling the module graph
 -- 
@@ -190,7 +199,8 @@ compile
      )
   => CompileOpts
   -> m ()
-compile opts = flip catches handlers $
+compile opts = flip catches handlers $ do
+  let path = filepath opts
   compileMainModule (outputDir opts) (filepath opts)
   where
     handlers =

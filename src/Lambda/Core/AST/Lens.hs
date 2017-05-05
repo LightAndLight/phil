@@ -50,12 +50,6 @@ _Binding' :: Identifier -> Prism' (Binding Expr) Expr
 _Binding' name = prism' (Binding name) $
   \(Binding name' e) -> if name == name' then Just e else Nothing
 
-_Id' :: Identifier -> Prism' Expr ()
-_Id' = only . Id
-
-_Lit' :: Literal -> Prism' Expr ()
-_Lit' = only . Lit
-
 _Prod' :: Identifier -> Prism' Expr [Expr]
 _Prod' name = prism' (Prod name) $
   \e -> case e of

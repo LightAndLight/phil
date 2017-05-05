@@ -1,6 +1,11 @@
 module Lambda.AST.Definitions
   ( Definition(..)
+  , DefinitionException(..)
   ) where
+
+import Control.Exception
+import Lambda.Exception
+import Data.Typeable (Typeable)
 
 import Control.Lens hiding (Context)
 import Data.Foldable
@@ -24,3 +29,9 @@ data Definition
   | Instance [Type] Type [Binding Expr]
   | ValidInstance Context InstanceHead [Binding Expr] [Expr]
   deriving (Eq, Show)
+
+data DefinitionException
+  = InvalidDefinitionException Definition
+  deriving (Show, Typeable)
+
+instance Exception DefinitionException where

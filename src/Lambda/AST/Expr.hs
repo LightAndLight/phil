@@ -3,6 +3,7 @@ module Lambda.AST.Expr where
 import Data.List.NonEmpty (NonEmpty)
 
 import Lambda.AST.Binding
+import Lambda.AST.Modules.ModuleName
 import Lambda.Core.AST.Identifier
 import Lambda.Core.AST.Literal
 import Lambda.Core.AST.Pattern
@@ -16,7 +17,7 @@ subPlaceholders subs (DictPlaceholder (className, tyArgs))
 subPlaceholders subs expr = expr
 
 data Expr
-  = Id Identifier
+  = Id (Maybe ModuleName) Identifier
   | Lit Literal
   | Prod Identifier [Expr]
   | App Expr Expr
@@ -26,8 +27,8 @@ data Expr
   | Case Expr (NonEmpty (Pattern, Expr))
   | DictPlaceholder Placeholder
   | RecPlaceholder Identifier
-  | DictVar Identifier
-  | DictInst Identifier (NonEmpty Identifier)
+  | DictVar (Maybe ModuleName) Identifier
+  | DictInst (Maybe ModuleName) Identifier (NonEmpty Identifier)
   | DictSel Identifier Expr
   | DictSuper Identifier Expr
   | Error String

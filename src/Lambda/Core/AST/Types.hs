@@ -6,6 +6,7 @@ module Lambda.Core.AST.Types where
 import Control.Exception
 import GHC.Stack
 import Lambda.Exception
+import Data.Typeable (Typeable)
 
 import Data.Bifunctor
 import Data.Foldable
@@ -14,7 +15,6 @@ import Data.Map (Map)
 import Data.Maybe
 import Data.Monoid
 import           Data.List                         (intercalate)
-import Data.Typeable (Typeable)
 import           Data.Set                          (Set)
 import qualified Data.Set                          as S
 

@@ -3,8 +3,10 @@
 module Lambda.Core.AST.InstanceHead where
 
 import Control.Lens
+import Data.Char
 import Data.Foldable
 import Data.List.NonEmpty
+import Data.Monoid
 
 import Lambda.Core.AST.Identifier
 import Lambda.Core.AST.Types
@@ -27,4 +29,6 @@ instHeadToType (InstanceHead className instArgs)
   where
     toType (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
 
-
+instanceName :: InstanceHead -> String
+instanceName (InstanceHead className instArgs)
+  = fmap toLower className <> foldMap fst instArgs

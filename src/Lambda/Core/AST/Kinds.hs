@@ -1,9 +1,9 @@
 {-# language TypeFamilies #-}
 
-module Lambda.Core.Kinds.Kind where
+module Lambda.Core.AST.Kinds where
 
-import           Lambda.Core.AST.Identifier
-import           Lambda.Typecheck.Unification
+import Lambda.Core.AST.Identifier
+import Lambda.Typecheck.Unification
 
 data Kind
   = Star

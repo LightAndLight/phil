@@ -1,51 +1,29 @@
 {-# language DeriveFunctor #-}
-{-# language FlexibleContexts #-}
-{-# language FunctionalDependencies #-}
 
-module Lambda.Typeclasses
-  ( HasTcContext(..)
-  , TypeclassEntry(..)
-  , checkConstraints
-  , equalUpToRenaming
-  , elementUpToRenaming
-  , getClass
-  , getInst
-  , getAllSuperclasses
-  , getSuperInsts
-  ) where
+module Lambda.Typecheck.TypeclassEntry where
 
 import Control.Lens hiding (Context)
-import Control.Applicative
+import Control.Monad
 import Data.Bifunctor
-import Control.Monad.Except
-import Control.Monad.Fresh
-import Control.Monad.Reader
-import Data.Traversable
-import Data.Monoid
-import Control.Monad.State
-import Data.Foldable
-import qualified Data.Set as S
-import Data.Maybe
-import qualified Data.Map as M
-import Data.Map (Map)
-import qualified Data.List.NonEmpty as N
 import Data.List.NonEmpty (NonEmpty)
-import Data.Set (Set)
+import Data.Map (Map)
+import Data.Maybe
 
-import           Lambda.AST.Definitions
-import           Lambda.Core.AST.Binding
-import           Lambda.Core.AST.Expr
-import           Lambda.Core.AST.Identifier
-import           Lambda.Core.AST.InstanceHead
-import           Lambda.Core.AST.Types
-import           Lambda.Core.Kinds
+import qualified Data.Map as M
+import qualified Data.List.NonEmpty as N
+import qualified Data.Set as S
+
+import Lambda.Core.AST.Identifier
+import Lambda.Core.AST.InstanceHead
+import Lambda.Core.AST.Types
 import Lambda.Typecheck.Unification
 
 type Context = [(Identifier, NonEmpty Identifier)]
 
 data TypeclassEntry a
-  -- | An instance entry consists of: a context, an instance head, and some function definitions
-  = TceInst Context InstanceHead (Map Identifier a)
+  -- | An instance entry consists of: the module it was defined in,
+  -- a context, an instance head, and some function definitions
+  = TceInst (NonEmpty Identifier) Context InstanceHead (Map Identifier a)
   -- | A class entry consists of: a context, a constructor applied to one or more type variables,
   -- member type signatures
   | TceClass Context Identifier (NonEmpty Identifier) (Map Identifier TypeScheme)
@@ -69,7 +47,7 @@ getInst
   -> NonEmpty Identifier -- ^ Type constructors of the instance arguments
   -> Maybe (TypeclassEntry a)
 getInst [] _ _ = Nothing
-getInst (entry@(TceInst _ instHead _) : rest) className argCons
+getInst (entry@(TceInst _ _ instHead _) : rest) className argCons
   | instHead ^. ihClassName == className
   , fmap fst (instHead ^. ihInstArgs) == argCons
   = Just entry
@@ -124,36 +102,3 @@ getSuperInsts ctxt className instArgs = do
     go className instArgs = do
       inst <- getInst ctxt className instArgs
       (inst :) <$> getSuperInsts ctxt className instArgs
-
-class HasTcContext a s | s -> a where
-  tcContext :: Lens' s [TypeclassEntry a]
-
--- forall a : Type, b : Type
--- case equalUpToRenaming a b of
---   Just subs => substitute subs b = substitute subs a
---   Nothing => true
-equalUpToRenaming :: Type -> Type -> Maybe (Substitution Type)
-equalUpToRenaming ty ty' = either (const Nothing) Just $ unify [(ty, ty')]
-
--- forall a : Type, b : Set Type
--- case elementUpToRenaming a b of
---   Just subs => substitute subs a `S.member` S.map (substitute subs) b
---   Nothing => true
-elementUpToRenaming :: Type -> [Type] -> Maybe (Substitution Type)
-elementUpToRenaming ty tys = asum $ fmap (equalUpToRenaming ty) tys
-
-checkConstraints
-  :: ( MonadFresh m
-     , AsKindError e
-     , MonadError e m
-     , HasKindTable r
-     , MonadReader r m
-     ) => [Type] -> m (Substitution Kind)
-checkConstraints [] = pure mempty
-checkConstraints [con] = do
-  (subs, k) <- inferKind con
-  either (throwError . review _KUnificationError) (const $ pure subs) $ unify [(k, Constraint)]
-checkConstraints (con:rest) = do
-  subs <- checkConstraints [con]
-  subs' <- local (over kindTable $ subKindTable subs) $ checkConstraints rest
-  pure $ subs' <> subs

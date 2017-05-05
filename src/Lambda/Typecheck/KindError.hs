@@ -1,14 +1,14 @@
 {-# language TemplateHaskell #-}
 
-module Lambda.Core.Kinds.KindError where
+module Lambda.Typecheck.KindError where
 
 import Control.Lens
 import Text.PrettyPrint
 
-import           Lambda.Core.AST.Identifier
-import           Lambda.Core.Kinds.Kind
-import           Lambda.ErrorMsg
-import           Lambda.Typecheck.Unification
+import Lambda.Core.AST.Identifier
+import Lambda.Core.AST.Kinds
+import Lambda.ErrorMsg
+import Lambda.Typecheck.Unification
 
 data KindError
   = KNotDefined Identifier

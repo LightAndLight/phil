@@ -8,44 +8,47 @@ module Lambda.Typecheck.Entailment
   , simplify
   ) where
 
-import           Control.Applicative
+import Control.Applicative
 import Control.Lens
 import Control.Monad.Except
-import Control.Monad.Fresh
+import Control.Monad.Reader
 import Control.Monad.State
-import           Data.Bifunctor
+import Data.Bifunctor
 import Data.Either
+import Data.Foldable
 import Data.List.NonEmpty (NonEmpty)
+import Data.Map (Map)
+import Data.Maybe
+import Data.Semigroup
+import Data.Set (Set)
+
 import qualified Data.List.NonEmpty as N
 import qualified Data.Map as M
-import Data.Map (Map)
-import           Data.Foldable
-import           Data.Maybe
-import           Data.Semigroup
 import qualified Data.Set as S
-import Data.Set (Set)
 
 import Lambda.AST
 import Lambda.AST.Expr
-import           Lambda.Core.AST.Identifier
-import           Lambda.Core.AST.InstanceHead
-import           Lambda.Core.AST.Types
-import           Lambda.Sugar
-import           Lambda.Typecheck.TypeError
-import           Lambda.Typecheck.Unification
-import           Lambda.Typeclasses
+import Lambda.Core.AST.Identifier
+import Lambda.Core.AST.InstanceHead
+import Lambda.Core.AST.Types
+import Lambda.ModuleInfo
+import Lambda.Sugar
+import Lambda.Typecheck.TC
+import Lambda.Typecheck.TypeError
+import Lambda.Typecheck.Unification
+import Lambda.Typeclasses
 
 -- | Rename all the type variables in a class / instance declaration to fresh
 -- | and return the substitution that was created
 standardizeApart
-  :: MonadFresh m
-  => TypeclassEntry a
-  -> m (Map Identifier Identifier, TypeclassEntry a)
+  :: TypeclassEntry a
+  -> TC e (Map Identifier Identifier, TypeclassEntry a)
 standardizeApart entry = case entry of
-  TceInst supers instHead impls -> do
+  TceInst modName supers instHead impls -> do
     let frees = foldr S.insert S.empty . fold $ snd <$> (instHead ^. ihInstArgs)
     subs <- makeSubs frees
     let inst = TceInst
+          modName
           (over (mapped._2.mapped) (fromMapping subs) supers)
           (over (ihInstArgs.mapped._2.mapped) (fromMapping subs) instHead)
           impls
@@ -64,46 +67,43 @@ standardizeApart entry = case entry of
     fromMapping subs a = fromJust $ M.lookup a subs
     makeSubs
       = foldrM
-          (\var subs -> M.insert var <$> (("t" ++) <$> fresh) <*> pure subs)
+          (\var subs -> do
+            TyVar new <- freshTyvar
+            pure $ M.insert var new subs)
           M.empty
 
--- | Reduce a list of predicates to a normal form where no predicate
--- | can be derived from the other predicates
+-- | Given the current typeclass context, reduce a list of predicates
+-- | to a normal form where no predicate can be derived from the other
+-- | predicates
 -- |
 -- | The resulting elements will retain their respective order
-simplify
-  :: MonadFresh m
-  => [TypeclassEntry a] -- ^ Typeclass context
-  -> [Type] -- ^ Predicates
-  -> m [Type]
-simplify ctxt preds = do
+simplify :: AsTypeError e => [Type] -> TC e [Type]
+simplify preds = do
+  ctxt <- getClassContext
   ctxt' <- traverse standardizeApart ctxt
-  pure . go (snd <$> ctxt') [] $ reverse preds
+  go (snd <$> ctxt') [] $ reverse preds
   where
-    go ctxt seen [] = seen
-    go ctxt seen (pred : rest)
-      | entails ctxt (seen ++ rest) pred 
-      = go ctxt seen rest
-      | otherwise = go ctxt (pred : seen) rest
+    go ctxt seen [] = pure seen
+    go ctxt seen (pred : rest) = do
+      res <- entails (seen ++ rest) pred 
+      if res
+        then go ctxt seen rest
+        else go ctxt (pred : seen) rest
 
 -- | Given a typeclass context, does the knowledge base always imply the
 -- | goal?
 entails
-  :: [TypeclassEntry a] -- ^ Typeclass context
-  -> [Type] -- ^ Knowledge base
+  :: AsTypeError e
+  => [Type] -- ^ Knowledge base
   -> Type -- ^ Goal
-  -> Bool
-entails ctxt kb goal
-  = let res = runExcept . runFreshT $ 
-          resolvePlaceholder
-            False
-            ctxt
-            S.empty
-            (zip (second N.fromList . ctorAndArgs <$> kb) $ repeat Nothing)
-            (second N.fromList $ ctorAndArgs goal)
-    in case (res :: Either TypeError ([(Placeholder, Maybe Expr)], Maybe Expr)) of
-      Left _ -> False
-      Right _ -> True
+  -> TC e Bool
+entails kb goal = pure False `ifErrorIn` do
+  resolvePlaceholder
+    False
+    S.empty
+    (zip (second N.fromList . ctorAndArgs <$> kb) $ repeat Nothing)
+    (second N.fromList $ ctorAndArgs goal)
+  pure True
 
 -- | Replace the 'DictPlaceholder's in an expression using the specified
 -- | mapping
@@ -119,17 +119,13 @@ replacePlaceholders _ expr = expr
 -- | expression should contain no more placeholder nodes (ie. no
 -- | placeholders were deferred
 resolveAllPlaceholders
-  :: ( MonadFresh m
-     , AsTypeError e
-     , MonadError e m
-     )
+  :: AsTypeError e
   => Bool -- ^ Defer errors?
-  -> [TypeclassEntry a] -- ^ Typeclass environment
   -> Set Identifier -- ^ Type variables bound in the outer context
   -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
   -> Expr -- ^ Target expression
-  -> m ([Placeholder], [Identifier], Expr) -- ^ Deferred placeholders, dictionary variables, resulting expression
-resolveAllPlaceholders shouldDeferErrors ctxt bound env expr = do
+  -> TC e ([Placeholder], [Identifier], Expr) -- ^ Deferred placeholders, dictionary variables, resulting expression
+resolveAllPlaceholders shouldDeferErrors bound env expr = do
   (expr, (deferred, env')) <- runStateT (everywhereM go expr) ([], M.fromList env)
   let resolved = M.foldrWithKey justs M.empty env'
   pure
@@ -141,12 +137,12 @@ resolveAllPlaceholders shouldDeferErrors ctxt bound env expr = do
     justs k (Just v) rest = M.insert k v rest
     justs _ Nothing as = as
 
-    fromDictVar (DictVar a) as = a : as
+    fromDictVar (DictVar _ a) as = a : as
     fromDictVar _ as = as
 
     go (DictPlaceholder p) = do
       env <- gets snd
-      (extra, result) <- resolvePlaceholder shouldDeferErrors ctxt bound (M.toList env) p
+      (extra, result) <- lift $ resolvePlaceholder shouldDeferErrors bound (M.toList env) p
       modify $ second (M.union $ M.fromList extra)
       case result of
         Nothing -> do
@@ -161,17 +157,14 @@ resolveAllPlaceholders shouldDeferErrors ctxt bound env expr = do
 -- |
 -- | Returns Nothing if the dictionary construction must be deferred
 resolvePlaceholder
-  :: ( MonadFresh m
-     , AsTypeError e
-     , MonadError e m
-     )
+  :: AsTypeError e
   => Bool -- ^ Defer errors?
-  -> [TypeclassEntry a] -- ^ Typeclass environment
   -> Set Identifier -- ^ Type variables bound in the outer context
   -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
   -> Placeholder -- ^ The placeholder to construct a dictionary for
-  -> m ([(Placeholder, Maybe Expr)], Maybe Expr)
-resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
+  -> TC e ([(Placeholder, Maybe Expr)], Maybe Expr)
+resolvePlaceholder shouldDeferErrors bound env goal = do
+  ctxt <- getClassContext
   ctxt' <- traverse standardizeApart ctxt
   loop shouldDeferErrors (snd <$> ctxt') bound env goal
   where
@@ -189,7 +182,7 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
       , any isTyVar args
       = case value of
           Nothing -> do
-            dictVar <- DictVar . ("dict" ++) <$> fresh
+            dictVar <- freshDictvar
             pure ([], Just dictVar)
           Just expr -> pure ([], Just expr)
 
@@ -197,7 +190,7 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
       where
         go _ []
           | shouldDeferErrors = pure ([], Nothing)
-          | otherwise = throwError $ _NoSuchInstance # goal
+          | otherwise = tcError $ _NoSuchInstance # goal
 
         go goal@(con, args) (entry : entries) =
           case entry of
@@ -205,8 +198,7 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
               | let supers' = filter ((== con) . fst) supers
               , ((superName, subs) : _) <-
                   over (mapped._2) (`N.zip` args) supers'
-
-              -> flip catchError (const $ go goal entries) $ do
+              -> go goal entries `ifErrorIn` do
                   let tyArgs = substitute (Substitution $ N.toList subs) .
                         TyVar <$> tyVars
                   (others, res) <- loop shouldDeferErrors ctxt bound env (className, tyArgs)
@@ -214,14 +206,14 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
 
               | otherwise -> go goal entries
 
-            TceInst supers instHead _
+            TceInst modName supers instHead _
               | con == instHead ^. ihClassName
               , all (not . isTyVar) args
               , Right subs <- unify .
                   N.toList $
                   N.zip (toTypeTyVars <$> instHead ^. ihInstArgs) args
 
-              -> flip catchError (const $ go goal entries) $ do
+              -> go goal entries `ifErrorIn` do
                   let supers' = over (mapped._2.mapped) (substitute subs . TyVar) supers
                   res <- traverse (loop shouldDeferErrors ctxt bound env) supers'
                   pure
@@ -229,7 +221,7 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
                     , do
                       res' <- sequence (snd <$> res)
                       let args' = ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
-                      pure $ foldl' App (DictInst con $ fst <$> args') res'
+                      pure $ foldl' App (DictInst (Just modName) con $ fst <$> args') res'
                     )
 
               | otherwise -> go goal entries

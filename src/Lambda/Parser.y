@@ -202,8 +202,8 @@ Case : case Expr of '{' Branches '}' { Case $2 $5 }
 Lam : lam ident '.' Expr { Abs $2 $4 }
 
 ArgExpr : Literal { Lit $1 }
-        | ident { Id $1 }
-        | cons { Id $1 }
+        | ident { Id Nothing $1 }
+        | cons { Id Nothing $1 }
         | '(' Expr ')' { $2 }
 
 FunExpr : ArgExpr { $1 }

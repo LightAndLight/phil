@@ -21,22 +21,22 @@ library
                      , Lambda.Core.AST.Expr
                      , Lambda.Core.AST.Identifier
                      , Lambda.Core.AST.InstanceHead
+                     , Lambda.Core.AST.Kinds
                      , Lambda.Core.AST.Types
                      , Lambda.Core.AST.Lens
                      , Lambda.Core.AST.Literal
                      , Lambda.Core.AST.Pattern
                      , Lambda.Core.AST.ProdDecl
                      , Lambda.Core.Codegen
-                     , Lambda.Core.Kinds
-                     , Lambda.Core.Kinds.Kind
-                     , Lambda.Core.Kinds.KindError
                      , Lambda.AST
                      , Lambda.AST.Binding
                      , Lambda.AST.Definitions
                      , Lambda.AST.Expr
                      , Lambda.AST.Modules
+                     , Lambda.AST.Modules.ModuleName
                      , Lambda.ErrorMsg
                      , Lambda.Exception
+                     , Lambda.ModuleInfo
                      , Lambda.Lexer
                      , Lambda.Lexer.LexError
                      , Lambda.Parser
@@ -47,10 +47,14 @@ library
                      , Lambda.Sugar
                      , Lambda.Sugar.SyntaxError
                      , Lambda.Typecheck
+                     , Lambda.Typecheck.Constraints
+                     , Lambda.Typecheck.Definition
                      , Lambda.Typecheck.Entailment
-                     , Lambda.Typecheck.Unification
+                     , Lambda.Typecheck.KindError
+                     , Lambda.Typecheck.Module
+                     , Lambda.Typecheck.TypeclassEntry
                      , Lambda.Typecheck.TypeError
-                     , Lambda.Typeclasses
+                     , Lambda.Typecheck.Unification
   build-depends:       base >= 4.7 && < 5
                      , bifunctors
                      , array
