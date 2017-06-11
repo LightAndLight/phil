@@ -3,30 +3,32 @@
 
 module Test.Lambda.Core.Typecheck (typecheckSpec) where
 
-import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.Fresh
-import           Control.Monad.Reader
-import           Control.Monad.State
-import           Data.Either
+import Control.Lens
+import Control.Monad.Except
+import Control.Monad.Fresh
+import Control.Monad.Reader
+import Control.Monad.State
+import Data.Either
+import Data.Maybe
+
 import qualified Data.Map                   as M
-import           Data.Maybe
 import qualified Data.Set                   as S
 
-import           qualified Lambda.AST.Binding as L
-import           qualified Lambda.AST.Expr as L
-import           qualified Lambda.Core.AST.Expr as C
-import           Lambda.Core.AST.Identifier
-import           Lambda.Core.AST.InstanceHead
-import           Lambda.Core.AST.Lens
-import           Lambda.Core.AST.Types
+import Lambda.Core.AST.Identifier
+import Lambda.Core.AST.InstanceHead
+import Lambda.Core.AST.Lens
+import Lambda.Core.AST.Types
 import Lambda.Core.Kinds        
-import           Lambda.Typecheck      hiding (special)
-import qualified Lambda.Typecheck      as T (special)
+import Lambda.Typecheck      hiding (special)
 import Lambda.Typecheck.TypeError
-import           Lambda.Typeclasses
+import Lambda.Typeclasses
 
-import           Test.Hspec
+import qualified Lambda.AST.Binding as L
+import qualified Lambda.AST.Expr as L
+import qualified Lambda.Core.AST.Expr as C
+import qualified Lambda.Typecheck      as T (special)
+
+import Test.Hspec
 
 data TestContexts
   = TestContexts
@@ -61,7 +63,7 @@ instance HasKindTable TestState where
 instance HasTcContext C.Expr TestState where
   tcContext = tdTcContext
 
-special :: TestContexts -> TypeScheme -> TypeScheme -> Either TypeError ()
+special :: TestContexts -> TypeScheme -> TypeScheme -> Either TypeOrKindError ()
 special ctxts scheme scheme'
   = flip evalState initialTestState .
     flip runReaderT ctxts .
@@ -72,7 +74,7 @@ special ctxts scheme scheme'
 hasType :: L.Expr -> TypeScheme -> Expectation
 hasType expr ty = snd <$> runInferTypeScheme expr `shouldSatisfy` (\ty' -> isRight (ty' >>= special emptyContexts ty))
 
-typeOf :: TestContexts -> TestState -> L.Expr -> Either TypeError TypeScheme
+typeOf :: TestContexts -> TestState -> L.Expr -> Either TypeOrKindError TypeScheme
 typeOf ctxt st expr
   = flip runReader ctxt .
     runFreshT .

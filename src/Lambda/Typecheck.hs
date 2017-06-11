@@ -255,7 +255,7 @@ special scheme scheme'
 newtype TypeOrKindError
   = TypeOrKindError
   { getTOKError :: Either TypeError KindError
-  }
+  } deriving (Eq, Show)
 
 instance AsTypeError TypeOrKindError where
   _TypeError = prism' (TypeOrKindError . Left) $

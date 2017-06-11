@@ -1,31 +1,32 @@
 {-# language TemplateHaskell #-}
 
 import Control.Lens
-import           Control.Monad
+import Control.Monad
 import Control.Monad.Fresh
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Error.Lens
 import Control.Monad.Except
 import Control.Monad.Trans
-import           Options.Applicative
-import           System.Environment
-import           System.Exit
+import Data.Monoid
+import Options.Applicative
+import System.Environment
+import System.Exit
 import Text.PrettyPrint hiding ((<>))
 
-import           Lambda.AST
-import           Lambda.Core.Codegen
-import           Lambda.Core.Kinds
-import           Lambda.Lexer
-import           Lambda.Lexer.LexError
-import           Lambda.Parser         (parseProgram)
+import Lambda.AST
+import Lambda.Core.Codegen
+import Lambda.Core.Kinds
+import Lambda.Lexer
+import Lambda.Lexer.LexError
+import Lambda.Parser         (parseProgram)
 import Lambda.Parser.ParseError         hiding (ParseError)
+import Lambda.PHP
+import Lambda.Sugar
+import Lambda.Sugar.SyntaxError
+import Lambda.Typecheck
+import Lambda.Typecheck.TypeError
 import qualified Lambda.Parser.ParseError         as P (ParseError)
-import           Lambda.PHP
-import           Lambda.Sugar
-import           Lambda.Sugar.SyntaxError
-import           Lambda.Typecheck
-import           Lambda.Typecheck.TypeError
 
 data CompilerError
   = CompilerParseError P.ParseError

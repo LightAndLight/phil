@@ -19,7 +19,7 @@ data Maybe a = Nothing | Just a
 instance Functor Maybe where {
   fmap f ma = case ma of {
     Nothing -> Nothing;
-    Just a -> Just (f a)
+    Just a -> Just (f a);
   }
 }
 
@@ -29,22 +29,22 @@ instance Applicative Maybe where {
     Nothing -> Nothing;
     Just f -> case ma of {
       Nothing -> Nothing;
-      Just a -> Just (f a)
-    }
+      Just a -> Just (f a);
+    };
   }
 }
 
 instance Monad Maybe where {
   bind ma f = case ma of {
     Nothing -> Nothing;
-    Just a -> f a
+    Just a -> f a;
   }
 }
 
 and : Bool -> Bool -> Bool
 and a b = case a of {
   true -> b;
-  _ -> false
+  _ -> false;
   }
 
 class Show a where {
@@ -54,20 +54,20 @@ class Show a where {
 instance Show Bool where {
   show a = case a of {
     true -> "true";
-    false -> "false"
+    false -> "false";
   }
 }
 
 instance Show a => Show (Maybe a) where {
   show a = case a of {
     Nothing -> "Nothing";
-    Just a -> show a
+    Just a -> show a;
   }
 }
 
 not a = case a of {
   true -> false;
-  _ -> true
+  _ -> true;
   }
 
 asdf a b = fmap not (liftM2 and a b)

@@ -1,2 +1,2 @@
 let pkgs = import <nixpkgs> { };
-in pkgs.haskellPackages.callPackage ./hindley-milner.nix { }
+in pkgs.haskell.packages.ghc802.callPackage ./hindley-milner.nix { }

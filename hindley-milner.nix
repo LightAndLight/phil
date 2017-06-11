@@ -24,4 +24,6 @@ mkDerivation {
   homepage = "https://github.com/githubuser/hindley-milner#readme";
   description = "Initial project template from stack";
   license = stdenv.lib.licenses.bsd3;
+
+  doHaddock = false; # Haddock template haskell bug
 }
