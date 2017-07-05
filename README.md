@@ -1,9 +1,9 @@
-# lambda (to be named)
+# phil
 
 A pure functional programming language that compiles to PHP7
 
 This started as a toy implementation of the HM type theory, but has been turning
-into a full functional compiler project.
+into a full compiler project.
 
 Example program:
 
@@ -25,7 +25,7 @@ test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
 ### Usage
 
 1. `stack install`
-2. `lambdac <source file>`
+2. `phc <source file>`
 
 ### Features
 
@@ -41,4 +41,4 @@ test = filter (\x. x) (Cons true (Cons false (Cons true Nil)))
 - Records
 - Significant whitespace
 - Infix operators
-- see [full gitlab backlog](https://gitlab.com/LightAndLight/hindley-milner/boards) for more
+- see [full gitlab backlog](https://gitlab.com/LightAndLight/phil/boards) for more
