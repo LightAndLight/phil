@@ -14,19 +14,19 @@ import System.Environment
 import System.Exit
 import Text.PrettyPrint hiding ((<>))
 
-import Lambda.AST
-import Lambda.Core.Codegen
-import Lambda.Core.Kinds
-import Lambda.Lexer
-import Lambda.Lexer.LexError
-import Lambda.Parser         (parseProgram)
-import Lambda.Parser.ParseError         hiding (ParseError)
-import Lambda.PHP
-import Lambda.Sugar
-import Lambda.Sugar.SyntaxError
-import Lambda.Typecheck
-import Lambda.Typecheck.TypeError
-import qualified Lambda.Parser.ParseError         as P (ParseError)
+import Phil.AST
+import Phil.Core.Codegen
+import Phil.Core.Kinds
+import Phil.Lexer
+import Phil.Lexer.LexError
+import Phil.Parser         (parseProgram)
+import Phil.Parser.ParseError         hiding (ParseError)
+import Phil.PHP
+import Phil.Sugar
+import Phil.Sugar.SyntaxError
+import Phil.Typecheck
+import Phil.Typecheck.TypeError
+import qualified Phil.Parser.ParseError         as P (ParseError)
 
 data CompilerError
   = CompilerParseError P.ParseError
@@ -108,4 +108,4 @@ main = do
     Left err -> die $ show err
   where
     opts = info (helper <*> parseCompileOpts)
-      (fullDesc <> progDesc "Compile a Lambda source file" <> header "lambdac - Compiler for the Lambda language")
+      (fullDesc <> progDesc "Compile a Phil source file" <> header "phc - Compiler for the Phil language")

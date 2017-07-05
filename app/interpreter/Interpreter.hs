@@ -25,26 +25,26 @@ import System.FilePath
 import System.IO
 import Text.PrettyPrint
 
-import qualified Lambda.AST.Definitions as L
-import qualified Lambda.AST.Expr as L
-import Lambda.AST (toCore, toCoreExpr)
-import qualified Lambda.Core.AST.Binding as C
-import qualified Lambda.Core.AST.Definitions as C
-import Lambda.Core.AST.Literal
-import Lambda.Core.AST.Identifier
-import qualified Lambda.Core.AST.Expr as C
-import Lambda.Core.AST.Types
-import Lambda.Core.AST.Pattern
-import Lambda.Core.Kinds
-import Lambda.Lexer
-import Lambda.Lexer.LexError
-import Lambda.Parser
-import Lambda.Parser.ParseError
-import Lambda.Sugar (desugar, desugarExpr)
-import Lambda.Sugar.SyntaxError
-import Lambda.Typecheck
-import Lambda.Typecheck.TypeError
-import Lambda.Typeclasses
+import qualified Phil.AST.Definitions as L
+import qualified Phil.AST.Expr as L
+import Phil.AST (toCore, toCoreExpr)
+import qualified Phil.Core.AST.Binding as C
+import qualified Phil.Core.AST.Definitions as C
+import Phil.Core.AST.Literal
+import Phil.Core.AST.Identifier
+import qualified Phil.Core.AST.Expr as C
+import Phil.Core.AST.Types
+import Phil.Core.AST.Pattern
+import Phil.Core.Kinds
+import Phil.Lexer
+import Phil.Lexer.LexError
+import Phil.Parser
+import Phil.Parser.ParseError
+import Phil.Sugar (desugar, desugarExpr)
+import Phil.Sugar.SyntaxError
+import Phil.Typecheck
+import Phil.Typecheck.TypeError
+import Phil.Typeclasses
 
 data Value
   = VLiteral Literal
@@ -337,5 +337,5 @@ main :: IO (Either InterpreterError ())
 main = do
   tempDir <- getTemporaryDirectory
   runInputT defaultSettings
-    { historyFile = Just $ tempDir </> "lambdai_history" } $
+    { historyFile = Just $ tempDir </> "phi_history" } $
     foldFree replIO (runExceptT . runFreshT . flip evalStateT initialInterpreterState $ repl)

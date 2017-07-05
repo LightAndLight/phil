@@ -1,9 +1,9 @@
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Test.Lambda.Core.Kinds
-import           Test.Lambda.Core.Typecheck
-import           Test.Lambda.Core.Typeclasses
+import           Test.Phil.Core.Kinds
+import           Test.Phil.Core.Typecheck
+import           Test.Phil.Core.Typeclasses
 
 main = hspec $ do
   typecheckSpec
