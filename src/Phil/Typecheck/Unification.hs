@@ -14,21 +14,24 @@ module Phil.Typecheck.Unification (
   unify
 ) where
 
-import           Control.Applicative
-import           Data.Bifunctor
-import           Data.Monoid
+import Control.Applicative
+import Data.Bifunctor
+import Data.Map            (Map)
+import Data.Monoid
+
+import qualified Data.Map as M
 
 -- | Assertion that `term = term'`
 type Constraint t = (t, t)
 
 -- | Assignments of variables to terms
-newtype Substitution t = Substitution { getSubstitution :: [(Variable t, t)] }
+newtype Substitution t = Substitution { getSubstitution :: Map (Variable t) t }
 
 deriving instance (Show t, Show (Variable t)) => Show (Substitution t)
 
 instance Unify t => Monoid (Substitution t) where
-  mempty = Substitution []
-  mappend (Substitution s1) s2 = Substitution $ fmap (second $ substitute s2) s1 ++ getSubstitution s2
+  mempty = Substitution M.empty
+  mappend (Substitution s1) s2 = Substitution $ fmap (second $ substitute s2) s1 `M.union` getSubstitution s2
 
 -- | Laws:
 -- |

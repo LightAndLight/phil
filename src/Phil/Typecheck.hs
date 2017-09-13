@@ -1,68 +1,70 @@
-{-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE ConstraintKinds       #-}
-{-# LANGUAGE FlexibleContexts       #-}
-{-# LANGUAGE MultiParamTypeClasses       #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TemplateHaskell       #-}
 
 module Phil.Typecheck where
 
-import           Control.Applicative
-import Control.Arrow ((***))
-import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.Fresh
-import           Control.Monad.Reader
-import           Control.Monad.State
+import Control.Applicative
+import Control.Arrow        ((***))
+import Control.Lens
+import Control.Monad.Except
+import Control.Monad.Fresh
+import Control.Monad.Reader
+import Control.Monad.State
 import Data.Bifunctor
-import           Data.Foldable
+import Data.Foldable
 import Data.List
-import           Data.List.NonEmpty   (NonEmpty (..))
-import qualified Data.List.NonEmpty   as N
-import           Data.Map             (Map)
-import qualified Data.Map             as M
-import           Data.Maybe
-import           Data.Monoid
-import           Data.Set             (Set)
-import qualified Data.Set             as S
-import           Data.Traversable
+import Data.List.NonEmpty   (NonEmpty(..))
+import Data.Map             (Map)
+import Data.Maybe
+import Data.Monoid
+import Data.Set             (Set)
+import Data.Traversable
 
-import           Phil.AST (everywhere, toCoreExpr)
-import           Phil.AST.Binding
-import           Phil.AST.Definitions
-import           Phil.AST.Expr
-import           qualified Phil.Core.AST.Expr as C
-import           Phil.Core.AST.Identifier
-import           Phil.Core.AST.InstanceHead
-import           Phil.Core.AST.Lens
-import           Phil.Core.AST.Literal
-import           Phil.Core.AST.Types
-import           Phil.Core.AST.Pattern
-import           Phil.Core.AST.ProdDecl
+import qualified Data.List.NonEmpty as N
+import qualified Data.Map           as M
+import qualified Data.Set           as S
+
+import Phil.AST                   (everywhere, toCoreExpr)
+import Phil.AST.Binding
+import Phil.AST.Definitions
+import Phil.AST.Expr
+import Phil.Core.AST.Identifier
+import Phil.Core.AST.InstanceHead
+import Phil.Core.AST.Lens
+import Phil.Core.AST.Literal
+import Phil.Core.AST.Pattern
+import Phil.Core.AST.ProdDecl
+import Phil.Core.AST.Types
 import Phil.Core.Kinds
-import Phil.Sugar (asClassInstanceP, desugarExpr)
+import Phil.Sugar                 (asClassInstanceP, desugarExpr)
 import Phil.Typecheck.Entailment
 import Phil.Typecheck.TypeError
 import Phil.Typecheck.Unification
 import Phil.Typeclasses
 
+import qualified Phil.Core.AST.Expr as C
+
 data ContextEntry
   -- | Overloaded function entry
   = OEntry { typeScheme :: TypeScheme }
   -- | Constructor entry
-  | CEntry { typeScheme :: TypeScheme } 
+  | CEntry { typeScheme :: TypeScheme }
   -- | Function entry
-  | FEntry { typeScheme :: TypeScheme } 
+  | FEntry { typeScheme :: TypeScheme }
   -- | Recursive entry
-  | REntry { typeScheme :: TypeScheme } 
+  | REntry { typeScheme :: TypeScheme }
 
 subContextEntry subs entry
   = entry { typeScheme = subTypeScheme subs (typeScheme entry) }
 
 data InferenceState
   = InferenceState
-    { _isContext    :: Map Identifier ContextEntry
+    { _isContext        :: Map Identifier ContextEntry
     , _isTypesignatures :: Map Identifier TypeScheme
-    , _isKindTable  :: Map Identifier Kind
-    , _isTcContext :: [TypeclassEntry C.Expr]
+    , _isKindTable      :: Map Identifier Kind
+    , _isTcContext      :: [TypeclassEntry C.Expr]
     }
 
 makeClassy ''InferenceState
@@ -71,7 +73,7 @@ initialInferenceState
   = InferenceState
   { _isContext = M.empty
   , _isTypesignatures = M.empty
-  , _isKindTable = M.fromList 
+  , _isKindTable = M.fromList
       [ ("Int", Star)
       , ("Bool", Star)
       , ("String", Star)
@@ -123,7 +125,7 @@ free = foldMap freeInScheme
 -- |
 -- | During generalization, the following takes place:
 -- |
--- | - 
+-- | -
 generalize
   :: ( MonadFresh m
      , HasContext r
@@ -422,7 +424,7 @@ inferType e = case e of
         (s2, cons2, env2, t2, rest', e'') <- local (over context $ fmap (subContextEntry s1)) $ do
           env <- use tcContext
           (e'', t1') <- generalize s1 env e' cons1 t1
-          (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ inferType rest 
+          (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ inferType rest
           pure (s2, cons2, env2, t2, rest', e'')
         return
           ( s1 <> s2
@@ -587,7 +589,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   let classSupers' = over (mapped._2.mapped) (fromJust . flip M.lookup mapping) classSupers
 
   classSuperInsts <- traverse (uncurry $ tryGetInst tctxt) classSupers'
-      
+
   let supersPlaceholders =
         zip (over (mapped._2.mapped) TyVar supers) $
         Just . DictVar . ("dict" ++) . fst <$> supers
@@ -595,7 +597,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   checkAllMembersImplemented members impls
 
   impls' <- for impls $ \(VariableBinding implName impl) -> do
-    Forall _ implCons implTy <- tryGetImpl constructor params' implName members 
+    Forall _ implCons implTy <- tryGetImpl constructor params' implName members
     let inst = TceInst supers (InstanceHead constructor params) undefined
     st <- get
     flip runReaderT st . local (over tcContext (inst :)) $ do
@@ -651,8 +653,8 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           tctxt
           S.empty
           placeholders
-          (className, toTypeTyVars <$> instArgs) 
-  
+          (className, toTypeTyVars <$> instArgs)
+
     -- | Find a substitution that will rewrite a member's inferred
     -- | constraints in terms of the instance's parameters
     findMatchingCons
@@ -678,7 +680,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           (getClass tctxt cons)
 
     tryGetInst tctxt targetCons targetParams
-      = maybe 
+      = maybe
           (throwError $ _MissingSuperclassInst #
               ((constructor, params), (targetCons, targetParams)))
           pure
@@ -690,7 +692,7 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           (throwError $ _NonClassFunction # (cons, implName))
           pure
           (M.lookup implName members)
-          
+
 
 checkDefinition def@(Data tyCon tyVars decls) = do
   table <- use kindTable
