@@ -1,4 +1,5 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Test.Phil.Core.Typecheck (typecheckSpec) where
@@ -9,30 +10,29 @@ import Control.Monad.Fresh
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Either
-import Data.Maybe
 
-import qualified Data.Map                   as M
-import qualified Data.Set                   as S
+import qualified Data.Map as M
+import qualified Data.Set as S
 
 import Phil.Core.AST.Identifier
 import Phil.Core.AST.InstanceHead
 import Phil.Core.AST.Lens
 import Phil.Core.AST.Types
-import Phil.Core.Kinds        
-import Phil.Typecheck      hiding (special)
+import Phil.Core.Kinds
+import Phil.Typecheck hiding (special)
 import Phil.Typecheck.TypeError
 import Phil.Typeclasses
 
 import qualified Phil.AST.Binding as L
 import qualified Phil.AST.Expr as L
 import qualified Phil.Core.AST.Expr as C
-import qualified Phil.Typecheck      as T (special)
+import qualified Phil.Typecheck as T (special)
 
 import Test.Hspec
 
 data TestContexts
   = TestContexts
-  { _testContext   :: M.Map Identifier ContextEntry
+  { _testContext   :: M.Map (Either Ident Ctor) ContextEntry
   , _testTcContext :: [TypeclassEntry C.Expr]
   }
 
@@ -48,7 +48,7 @@ instance HasTcContext C.Expr TestContexts where
 
 data TestState
   = TestState
-  { _tdKindTable      :: M.Map Identifier Kind
+  { _tdKindTable      :: M.Map (Either Ident Ctor) Kind
   , _tdFreshCount     :: Int
   , _tdTcContext      :: [TypeclassEntry C.Expr]
   }
@@ -83,62 +83,110 @@ typeOf ctxt st expr
 
 typecheckSpec = describe "Phil.Core.Typecheck" $ do
   describe "special" $ do
-    let idType = _Forall' ["a"] [] # _TyFun # (_TyVar # "a", _TyVar # "a")
+    let idType = _Forall' [Ident "a"] [] # _TyFun # (_TyVar # Ident "a", _TyVar # Ident "a")
     describe "success" $ do
       it "forall a. a -> a is more general than forall b. b -> b" $
-        special emptyContexts idType (_Forall' ["b"] [] # _TyFun # (_TyVar # "b", _TyVar # "b")) `shouldSatisfy` has _Right
+        special
+          emptyContexts
+          idType
+          (_Forall' [Ident "b"] [] # _TyFun # (_TyVar # Ident "b", _TyVar # Ident "b"))
+
+        `shouldSatisfy`
+
+        has _Right
 
       it "forall a. a -> a is more general than forall a b. b -> b" $
-        special emptyContexts idType (_Forall' ["a","b"] [] # _TyFun # (_TyVar # "b", _TyVar # "b")) `shouldSatisfy` has _Right
+        special
+          emptyContexts
+          idType
+          (_Forall' [Ident "a", Ident "b"] [] # _TyFun # (_TyVar # Ident "b", _TyVar # Ident "b"))
+
+        `shouldSatisfy`
+
+        has _Right
 
       it "forall a. a -> a is more general than forall a b. Int -> Int" $
-        special emptyContexts idType (_Forall' ["a","b"] [] # _TyFun # (_TyCtor # "Int", _TyCtor # "Int")) `shouldSatisfy` has _Right
+        special
+          emptyContexts
+          idType
+          (_Forall' [Ident "a", Ident "b"] [] # _TyFun # (_TyCtor # Ctor "Int", _TyCtor # Ctor "Int"))
+
+        `shouldSatisfy`
+
+        has _Right
 
       it "forall a. a -> a is more general than Int -> Int" $
-        special emptyContexts idType (_Forall' [] [] # _TyFun # (_TyCtor # "Int", _TyCtor # "Int")) `shouldSatisfy` has _Right
+        special
+          emptyContexts
+          idType
+          (_Forall' [] [] # _TyFun # (_TyCtor # Ctor "Int", _TyCtor # Ctor "Int"))
+
+        `shouldSatisfy`
+
+        has _Right
 
       it "forall a. a -> a is more general than forall b c. (b -> c) -> (b -> c)" $
         special emptyContexts idType
-          (_Forall' ["b", "c"] []
+          (_Forall' [Ident "b", Ident "c"] []
             # _TyFun
-              # ( _TyFun # (_TyVar # "b", _TyVar # "c")
-                , _TyFun # (_TyVar # "b", _TyVar # "c"))
+              # ( _TyFun # (_TyVar # Ident "b", _TyVar # Ident "c")
+                , _TyFun # (_TyVar # Ident "b", _TyVar # Ident "c"))
           ) `shouldSatisfy` has _Right
 
     describe "failure" $ do
       it "forall a. a -> a does not unify with forall b c. b -> c" $
-        special emptyContexts idType (_Forall' ["b", "c"] [] # _TyFun # (_TyVar # "b", _TyVar # "c")) `shouldSatisfy` has (_Left . _TUnificationError)
+        special
+          emptyContexts
+          idType
+          (_Forall' [Ident "b", Ident "c"] [] # _TyFun # (_TyVar # Ident "b", _TyVar # Ident "c"))
+
+        `shouldSatisfy`
+
+        has (_Left . _TUnificationError)
 
       it "forall a. a -> a does not unify with forall b c d. (b -> c) -> (b -> d)" $
         special emptyContexts idType
-          (_Forall' ["b", "c", "d"] []
+          (_Forall' [Ident "b", Ident "c", Ident "d"] []
             # _TyFun
-              # ( _TyFun # (_TyVar # "b", _TyVar # "c")
-                , _TyFun # (_TyVar # "b", _TyVar # "d"))
+              # ( _TyFun # (_TyVar # Ident "b", _TyVar # Ident "c")
+                , _TyFun # (_TyVar # Ident "b", _TyVar # Ident "d"))
           ) `shouldSatisfy` has (_Left . _TUnificationError)
 
       it "forall a. a -> a does not unify with forall a b f. f a -> f b" $
         special emptyContexts idType
-          (_Forall' ["a", "b", "f"] []
+          (_Forall' [Ident "a", Ident "b", Ident "f"] []
             # _TyFun
-              # ( _TyApp # (_TyVar # "f", _TyVar # "a")
-                , _TyApp # (_TyVar # "f", _TyVar # "b")
+              # ( _TyApp # (_TyVar # Ident "f", _TyVar # Ident "a")
+                , _TyApp # (_TyVar # Ident "f", _TyVar # Ident "b")
                 )
           ) `shouldSatisfy` has (_Left . _TUnificationError)
 
       it "Int -> Int [>=] forall a. a -> a" $
-        special emptyContexts (_Forall' [] [] # _TyFun # (_TyCtor # "Int", _TyCtor # "Int")) idType `shouldSatisfy` has (_Left . _TUnificationError)
+        special
+          emptyContexts
+          (_Forall' [] [] # _TyFun # (_TyCtor # Ctor "Int", _TyCtor # Ctor "Int"))
+          idType
+
+        `shouldSatisfy`
+
+        has (_Left . _TUnificationError)
 
   describe "typeclass" $ do
-    let constrainedId = _Forall' ["a"] [TyApp (TyCon $ TypeCon "Constraint") (TyVar "a")] # _TyFun # (_TyVar # "a", _TyVar # "a")
-        regularId = _Forall' ["a"] [] # _TyFun # (_TyVar # "a", _TyVar # "a")
-        intToInt = _Forall' [] [] # _TyFun # (_TyCtor # "Int", _TyCtor # "Int")
+    let constrainedId =
+          _Forall'
+            [Ident "a"]
+            [TyApp (TyCon . TypeCon $ Ctor "Constraint") (TyVar $ Ident "a")] #
+            _TyFun #
+            (_TyVar # Ident "a", _TyVar # Ident "a")
+
+        regularId = _Forall' [Ident "a"] [] # _TyFun # (_TyVar # Ident "a", _TyVar # Ident "a")
+        intToInt = _Forall' [] [] # _TyFun # (_TyCtor # Ctor "Int", _TyCtor # Ctor "Int")
 
     describe "success" $ do
       let ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass [] "Constraint" (pure "b") undefined 
-              , TceInst [] (InstanceHead "Constraint" $ pure ("Int", [])) undefined
+              [ TceClass [] (Ctor "Constraint") (pure $ Ident "b") undefined 
+              , TceInst [] (InstanceHead (Ctor "Constraint") $ pure (Ctor "Int", [])) undefined
               ]
             }
       it "forall a. a -> a [>=] forall a. Constraint a => a -> a" $
@@ -150,19 +198,19 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
 
     describe "failure" $ do
       let ctxt = emptyContexts
-            { _testTcContext = [TceClass [] "Constraint" (pure "b") undefined ] }
+            { _testTcContext = [TceClass [] (Ctor "Constraint") (pure $ Ident "b") undefined ] }
       it "forall a. Constraint a => a -> a [>=] Int -> Int but there is no instance Constraint Int" $
         special ctxt constrainedId intToInt `shouldSatisfy` has (_Left . _CouldNotDeduce)
       let constrainedId = _Forall'
-            ["a"]
-            [ TyApp (TyCon $ TypeCon "Constraint") (TyVar "a")
-            , TyApp (TyCon $ TypeCon "Other") (TyVar "a")
+            [Ident "a"]
+            [ TyApp (TyCon . TypeCon $ Ctor "Constraint") (TyVar $ Ident "a")
+            , TyApp (TyCon . TypeCon $ Ctor "Other") (TyVar $ Ident "a")
             ]
-            # _TyFun # (_TyVar # "a", _TyVar # "a")
+            # _TyFun # (_TyVar # Ident "a", _TyVar # Ident "a")
           ctxt = emptyContexts
             { _testTcContext =
-              [ TceClass [] "Constraint" (pure "b") undefined 
-              , TceInst [] (InstanceHead "Constraint" $ pure ("Int", [])) undefined
+              [ TceClass [] (Ctor "Constraint") (pure $ Ident "b") undefined 
+              , TceInst [] (InstanceHead (Ctor "Constraint") $ pure (Ctor "Int", [])) undefined
               ]
             }
       it "instance Constraint Int where ... => forall a. (Constraint a, Other a) => a -> a [>=] Int -> Int but there is no class `Other`" $
@@ -171,78 +219,115 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
   describe "w" $ do
     describe "success" $ do
       it "\\x. x : forall a. a -> a" $
-        L.Abs "x" (L.Id "x") `hasType` (_Forall' ["t0"] [] # _TyFun # (_TyVar # "t0", _TyVar # "t0"))
+        L.Abs
+          (Ident "x")
+          (L.Id (Ident "x"))
+
+        `hasType`
+
+        (_Forall' [Ident "t0"] [] # _TyFun # (_TyVar # Ident "t0", _TyVar # Ident "t0"))
+
       it "\\x. \\y. x : forall a b. a -> b -> a" $
-        L.Abs "x" (L.Abs "y" $ L.Id "x")
-          `hasType` (_Forall' ["t0","t1"] [] # _TyFun # (_TyVar # "t0", _TyFun # (_TyVar # "t1", _TyVar # "t0")))
+        L.Abs (Ident "x") (L.Abs (Ident "y") $ L.Id (Ident "x"))
+
+        `hasType`
+
+        (_Forall' [Ident "t0", Ident "t1"] [] # _TyFun # (_TyVar # Ident "t0", _TyFun # (_TyVar # Ident "t1", _TyVar # Ident "t0")))
+
       it "rec fix f x = f (fix f) x in rec : forall a. (a -> a) -> a" $
-        L.Rec (L.VariableBinding "fix" $ L.Abs "f" $ L.App (L.Id "f") $ L.App (L.Id "fix") (L.Id "f")) (L.Id "fix")
-          `hasType` (_Forall' ["t4"] [] # _TyFun # (_TyFun # (_TyVar # "t4", _TyVar # "t4"), _TyVar # "t4"))
+        L.Rec
+          (L.VariableBinding (Ident "fix") $ L.Abs (Ident "f") $ L.App (L.Id (Ident "f")) $ L.App (L.Id $ Ident "fix") (L.Id (Ident "f")))
+          (L.Id $ Ident "fix")
+
+        `hasType`
+
+        (_Forall' [Ident "t4"] [] # _TyFun # (_TyFun # (_TyVar # Ident "t4", _TyVar # Ident "t4"), _TyVar # Ident "t4"))
 
     describe "failure" $
       it "\\x. x x" $
-        runInferTypeScheme (L.Abs "x" $ L.App (L.Id "x") $ L.Id "x") `shouldSatisfy` has (_Left . _TUnificationError)
+        runInferTypeScheme (L.Abs (Ident "x") $ L.App (L.Id (Ident "x")) $ L.Id (Ident "x")) `shouldSatisfy` has (_Left . _TUnificationError)
 
     describe "typeclasses" $
       Test.Hspec.context "class Eq a where eq : a -> a -> Bool where ..." $ do
         let ctxt = emptyContexts
-              { _testContext = M.singleton "eq" . OEntry $
+              { _testContext = M.singleton (Left $ Ident "eq") . OEntry $
                   _Forall'
-                    ["a"]
-                    [TyApp (TyCon $ TypeCon "Eq") $ TyVar "a"]
-                    # _TyFun # (_TyVar # "a", _TyFun # (_TyVar # "a", _TyCtor # "Bool"))
+                    [Ident "a"]
+                    [TyApp (TyCon . TypeCon $ Ctor "Eq") . TyVar $ Ident "a"]
+                    # _TyFun # (_TyVar # Ident "a", _TyFun # (_TyVar # Ident "a", _TyCtor # Ctor "Bool"))
               , _testTcContext =
-                  [ TceClass [] "Eq" (pure "a") undefined ]
+                  [ TceClass [] (Ctor "Eq") (pure $ Ident "a") undefined ]
               }
         it "\\x. \\y. eq y x : forall a. Eq a => a -> a -> Bool" $
-          typeOf ctxt initialTestState (L.Abs "x" $ L.Abs "y" $ L.App (L.App (L.Id "eq") $ L.Id "y") $ L.Id "x")
-            `shouldBe` (Right $
-              Forall
-                (S.singleton "t4")
-                [TyApp (TyCon $ TypeCon "Eq") (TyVar "t4")]
-                (TyFun (TyVar "t4") $ TyFun (TyVar "t4") (TyCtor "Bool")))
+          typeOf
+            ctxt
+            initialTestState
+            (L.Abs (Ident "x") $ L.Abs (Ident "y") $ L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "y")) $ L.Id (Ident "x"))
+
+          `shouldBe`
+
+          (Right $
+            Forall
+              (S.singleton $ Ident "t4")
+              [TyApp (TyCon $ TypeCon $ Ctor "Eq") (TyVar $ Ident "t4")]
+              (TyFun (TyVar $ Ident "t4") $ TyFun (TyVar $ Ident "t4") (TyCtor $ Ctor "Bool")))
+
         it "\\x. eq x x : forall a. Eq a => a -> Bool" $
-          typeOf ctxt initialTestState (L.Abs "x" $ L.App (L.App (L.Id "eq") $ L.Id "x") $ L.Id "x")
-            `shouldBe` (Right $
-              Forall
-                (S.singleton "t2")
-                [TyApp (TyCon $ TypeCon "Eq") (TyVar "t2")]
-                (TyFun (TyVar "t2") (TyCtor "Bool")))
+          typeOf
+            ctxt
+            initialTestState
+            (L.Abs (Ident "x") $ L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "x")) $ L.Id (Ident "x"))
+
+          `shouldBe`
+
+          (Right $
+            Forall
+              (S.singleton $ Ident "t2")
+              [TyApp (TyCon . TypeCon $ Ctor "Eq") (TyVar $ Ident "t2")]
+              (TyFun (TyVar $ Ident "t2") (TyCtor $ Ctor "Bool")))
+
         Test.Hspec.context "and : Bool -> Bool -> Bool" $ do
           let ctxtWithAnd = ctxt & over testContext
-                ( M.insert "and" . FEntry $
+                ( M.insert (Left $ Ident "and" ) . FEntry $
                     _Forall' [] []
-                      # _TyFun # (_TyCtor # "Bool", _TyFun # (_TyCtor # "Bool", _TyCtor # "Bool"))
+                      # _TyFun # (_TyCtor # Ctor "Bool", _TyFun # (_TyCtor # Ctor "Bool", _TyCtor # Ctor "Bool"))
                 )
           it "\\x y. and (eq x x) (eq y y) : forall a a1. (Eq a, Eq a1) => a -> a1 -> Bool" $ do
-            let eqxx = L.App (L.App (L.Id "eq") $ L.Id "x") $ L.Id "x"
-                eqyy = L.App (L.App (L.Id "eq") $ L.Id "y") $ L.Id "y"
-            typeOf ctxtWithAnd initialTestState (L.Abs "x" $ L.Abs "y" $ L.App (L.App (L.Id "and") eqxx) eqyy)
-              `shouldBe` (Right $
-                Forall
-                  (S.fromList ["t4", "t12"])
-                  [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t4")
-                  , TyApp (TyCon $ TypeCon "Eq") (TyVar "t12")
-                  ]
-                  (TyFun (TyVar "t4") $ TyFun (TyVar "t12") $ TyCtor "Bool"))
+            let eqxx = L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "x")) $ L.Id (Ident "x")
+                eqyy = L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "y")) $ L.Id (Ident "y")
+            typeOf
+              ctxtWithAnd
+              initialTestState
+              (L.Abs (Ident "x") $ L.Abs (Ident "y") $ L.App (L.App (L.Id $ Ident "and") eqxx) eqyy)
+
+            `shouldBe`
+
+            (Right $
+              Forall
+                (S.fromList [Ident "t4", Ident "t12"])
+                [ TyApp (TyCon . TypeCon $ Ctor "Eq") (TyVar (Ident "t4"))
+                , TyApp (TyCon . TypeCon $ Ctor "Eq") (TyVar (Ident "t12"))
+                ]
+                (TyFun (TyVar (Ident "t4")) $ TyFun (TyVar (Ident "t12")) $ TyCtor (Ctor "Bool")))
+
           Test.Hspec.context "class Gt a where gt : a -> a -> Bool" $ do
             let ctxtWithGt = ctxtWithAnd
-                  & testTcContext <>~ [ TceClass [] "Gt" (pure "a") undefined ]
+                  & testTcContext <>~ [ TceClass [] (Ctor "Gt") (pure $ Ident "a") undefined ]
                   & over testContext
-                    ( M.insert "gt" . OEntry $
+                    ( M.insert (Left $ Ident "gt") . OEntry $
                         _Forall'
-                          ["a"]
-                          [TyApp (TyCon $ TypeCon "Gt") (TyVar "a")]
-                          # _TyFun # (_TyVar # "a", _TyFun # (_TyVar # "a", _TyCtor # "Bool"))
+                          [Ident "a"]
+                          [TyApp (TyCon $ TypeCon (Ctor "Gt")) (TyVar (Ident "a"))]
+                          # _TyFun # (_TyVar # Ident "a", _TyFun # (_TyVar # Ident "a", _TyCtor # Ctor "Bool"))
                     )
             it "\\x. and (eq x x) (gt x x) : forall a. (Eq a, Gt a) => a -> Bool" $ do
-              let eqxx = L.App (L.App (L.Id "eq") $ L.Id "x") $ L.Id "x"
-                  gtxx = L.App (L.App (L.Id "gt") $ L.Id "x") $ L.Id "x"
-              typeOf ctxtWithGt initialTestState (L.Abs "x" $ L.App (L.App (L.Id "and") eqxx) gtxx)
+              let eqxx = L.App (L.App (L.Id (Ident "eq")) $ L.Id (Ident "x")) $ L.Id (Ident "x")
+                  gtxx = L.App (L.App (L.Id (Ident "gt")) $ L.Id (Ident "x")) $ L.Id (Ident "x")
+              typeOf ctxtWithGt initialTestState (L.Abs (Ident "x") $ L.App (L.App (L.Id (Ident "and")) eqxx) gtxx)
                 `shouldBe` (Right $
                   Forall
-                    (S.singleton "t10")
-                    [ TyApp (TyCon $ TypeCon "Eq") (TyVar "t10")
-                    , TyApp (TyCon $ TypeCon "Gt") (TyVar "t10")
+                    (S.singleton $ Ident "t10")
+                    [ TyApp (TyCon $ TypeCon (Ctor "Eq")) (TyVar (Ident "t10"))
+                    , TyApp (TyCon $ TypeCon (Ctor "Gt")) (TyVar (Ident "t10"))
                     ]
-                    (TyFun (TyVar "t10") $ TyCtor "Bool"))
+                    (TyFun (TyVar (Ident "t10")) $ TyCtor (Ctor "Bool")))

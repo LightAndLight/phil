@@ -1,6 +1,5 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TypeFamilies    #-}
-
 module Phil.Core.AST.Types where
 
 import Control.Exception
@@ -13,19 +12,25 @@ import qualified Data.Map as M
 import Data.Map (Map)
 import Data.Maybe
 import Data.Monoid
-import           Data.List                         (intercalate)
+import Data.List (intersperse)
+import Data.Text (unpack)
 import Data.Typeable (Typeable)
-import           Data.Set                          (Set)
-import qualified Data.Set                          as S
+import Data.Set (Set)
+import Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
+
+import qualified Data.Set as S
 
 
-import           Phil.Core.AST.Identifier
-import           Phil.Typecheck.Unification
+import Phil.Core.AST.Identifier
+import Phil.Typecheck.Unification
 
-data TyCon = FunCon | TypeCon Identifier deriving (Eq, Show, Ord)
+data TyCon
+  = FunCon
+  | TypeCon Ctor
+  deriving (Eq, Show, Ord)
 
 data Type
-  = TyVar Identifier
+  = TyVar Ident
   | TyApp Type Type
   | TyCon TyCon
   deriving (Eq, Show, Ord)
@@ -42,23 +47,23 @@ instance Exception TypeException where
 -- | Split a Type into a type constructor and some arguments
 -- |
 -- | Partial, throws a TypeException
-ctorAndArgs :: (HasCallStack, Applicative f, Monoid (f Type)) => Type -> (Identifier, f Type)
+ctorAndArgs :: (HasCallStack, Applicative f, Monoid (f Type)) => Type -> (Ctor, f Type)
 ctorAndArgs ty = go ty
   where
     go (TyCtor con) = (con, mempty)
     go (TyApp rest arg) = second (<> pure arg) $ go rest
     go _ = internalError (InvalidTypeException ty)
 
-toType :: Foldable f => (Identifier, f Type) -> Type
+toType :: Foldable f => (Ctor, f Type) -> Type
 toType (con, args) = foldl' TyApp (TyCtor con) args
 
-toTypeTyVars :: (Foldable f, Functor f) => (Identifier, f Identifier) -> Type
+toTypeTyVars :: (Foldable f, Functor f) => (Ctor, f Ident) -> Type
 toTypeTyVars (con, args) = foldl' TyApp (TyCtor con) $ TyVar <$> args
 
-data TypeScheme = Forall (Set Identifier) [Type] Type deriving (Eq, Show)
+data TypeScheme = Forall (Set Ident) [Type] Type deriving (Eq, Show)
 
 instance Unify Type where
-  type Variable Type = Identifier
+  type Variable Type = Ident
 
   substitute (Substitution []) t = t
   substitute subs (TyApp t1 t2) = TyApp (substitute subs t1) (substitute subs t2)
@@ -96,7 +101,7 @@ subTypeScheme (Substitution subs) scheme = go (freeInScheme scheme) subs scheme
       = go frees rest (Forall vars (fmap runSub cons) $ runSub ty)
 
 -- | Rename the bound type variables in a type scheme
-renameTypeScheme :: Map Identifier Identifier -> TypeScheme -> TypeScheme
+renameTypeScheme :: Map Ident Ident -> TypeScheme -> TypeScheme
 renameTypeScheme subs (Forall vars cons ty)
   = let subs' = Substitution . M.toList $ TyVar <$> subs
     in Forall
@@ -105,42 +110,50 @@ renameTypeScheme subs (Forall vars cons ty)
       (substitute subs' ty)
 
 -- | Gets the C from a type of format: C a_1 a_2 .. a_n
-getCtor :: Type -> Maybe TyCon
-getCtor (TyCon con) = Just con
-getCtor (TyApp con _) = getCtor con
-getCtor _ = Nothing
+extractCtor :: Type -> Maybe TyCon
+extractCtor (TyCon con) = Just con
+extractCtor (TyApp con _) = extractCtor con
+extractCtor _ = Nothing
 
-freeInType :: Type -> Set Identifier
+freeInType :: Type -> Set Ident
 freeInType (TyVar name) = S.singleton name
 freeInType (TyApp con arg) = freeInType con `S.union` freeInType arg
 freeInType _ = S.empty
 
-freeInScheme :: TypeScheme -> Set Identifier
+freeInScheme :: TypeScheme -> Set Ident
 freeInScheme (Forall vars _ ty) = freeInType ty `S.difference` vars
 
-nestedFunc :: Type -> String
-nestedFunc ty@(TyFun _ _) = "(" ++ showType ty ++ ")"
-nestedFunc ty = showType ty
+renderType :: Type -> Doc
+renderType (TyVar name) = text . unpack $ getIdent name
+renderType (TyFun from to) =
+  nestedFunc from <>
+  space <> text "->" <> space <>
+  renderType to
+  where
+    nestedFunc ty@(TyFun _ _) = parens $ renderType ty
+    nestedFunc ty = renderType ty
+renderType (TyApp cons arg) = renderType cons <> space <> nestedCon arg
+  where
+    nestedCon ty@TyApp{} = parens $ renderType ty
+    nestedCon ty = renderType ty
+renderType (TyCon FunCon) = text "(->)"
+renderType (TyCon (TypeCon con)) = text . unpack $ getCtor con
 
-nestedCon :: Type -> String
-nestedCon ty@TyApp{} = "(" ++ showType ty ++ ")"
-nestedCon ty = showType ty
+renderConstraints :: [Type] -> Doc
+renderConstraints [] = mempty
+renderConstraints cs
+  = let cons' = fold . intersperse (comma <> space) $ fmap renderType cs
+    in
+      if length cs > 1
+      then parens cons'
+      else cons'
 
-showType :: Type -> String
-showType (TyVar name) = name
-showType (TyFun from to) = nestedFunc from ++ " -> " ++ showType to
-showType (TyApp cons arg) = showType cons ++ " " ++ nestedCon arg
-showType (TyCon FunCon) = "(->)"
-showType (TyCon (TypeCon con)) = con
-
-showConstraints :: [Type] -> String
-showConstraints [] = ""
-showConstraints cons
-  = let cons' = intercalate ", " $ fmap showType cons
-    in (if length cons > 1 then "(" ++ cons' ++ ")"
-       else cons') ++ "=> "
-
-showTypeScheme :: TypeScheme -> String
-showTypeScheme (Forall vars cons ty)
-  | vars == S.empty = showConstraints cons ++ showType ty
-  | otherwise = unwords ("forall" : S.toList vars) ++ ". " ++ showConstraints cons ++ showType ty
+renderTypeScheme :: TypeScheme -> Doc
+renderTypeScheme (Forall vars cons ty)
+  | vars == S.empty = renderConstraints cons <> renderType ty
+  | otherwise =
+      text "forall" <> space <>
+      fold (intersperse space . fmap (text . unpack . getIdent) $ S.toList vars)
+      <> text "." <> space <>
+      renderConstraints cons <> text "=>" <> space <>
+      renderType ty

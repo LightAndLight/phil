@@ -1,6 +1,8 @@
-{ mkDerivation, alex, array, base, bifunctors, containers
-, directory, dlist, filepath, free, happy, haskeline, hspec, lens
-, mtl, optparse-applicative, pretty, QuickCheck, semigroups, stdenv
+{ mkDerivation, ansi-wl-pprint, array, base, bifunctors, containers
+, directory, dlist, filepath, free, haskeline, hspec
+, indentation-trifecta, lens, mtl, optparse-applicative, parsers
+, QuickCheck, semigroups, stdenv, text, trifecta
+, unordered-containers
 }:
 mkDerivation {
   pname = "phil";
@@ -9,21 +11,18 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [
-    array base bifunctors containers dlist free lens mtl pretty
-    semigroups
+    ansi-wl-pprint array base bifunctors containers dlist free
+    indentation-trifecta lens mtl parsers semigroups text trifecta
+    unordered-containers
   ];
-  libraryToolDepends = [ alex happy ];
   executableHaskellDepends = [
-    base bifunctors containers directory filepath free haskeline lens
-    mtl optparse-applicative semigroups
+    ansi-wl-pprint base bifunctors containers directory filepath free
+    haskeline lens mtl optparse-applicative semigroups text trifecta
   ];
   testHaskellDepends = [
-    base containers hspec lens mtl QuickCheck semigroups
+    base containers hspec lens mtl QuickCheck semigroups text
   ];
-  testToolDepends = [ alex happy ];
   homepage = "https://gitlab.com/lightandlight/phil";
-  description = "A pure functional language that compiles to PHP";
+  description = "Initial project template from stack";
   license = stdenv.lib.licenses.bsd3;
-
-  doHaddock = false; # Haddock template haskell bug
 }

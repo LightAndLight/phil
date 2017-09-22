@@ -9,26 +9,26 @@ import Phil.Core.AST.Pattern
 import Phil.Core.AST.Types
 import Phil.Typecheck.Unification
 
-type Placeholder = (Identifier, NonEmpty Type)
+type Placeholder = (Ctor, NonEmpty Type)
 
 subPlaceholders subs (DictPlaceholder (className, tyArgs))
   = DictPlaceholder (className, substitute subs <$> tyArgs)
-subPlaceholders subs expr = expr
+subPlaceholders _ expr = expr
 
 data Expr
-  = Id Identifier
+  = Id Ident
   | Lit Literal
-  | Prod Identifier [Expr]
+  | Prod Ctor [Expr]
   | App Expr Expr
-  | Abs Identifier Expr
+  | Abs Ident Expr
   | Let (Binding Expr) Expr
   | Rec (Binding Expr) Expr
   | Case Expr (NonEmpty (Pattern, Expr))
   | DictPlaceholder Placeholder
-  | RecPlaceholder Identifier
-  | DictVar Identifier
-  | DictInst Identifier (NonEmpty Identifier)
-  | DictSel Identifier Expr
-  | DictSuper Identifier Expr
+  | RecPlaceholder Ident
+  | DictVar Ident
+  | DictInst Ctor (NonEmpty Ctor)
+  | DictSel Ident Expr
+  | DictSuper Ctor Expr
   | Error String
   deriving (Eq, Show)

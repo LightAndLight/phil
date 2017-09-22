@@ -1,5 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
+{-# LANGUAGE OverloadedStrings #-}
 module Phil.PHP.AST
   ( PHP(..)
   , PHPId
@@ -19,21 +20,25 @@ module Phil.PHP.AST
   )
   where
 
-import           Data.String
+import Control.Lens
+import Data.Monoid
+import Data.String
+import Data.Text (Text, pack)
 
 data PHP = PHP [PHPDecl]
-newtype PHPId = PHPId { unPHPId :: String }
+newtype PHPId = PHPId { unPHPId :: Text }
   deriving (Eq, Show, Ord)
 
-phpId :: String -> PHPId
+phpId :: Text -> PHPId
 phpId input = PHPId $ go input
   where
-    go "" = ""
-    go ('\'':rest) = "Prime" ++ go rest
-    go (c:rest) = c : go rest
+    go i = case uncons i of
+      Nothing -> ""
+      Just ('\'', rest) -> "Prime" <> go rest
+      Just (c, rest) -> cons c $ go rest
 
 instance IsString PHPId where
-  fromString = phpId
+  fromString = phpId . pack
 
 data PHPDecl
   = PHPDeclFunc PHPId [PHPArg] [PHPStatement]
@@ -89,7 +94,7 @@ data PHPSwitchCase = PHPSwitchCase PHPLiteral [PHPStatement] Bool
 data PHPDefaultCase = PHPDefaultCase [PHPStatement] Bool
 data PHPLiteral
   = PHPBool Bool
-  | PHPInt Int
+  | PHPInt Integer
   | PHPString String
   | PHPNull
   | PHPArray [PHPExpr]

@@ -1,9 +1,11 @@
 module Phil.AST where
 
-import Control.Lens
 import Data.Bifunctor
-import Data.Char
-import Data.Foldable
+import Data.Monoid
+
+import qualified Data.Text as T
+
+import Phil.Core.AST.Identifier
 
 import qualified Phil.Core.AST.Binding as C
 import qualified Phil.Core.AST.Definitions as C
@@ -11,7 +13,6 @@ import qualified Phil.Core.AST.Expr as C
 import qualified Phil.AST.Binding as L
 import qualified Phil.AST.Definitions as L
 import qualified Phil.AST.Expr as L
-import Phil.Sugar
 
 toCore :: L.Definition -> C.Definition
 toCore (L.Data name typeArgs constructors) = C.Data name typeArgs constructors
@@ -42,9 +43,11 @@ toCoreExpr (L.Rec binding expr) = C.Rec (toCoreBinding binding) (toCoreExpr expr
 toCoreExpr (L.Case expr branches) = C.Case (toCoreExpr expr) $ fmap (second toCoreExpr) branches
 toCoreExpr (L.Error err) = C.Error err
 toCoreExpr (L.DictVar a) = C.Id a
-toCoreExpr (L.DictInst className instArgs) = C.Id $ fmap toLower className ++ fold instArgs
-toCoreExpr (L.DictSel className expr) = C.Select (toCoreExpr expr) className
-toCoreExpr (L.DictSuper className expr) = C.Select (toCoreExpr expr) className
+toCoreExpr (L.DictInst className instArgs) =
+  C.Id . Ident $ (T.toLower . getCtor) className <>
+  foldMap getCtor instArgs
+toCoreExpr (L.DictSel className expr) = C.Select (toCoreExpr expr) $ getIdent className
+toCoreExpr (L.DictSuper className expr) = C.Select (toCoreExpr expr) $ getCtor className
 toCoreExpr expr = error $ "toCoreExpr: invalid argument: " ++ show expr
 
 everywhere :: (L.Expr -> L.Expr) -> L.Expr -> L.Expr

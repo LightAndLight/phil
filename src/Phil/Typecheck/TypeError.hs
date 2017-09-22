@@ -1,34 +1,35 @@
 {-# language TemplateHaskell #-}
-
 module Phil.Typecheck.TypeError where
 
-import Control.Applicative
 import Control.Lens
 import Data.List
 import Data.List.NonEmpty (NonEmpty)
-import qualified Data.Set as S
 import Data.Set (Set)
-import Text.PrettyPrint
+import Data.Text (unpack)
+import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+
+import qualified Data.Set as S
 
 import Phil.Core.AST.Identifier
-import Phil.Core.AST.InstanceHead
 import Phil.Core.AST.Types
 import Phil.ErrorMsg
 import Phil.Typecheck.Unification
 
 data TypeError
-  = NotInScope Identifier
-  | PatternArgMismatch Identifier Int Int
-  | AlreadyDefined Identifier
-  | DuplicateTypeSignatures Identifier
+  = VarNotInScope Ident
+  | CtorNotInScope Ctor
+  | VarAlreadyDefined Ident
+  | CtorAlreadyDefined Ctor
+  | PatternArgMismatch Ctor Int Int
+  | DuplicateTypeSignatures Ident
   | CouldNotDeduce [Type] [Type]
-  | NoSuchClass Identifier
-  | NoSuchInstance Identifier (NonEmpty Type)
-  | NonClassFunction Identifier Identifier
-  | MissingClassFunctions Identifier (NonEmpty (Identifier, [Identifier])) (Set Identifier)
+  | NoSuchClass Ctor
+  | NoSuchInstance Ctor (NonEmpty Type)
+  | NonClassFunction Ctor Ident
+  | MissingClassFunctions Ctor (NonEmpty (Ctor, [Ident])) (Set Ident)
   | MissingSuperclassInst
-      (Identifier, NonEmpty (Identifier, [Identifier]))
-      (Identifier, NonEmpty (Identifier, [Identifier]))
+      (Ctor, NonEmpty (Ctor, [Ident]))
+      (Ctor, NonEmpty (Ctor, [Ident]))
   | TypeMismatch TypeScheme TypeScheme
   | TUnificationError (UnificationError Type)
   deriving (Eq, Show)
@@ -39,36 +40,51 @@ makeClassyPrisms ''TypeError
 -- typeErrorMsg = previews _TypeError toMessage
 typeErrorMsg = toMessage
   where
-    toMessage (NotInScope var)
+    toMessage (VarNotInScope var)
       = errorMsg "Variable not in scope" $
         hsep
           [ text "Variable"
-          , quotes $ text var
+          , squotes . text . unpack $ getIdent var
+          , text "not in scope"
+          ]
+
+    toMessage (CtorNotInScope ctor)
+      = errorMsg "Constructor not in scope" $
+        hsep
+          [ text "Constructor"
+          , squotes . text . unpack $ getCtor ctor
           , text "not in scope"
           ]
 
     toMessage (PatternArgMismatch constructor actual expected)
       = errorMsg "Pattern arguments mismatch" $
         hsep
-          [ quotes $ text constructor
+          [ squotes . text . unpack $ getCtor constructor
           , text "was given"
           , text $ show actual
           , text  "arguments, but requires"
           , text $ show expected
           ]
-        
-    toMessage (AlreadyDefined name)
+
+    toMessage (VarAlreadyDefined name)
       = errorMsg "Name already defined" $
         hsep
-          [ quotes $ text name
-          , text "is already defined in this file"
+          [ squotes . text . unpack $ getIdent name
+          , text "is already defined"
+          ]
+
+    toMessage (CtorAlreadyDefined name)
+      = errorMsg "Constructor already defined" $
+        hsep
+          [ squotes . text . unpack $ getCtor name
+          , text "is already defined"
           ]
 
     toMessage (DuplicateTypeSignatures function)
       = errorMsg "Duplicate type signatures" $
         hsep
           [ text "Type signature for"
-          , quotes $ text function
+          , squotes . text . unpack $ getIdent function
           , text "is defined multiple times"
           ]
 
@@ -76,16 +92,16 @@ typeErrorMsg = toMessage
       = errorMsg "Constraint error" $
         hsep
           [ text "Could not deduce"
-          , text $ showConstraints targets
+          , renderConstraints targets
           , text "from"
-          , text $ showConstraints given
+          , renderConstraints given
           ]
 
     toMessage (NoSuchClass className)
       = errorMsg "Class not found" $
         hsep
           [ text "Class"
-          , quotes $ text className
+          , squotes . text . unpack $ getCtor className
           , text "cannot be found"
           ]
 
@@ -93,16 +109,16 @@ typeErrorMsg = toMessage
       = errorMsg "Instance not found" $
         hsep
           [ text "Could not find instance"
-          , quotes . text . showType $ toType (className, args)
+          , squotes . renderType $ toType (className, args)
           , text "for class"
-          , quotes $ text className
+          , squotes . text . unpack $ getCtor className
           ]
     toMessage (NonClassFunction className function)
       = errorMsg "Invalid instance definition" $ 
         hsep
-          [ quotes $ text function
+          [ squotes . text . unpack $ getIdent function
           , text "is not a member of the"
-          , quotes $ text className
+          , squotes . text . unpack $ getCtor className
           , text "class"
           ]
 
@@ -110,22 +126,22 @@ typeErrorMsg = toMessage
       = errorMsg "Invalid instance definition" $
         hsep
           [ text "Instance"
-          , quotes . text . showType $
+          , squotes . renderType $
               toType (className, toTypeTyVars <$> args)
           , text "does not implement required functions:"
           , hcat . intersperse (comma <> space) .
-              fmap text . S.toList $ notImplemented
+              fmap (text . unpack . getIdent) . S.toList $ notImplemented
           ]
 
     toMessage (MissingSuperclassInst target required)
       = errorMsg "Invalid instance definition" $
         hsep
           [ text "Could not find instance"
-          , quotes (text . showType . toType $ over (_2.mapped) toTypeTyVars required) <> 
+          , squotes (renderType . toType $ over (_2.mapped) toTypeTyVars required) <> 
               text "."
           , brackets $ hsep
               [ text "Required by"
-              , quotes . text . showType .
+              , squotes . renderType .
                   toType $ over (_2.mapped) toTypeTyVars target
               ]
           ]
@@ -135,11 +151,11 @@ typeErrorMsg = toMessage
         vcat
           [ hsep
             [ text "Expected:"
-            , text $ showTypeScheme expected
+            , renderTypeScheme expected
             ]
           , hsep
             [ text "Actual:"
-            , text $ showTypeScheme actual
+            , renderTypeScheme actual
             ]
           ]
 
@@ -148,14 +164,14 @@ typeErrorMsg = toMessage
         vcat
           [ text "Cannot unify"
           , text ""
-          , text $ showType ty
+          , renderType ty
           , text "with"
-          , hsep [text $ showType ty']
+          , hsep [renderType ty']
           ]
 
     toMessage (TUnificationError (Occurs var ty))
       = errorMsg "Type error" $
         hsep
           [ text "Cannot constuct infinite type"
-          , quotes $ hsep [text var, text "=", text $ showType ty]
+          , squotes $ hsep [text . unpack $ getIdent var, text "=", renderType ty]
           ]

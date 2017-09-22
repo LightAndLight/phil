@@ -1,48 +1,48 @@
-{-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE ConstraintKinds       #-}
-{-# LANGUAGE FlexibleContexts       #-}
-{-# LANGUAGE MultiParamTypeClasses       #-}
-
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Phil.Typecheck where
 
-import           Control.Applicative
-import Control.Arrow ((***))
-import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.Fresh
-import           Control.Monad.Reader
-import           Control.Monad.State
+import Control.Applicative
+import Control.Lens
+import Control.Monad.Except
+import Control.Monad.Fresh
+import Control.Monad.Reader
+import Control.Monad.State
 import Data.Bifunctor
-import           Data.Foldable
-import Data.List
-import           Data.List.NonEmpty   (NonEmpty (..))
-import qualified Data.List.NonEmpty   as N
-import           Data.Map             (Map)
-import qualified Data.Map             as M
-import           Data.Maybe
-import           Data.Monoid
-import           Data.Set             (Set)
-import qualified Data.Set             as S
-import           Data.Traversable
+import Data.Foldable
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.Map (Map)
+import Data.Maybe
+import Data.Monoid
+import Data.Set (Set)
+import Data.Text (pack)
+import Data.Traversable
 
-import           Phil.AST (everywhere, toCoreExpr)
-import           Phil.AST.Binding
-import           Phil.AST.Definitions
-import           Phil.AST.Expr
-import           qualified Phil.Core.AST.Expr as C
-import           Phil.Core.AST.Identifier
-import           Phil.Core.AST.InstanceHead
-import           Phil.Core.AST.Lens
-import           Phil.Core.AST.Literal
-import           Phil.Core.AST.Types
-import           Phil.Core.AST.Pattern
-import           Phil.Core.AST.ProdDecl
+import qualified Data.List.NonEmpty   as N
+import qualified Data.Map             as M
+import qualified Data.Set             as S
+
+import Phil.AST (everywhere, toCoreExpr)
+import Phil.AST.Binding
+import Phil.AST.Definitions
+import Phil.AST.Expr
+import Phil.Core.AST.Identifier
+import Phil.Core.AST.InstanceHead
+import Phil.Core.AST.Literal
+import Phil.Core.AST.Types
+import Phil.Core.AST.Pattern
+import Phil.Core.AST.ProdDecl
 import Phil.Core.Kinds
-import Phil.Sugar (asClassInstanceP, desugarExpr)
+import Phil.Sugar (desugarExpr)
 import Phil.Typecheck.Entailment
 import Phil.Typecheck.TypeError
 import Phil.Typecheck.Unification
 import Phil.Typeclasses
+
+import qualified Phil.Core.AST.Expr as C
 
 data ContextEntry
   -- | Overloaded function entry
@@ -59,9 +59,9 @@ subContextEntry subs entry
 
 data InferenceState
   = InferenceState
-    { _isContext    :: Map Identifier ContextEntry
-    , _isTypesignatures :: Map Identifier TypeScheme
-    , _isKindTable  :: Map Identifier Kind
+    { _isContext    :: Map (Either Ident Ctor) ContextEntry
+    , _isTypesignatures :: Map (Either Ident Ctor) TypeScheme
+    , _isKindTable  :: Map (Either Ident Ctor) Kind
     , _isTcContext :: [TypeclassEntry C.Expr]
     }
 
@@ -72,19 +72,19 @@ initialInferenceState
   { _isContext = M.empty
   , _isTypesignatures = M.empty
   , _isKindTable = M.fromList 
-      [ ("Int", Star)
-      , ("Bool", Star)
-      , ("String", Star)
-      , ("Char", Star)
+      [ (Right $ Ctor "Int", Star)
+      , (Right $ Ctor "Bool", Star)
+      , (Right $ Ctor "String", Star)
+      , (Right $ Ctor "Char", Star)
       ]
   , _isTcContext = []
   }
 
 class HasContext s where
-  context :: Lens' s (Map Identifier ContextEntry)
+  context :: Lens' s (Map (Either Ident Ctor) ContextEntry)
 
 class HasTypesignatures s where
-  typesignatures :: Lens' s (Map Identifier TypeScheme)
+  typesignatures :: Lens' s (Map (Either Ident Ctor) TypeScheme)
 
 instance HasContext InferenceState where
   context = inferenceState . isContext
@@ -104,19 +104,21 @@ lookupId ::
   , AsTypeError e
   , MonadError e m
   )
-  => Identifier
+  => Either Ident Ctor
   -> m ContextEntry
 lookupId name = do
   maybeTy <- view (context . at name)
   case maybeTy of
     Just ty -> return ty
-    Nothing -> throwError $ _NotInScope # name
+    Nothing ->
+      throwError $
+      either (review _VarNotInScope) (review _CtorNotInScope) name
 
 conArgTypes :: Type -> (Type,[Type])
 conArgTypes (TyFun from to) = (from :) <$> conArgTypes to
 conArgTypes ty = (ty,[])
 
-free :: Map Identifier TypeScheme -> Set Identifier
+free :: Map a TypeScheme -> Set Ident
 free = foldMap freeInScheme
 
 -- | Generalize a type scheme
@@ -148,7 +150,7 @@ generalize subs tcenv expr cons ty = do
   let expr' = everywhere (subPlaceholders subs) expr
 
   let placeholders
-        = ctorAndArgs <$> simplCons :: [(Identifier, [Type])]
+        = ctorAndArgs <$> simplCons :: [(Ctor, [Type])]
 
   (deferred, dictVars, expr'') <-
     resolveAllPlaceholders
@@ -168,8 +170,8 @@ generalize subs tcenv expr cons ty = do
 
 freshTyVar :: (MonadFresh m, HasKindTable s, MonadState s m) => m Type
 freshTyVar = do
-  name <- ("t" ++) <$> fresh
-  updateKindTable <- M.insert name <$> freshKindVar
+  name <- Ident . ("t" <>) <$> fresh
+  updateKindTable <- M.insert (Left name) <$> freshKindVar
   kindTable %= updateKindTable
   return $ TyVar name
 
@@ -203,10 +205,10 @@ kindPreservingSubstitution subs = go $ getSubstitution subs
     go [] = pure ()
     go ((name, targetType):rest) = do
       table <- view kindTable
-      kind <- lookupKind name table
+      kind <- lookupKind (Left name) table
       case targetType of
         TyVar name' -> do
-          kind' <- lookupKind name' table
+          kind' <- lookupKind (Left name') table
           either (throwError . review _KUnificationError) (const $ go rest) $ unify [(kind, kind')]
         _ -> go rest
 
@@ -299,30 +301,33 @@ patType ::
   , MonadError e m
   )
   => Pattern
-  -> m (Map Identifier ContextEntry,Type)
+  -> m (Map (Either Ident Ctor) ContextEntry, Type)
 patType (PatId name) = do
   ty <- freshTyVar
-  return (M.singleton name . FEntry $ Forall S.empty [] ty,ty)
+  return (M.singleton (Left name) . FEntry $ Forall S.empty [] ty,ty)
 patType (PatCon conName args) = do
-  (_,conTy) <- instantiate . typeScheme =<< lookupId conName
+  (_,conTy) <- instantiate . typeScheme =<< lookupId (Right conName)
   let (retTy,argTys) = conArgTypes conTy
       actualArgs = length args
       expectedArgs = length argTys
   when (actualArgs /= expectedArgs) .
     throwError $ _PatternArgMismatch # (conName, actualArgs, expectedArgs)
-  let boundVars = foldr (\(arg,argTy) -> M.insert arg (FEntry $ Forall S.empty [] argTy)) M.empty $ zip args argTys
+  let boundVars = foldr (\(arg,argTy) -> M.insert (Left arg) (FEntry $ Forall S.empty [] argTy)) M.empty $ zip args argTys
   return (boundVars,retTy)
-patType (PatLit (LitInt p)) = return (M.empty, TyCtor "Int")
-patType (PatLit (LitString p)) = return (M.empty, TyCtor "String")
-patType (PatLit (LitChar p)) = return (M.empty, TyCtor "Char")
-patType (PatLit (LitBool p)) = return (M.empty, TyCtor "Bool")
+patType (PatLit (LitInt p)) = return (M.empty, TyCtor $ Ctor "Int")
+patType (PatLit (LitString p)) = return (M.empty, TyCtor $ Ctor "String")
+patType (PatLit (LitChar p)) = return (M.empty, TyCtor $ Ctor "Char")
+patType (PatLit (LitBool p)) = return (M.empty, TyCtor $ Ctor "Bool")
 patType PatWildcard = (,) M.empty <$> freshTyVar
 
 runWithContext
   :: ( AsTypeError e
      , AsKindError e
      , MonadError e m
-     ) => Map Identifier ContextEntry -> Expr -> m (Expr, TypeScheme)
+     )
+  => Map (Either Ident Ctor) ContextEntry
+  -> Expr
+  -> m (Expr, TypeScheme)
 runWithContext ctxt
   = runFreshT .
     flip evalStateT initialInferenceState .
@@ -348,9 +353,12 @@ inferType e = case e of
             ((className, N.fromList instArgs) :)
             <$> consToPlaceholders rest
 
-    inferIdent :: MonadW r e s m => Identifier -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
+    inferIdent
+      :: MonadW r e s m
+      => Ident
+      -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
     inferIdent name = do
-      entry <- lookupId name
+      entry <- lookupId (Left name)
       case entry of
         OEntry scheme -> do
           ([cons], ty) <- instantiate scheme
@@ -384,10 +392,10 @@ inferType e = case e of
             )
 
     inferLiteral lit = case lit of
-      LitInt _ -> return (mempty, [], [], TyCtor "Int", Lit lit)
-      LitString _ -> return (mempty, [], [], TyCtor "String", Lit lit)
-      LitChar _ -> return (mempty, [], [], TyCtor "Char", Lit lit)
-      LitBool _ -> return (mempty, [], [], TyCtor "Bool", Lit lit)
+      LitInt _ -> return (mempty, [], [], TyCtor $ Ctor "Int", Lit lit)
+      LitString _ -> return (mempty, [], [], TyCtor $ Ctor "String", Lit lit)
+      LitChar _ -> return (mempty, [], [], TyCtor $ Ctor "Char", Lit lit)
+      LitBool _ -> return (mempty, [], [], TyCtor $ Ctor "Bool", Lit lit)
 
     inferApp f x = do
       (s1, cons1, env1, t1, f') <- inferType f
@@ -406,7 +414,7 @@ inferType e = case e of
     inferAbs x expr = do
       b <- freshTyVar
       (s1, cons, env, t1, expr') <-
-        local (over context $ M.insert x (FEntry $ Forall S.empty [] b)) $ inferType expr
+        local (over context $ M.insert (Left x) (FEntry $ Forall S.empty [] b)) $ inferType expr
       return
         ( s1
         , cons
@@ -422,7 +430,8 @@ inferType e = case e of
         (s2, cons2, env2, t2, rest', e'') <- local (over context $ fmap (subContextEntry s1)) $ do
           env <- use tcContext
           (e'', t1') <- generalize s1 env e' cons1 t1
-          (s2, cons2, env2, t2, rest') <- local (over context $ M.insert x (FEntry t1')) $ inferType rest 
+          (s2, cons2, env2, t2, rest') <-
+            local (over context $ M.insert (Left x) (FEntry t1')) $ inferType rest
           pure (s2, cons2, env2, t2, rest', e'')
         return
           ( s1 <> s2
@@ -438,7 +447,7 @@ inferType e = case e of
       VariableBinding name value -> do
         freshVar <- freshTyVar
         (s1, cons1, env1, t1, value') <-
-          local (over context . M.insert name . REntry $ Forall S.empty [] freshVar) $ inferType value
+          local (over context . M.insert (Left name) . REntry $ Forall S.empty [] freshVar) $ inferType value
         s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
         (s3, cons2, env2, t2, rest', value'') <- local (over context $ fmap (subContextEntry s1)) $ do
 
@@ -453,7 +462,7 @@ inferType e = case e of
               (everywhere (subPlaceholders s2 . replacePlaceholder replacement) value')
               (substitute s2 <$> cons1)
               (substitute s2 t1)
-          local (over context $ M.insert name $ FEntry t1') $ do
+          local (over context $ M.insert (Left name) $ FEntry t1') $ do
             (sub, cons, env, ty, rest') <- inferType rest
             pure (sub, cons, env, ty, rest', value'')
         pure
@@ -511,7 +520,7 @@ inferTypeScheme e = do
 -- _:xs -> ([Id "a1"], Abs "a1")
 buildDataCon :: ProdDecl -> Expr
 buildDataCon (ProdDecl dataCon argTys)
-  = let (args, expr) = go (take (length argTys) (mappend "a" . show <$> [1..]))
+  = let (args, expr) = go (take (length argTys) (Ident . pack . ("a" <>) . show <$> [1..]))
     in expr $ Prod dataCon args
   where
     go [] = ([], id)
@@ -529,12 +538,12 @@ checkDefinition
      , MonadError e m
      )
   => Definition
-  -> m (Map Identifier C.Expr, Definition)
+  -> m (Map (Either Ident Ctor) C.Expr, Definition)
 
 checkDefinition def@(ValidClass supers constructor params funcs) = do
   freshVar <- freshKindVar
-  paramKinds <- for params (\param -> (,) param <$> freshKindVar)
-  kindTable %= M.insert constructor (foldr KindArrow Constraint $ snd <$> paramKinds)
+  paramKinds <- for params (\param -> (,) (Left param) <$> freshKindVar)
+  kindTable %= M.insert (Right constructor) (foldr KindArrow Constraint $ snd <$> paramKinds)
   table <- use kindTable
   let constructorTy = foldl' TyApp (TyCon $ TypeCon constructor) $ TyVar <$> params
   let supersTys = toTypeTyVars <$> supers
@@ -544,7 +553,8 @@ checkDefinition def@(ValidClass supers constructor params funcs) = do
       let freeVars =
             foldMap freeInType (S.fromList $ fmap snd funcs) `S.difference`
             foldMap freeInType (S.fromList $ constructorTy : supersTys)
-      varsWithKinds <- fmap M.fromList . for (S.toList freeVars) $ \var -> (,) var <$> freshKindVar
+      varsWithKinds <-
+        fmap M.fromList . for (S.toList freeVars) $ \var -> (,) (Left var) <$> freshKindVar
       local (M.union varsWithKinds) $ do
         subs' <- checkSignatures $ fmap snd funcs
         (subs'', kind) <- local (fmap $ substitute subs') $ inferKind (TyCon (TypeCon constructor))
@@ -553,14 +563,14 @@ checkDefinition def@(ValidClass supers constructor params funcs) = do
   checkedFuncs <- for funcs $ \(name, ty) -> do
     env <- use tcContext
     (expr, checkedFuncTy) <- get >>= runReaderT (generalize mempty env (Error "Not implemented") [constructorTy] ty)
-    context %= M.insert name (OEntry checkedFuncTy)
+    context %= M.insert (Left name) (OEntry checkedFuncTy)
     pure ((name, checkedFuncTy), (name, toCoreExpr expr))
   tctxt <- use tcContext
   let members = M.fromList (fst <$> checkedFuncs)
   let newClass = TceClass supers constructor params members
   tcContext %= (newClass :)
   pure
-    ( M.fromList $ snd <$> checkedFuncs
+    ( M.fromList . over (mapped._1) Left $ snd <$> checkedFuncs
     , ValidClass supers constructor params funcs
     )
   where
@@ -578,7 +588,8 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   let params' = toTypeTyVars <$> params
   let constructorTy = toType (constructor, params')
   let supersTys = toTypeTyVars <$> supers
-  tyVars <- M.fromList <$> traverse (\ty -> (,) ty <$> freshKindVar) (S.toList $ foldMap freeInType supersTys)
+  tyVars <-
+    M.fromList <$> traverse (\ty -> (,) (Left ty) <$> freshKindVar) (S.toList $ foldMap freeInType supersTys)
   kindTable %= M.union tyVars
   get >>= runReaderT (inferKind constructorTy)
   TceClass classSupers _ classArgs members <- tryGetClass tctxt constructor
@@ -587,10 +598,10 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
   let classSupers' = over (mapped._2.mapped) (fromJust . flip M.lookup mapping) classSupers
 
   classSuperInsts <- traverse (uncurry $ tryGetInst tctxt) classSupers'
-      
+
   let supersPlaceholders =
         zip (over (mapped._2.mapped) TyVar supers) $
-        Just . DictVar . ("dict" ++) . fst <$> supers
+        Just . DictVar . Ident . ("dict" <>) . getCtor . fst <$> supers
 
   checkAllMembersImplemented members impls
 
@@ -670,7 +681,11 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           Right sub -> Just (sub, rest)
           Left _ -> second (con' :) <$> go con rest
 
-    tryGetClass :: (AsTypeError e, MonadError e m) => [TypeclassEntry a] -> Identifier -> m (TypeclassEntry a)
+    tryGetClass
+      :: (AsTypeError e, MonadError e m)
+      => [TypeclassEntry a]
+      -> Ctor
+      -> m (TypeclassEntry a)
     tryGetClass tctxt cons
       = maybe
           (throwError $ _NoSuchClass # cons)
@@ -684,62 +699,74 @@ checkDefinition (ValidInstance supers instHead@(InstanceHead constructor params)
           pure
           (getInst tctxt targetCons $ fst <$> targetParams)
 
-    tryGetImpl :: (AsTypeError e, MonadError e m) => Identifier -> NonEmpty Type -> Identifier -> Map Identifier TypeScheme -> m TypeScheme
+    tryGetImpl
+      :: (AsTypeError e, MonadError e m)
+      => Ctor
+      -> NonEmpty Type
+      -> Ident
+      -> Map Ident TypeScheme
+      -> m TypeScheme
     tryGetImpl cons params implName members
       = maybe
           (throwError $ _NonClassFunction # (cons, implName))
           pure
           (M.lookup implName members)
-          
 
 checkDefinition def@(Data tyCon tyVars decls) = do
   table <- use kindTable
   kind <- runReaderT (checkDefinitionKinds tyCon tyVars decls) table
-  kindTable %= M.insert tyCon kind
+  kindTable %= M.insert (Right tyCon) kind
   let tyVars' = fmap TyVar tyVars
-  liftA2 (,) (M.fromList <$> traverse (checkDataDecl tyCon tyVars') (N.toList decls)) $ pure def
+  liftA2
+    (,)
+    (M.fromList <$> traverse (checkDataDecl tyCon tyVars') (N.toList decls))
+    (pure def)
   where
     checkDataDecl tyCon tyVars p@(ProdDecl dataCon argTys) = do
-      maybeCon <- use (context . at dataCon)
+      maybeCon <- use (context . at (Right dataCon))
       case maybeCon of
-        Just _ -> throwError $ _AlreadyDefined # dataCon
+        Just _ -> throwError $ _CtorAlreadyDefined # dataCon
         Nothing -> do
           let conTy = flip (foldr TyFun) argTys $ foldl' TyApp (TyCon $ TypeCon tyCon) tyVars
           ctxt <- use context
           let conExpr = buildDataCon p
           env <- use tcContext
           (conExpr', conTy') <- get >>= runReaderT (generalize mempty env conExpr [] conTy)
-          context %= M.insert dataCon (CEntry conTy')
-          return (dataCon, toCoreExpr $ desugarExpr conExpr')
+          context %= M.insert (Right dataCon) (CEntry conTy')
+          return (Right dataCon, toCoreExpr $ desugarExpr conExpr')
 
 checkDefinition (Function (VariableBinding name expr)) = do
-  maybeVar <- uses context (M.lookup name)
+  maybeVar <- uses context (M.lookup $ Left name)
   case maybeVar of
     Nothing -> do
       ctxt <- use context
       (expr', ty) <- get >>= runReaderT (inferTypeScheme expr)
-      maybeSig <- use (typesignatures . at name)
+      maybeSig <- use (typesignatures . at (Left name))
       case maybeSig of
-        Nothing -> context %= M.insert name (FEntry ty)
+        Nothing -> context %= M.insert (Left name) (FEntry ty)
         Just expected -> do
           get >>= runReaderT (special ty expected)
-          context %= M.insert name (FEntry expected)
-      return (M.singleton name . toCoreExpr $ desugarExpr expr', Function $ VariableBinding name expr')
-    _ -> throwError $ _AlreadyDefined # name
+          context %= M.insert (Left name) (FEntry expected)
+      return
+        ( M.singleton (Left name) . toCoreExpr $ desugarExpr expr'
+        , Function $ VariableBinding name expr'
+        )
+    _ -> throwError $ _VarAlreadyDefined # name
 
 checkDefinition def@(TypeSignature name scheme@(Forall vars cons ty)) = do
-  maybeSig <- use (typesignatures . at name)
+  maybeSig <- use (typesignatures . at (Left name))
   case maybeSig of
     Nothing -> do
       table <- use kindTable
       void $ do
-        kindVars <- for (S.toList vars) $ \var -> (,) var <$> freshKindVar
+        kindVars <-
+          for (S.toList vars) $ \var -> (,) (Left var) <$> freshKindVar
         flip runReaderT (M.fromList kindVars `M.union` table) $ do
           subs <- checkConstraints cons
           t <- view kindTable
           res <- local (subKindTable subs) $ inferKind ty
           pure res
-      typesignatures %= M.insert name scheme
+      typesignatures %= M.insert (Left name) scheme
     _ -> throwError $ _DuplicateTypeSignatures # name
   pure (M.empty, def)
 

@@ -3,7 +3,7 @@
 module Phil.Sugar.SyntaxError where
 
 import Control.Lens
-import Text.PrettyPrint
+import Text.PrettyPrint.ANSI.Leijen
 
 import Phil.ErrorMsg
 import Phil.Core.AST.Types
@@ -21,20 +21,20 @@ makeClassyPrisms ''SyntaxError
 syntaxErrorMsg = errorMsg "Syntax error" . toMessage
   where
     toMessage (InvalidInstanceArg ty)
-      = hsep $ text <$>
-        [ "Instance head"
-        , showType ty
-        , "may not contain type variables"
+      = hsep
+        [ text "Instance head"
+        , renderType ty
+        , text "may not contain type variables"
         ]
     toMessage (NoInstanceArgs ty)
-      = hsep $ text <$>
-        [ "Instance head"
-        , showType ty
-        , "requires at least one argument"
+      = hsep
+        [ text "Instance head"
+        , renderType ty
+        , text "requires at least one argument"
         ]
     toMessage (InvalidClassArg ty)
-      = hsep $ text <$>
-        [ "Class head"
-        , showType ty
-        , "may only contain type variables"
+      = hsep
+        [ text "Class head"
+        , renderType ty
+        , text "may only contain type variables"
         ]

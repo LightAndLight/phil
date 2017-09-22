@@ -15,14 +15,11 @@ module Phil.Typeclasses
   ) where
 
 import Control.Lens hiding (Context)
-import Control.Applicative
 import Data.Bifunctor
 import Control.Monad.Except
 import Control.Monad.Fresh
 import Control.Monad.Reader
-import Data.Traversable
 import Data.Monoid
-import Control.Monad.State
 import Data.Foldable
 import qualified Data.Set as S
 import Data.Maybe
@@ -30,31 +27,27 @@ import qualified Data.Map as M
 import Data.Map (Map)
 import qualified Data.List.NonEmpty as N
 import Data.List.NonEmpty (NonEmpty)
-import Data.Set (Set)
 
-import           Phil.AST.Definitions
-import           Phil.Core.AST.Binding
-import           Phil.Core.AST.Expr
-import           Phil.Core.AST.Identifier
-import           Phil.Core.AST.InstanceHead
-import           Phil.Core.AST.Types
-import           Phil.Core.Kinds
+import Phil.Core.AST.Identifier
+import Phil.Core.AST.InstanceHead
+import Phil.Core.AST.Types
+import Phil.Core.Kinds
 import Phil.Typecheck.Unification
 
-type Context = [(Identifier, NonEmpty Identifier)]
+type Context = [(Ctor, NonEmpty Ident)]
 
 data TypeclassEntry a
   -- | An instance entry consists of: a context, an instance head, and some function definitions
-  = TceInst Context InstanceHead (Map Identifier a)
+  = TceInst Context InstanceHead (Map Ident a)
   -- | A class entry consists of: a context, a constructor applied to one or more type variables,
   -- member type signatures
-  | TceClass Context Identifier (NonEmpty Identifier) (Map Identifier TypeScheme)
+  | TceClass Context Ctor (NonEmpty Ident) (Map Ident TypeScheme)
   deriving (Eq, Functor, Show)
 
 -- | Look up a class in the context
 getClass
   :: [TypeclassEntry a] -- ^ Typeclass context
-  -> Identifier -- ^ Class constructor
+  -> Ctor -- ^ Class constructor
   -> Maybe (TypeclassEntry a)
 getClass [] _ = Nothing
 getClass (entry@(TceClass _ className' _ _):rest) className 
@@ -65,8 +58,8 @@ getClass (_:rest) className  = getClass rest className
 -- | Look up an instance in the context
 getInst
   :: [TypeclassEntry a] -- ^ Typeclass context
-  -> Identifier -- ^ Class constructor
-  -> NonEmpty Identifier -- ^ Type constructors of the instance arguments
+  -> Ctor -- ^ Class constructor
+  -> NonEmpty Ctor -- ^ Type constructors of the instance arguments
   -> Maybe (TypeclassEntry a)
 getInst [] _ _ = Nothing
 getInst (entry@(TceInst _ instHead _) : rest) className argCons
@@ -82,16 +75,16 @@ getInst (_:rest) className argCons = getInst rest className argCons
 -- | Returns Nothing if the class doesn't exist
 getAllSuperclasses
   :: [TypeclassEntry a] -- ^ Typeclass context
-  -> Identifier
+  -> Ctor
   -> Maybe [TypeclassEntry a]
 getAllSuperclasses ctxt className = do
   TceClass supers _ _ _ <- getClass ctxt className
   join <$> traverse (go ctxt) supers
   where
-    fromMapping :: [(Identifier, Identifier)] -> Identifier -> Identifier
-    fromMapping mapping a = fromJust $ lookup a mapping
+    fromMapping :: Eq a => [(a, b)] -> a -> b
+    fromMapping m a = fromJust $ lookup a m
 
-    rename :: [(Identifier, Identifier)] -> TypeScheme -> TypeScheme
+    rename :: [(Ident, Ident)] -> TypeScheme -> TypeScheme
     rename mapping (Forall vars cons ty)
       = let subs = Substitution $ second TyVar <$> mapping
         in Forall
@@ -112,8 +105,8 @@ getAllSuperclasses ctxt className = do
 -- | Returns Nothing if the instance doesn't exist
 getSuperInsts
   :: [TypeclassEntry a] -- ^ Typeclass context
-  -> Identifier -- ^ Class constructor
-  -> NonEmpty Identifier -- ^ Type constructors of the instance arguments
+  -> Ctor -- ^ Class constructor
+  -> NonEmpty Ctor -- ^ Type constructors of the instance arguments
   -> Maybe [TypeclassEntry a]
 getSuperInsts ctxt className instArgs = do
   cls@(TceClass context _ tyArgs _) <- getClass ctxt className

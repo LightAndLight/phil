@@ -27,12 +27,12 @@ _TyFun = prism' (uncurry TyFun) $ \ty -> case ty of { TyFun from to -> Just (fro
 _TyFun' :: Type -> Type -> Prism' Type ()
 _TyFun' ty ty' = only $ TyFun ty ty'
 
-_TyCtor :: Prism' Type Identifier
+_TyCtor :: Prism' Type Ctor
 _TyCtor = prism' TyCtor $ \ty -> case ty of { TyCtor con -> Just con; _ -> Nothing }
 
 makePrisms ''TypeScheme
 
-_Forall' :: [Identifier] -> [Type] -> Prism' TypeScheme Type
+_Forall' :: [Ident] -> [Type] -> Prism' TypeScheme Type
 _Forall' vars cons = prism' (Forall (S.fromList vars) cons) $
   \scheme -> case scheme of
     Forall vars' cons' ty
@@ -46,17 +46,17 @@ makePrisms ''Pattern
 makePrisms ''Expr
 makePrisms ''Binding
 
-_Binding' :: Identifier -> Prism' (Binding Expr) Expr
+_Binding' :: Ident -> Prism' (Binding Expr) Expr
 _Binding' name = prism' (Binding name) $
   \(Binding name' e) -> if name == name' then Just e else Nothing
 
-_Id' :: Identifier -> Prism' Expr ()
+_Id' :: Ident -> Prism' Expr ()
 _Id' = only . Id
 
 _Lit' :: Literal -> Prism' Expr ()
 _Lit' = only . Lit
 
-_Prod' :: Identifier -> Prism' Expr [Expr]
+_Prod' :: Ctor -> Prism' Expr [Expr]
 _Prod' name = prism' (Prod name) $
   \e -> case e of
     Prod name' es
@@ -64,7 +64,7 @@ _Prod' name = prism' (Prod name) $
       | otherwise -> Nothing
     _ -> Nothing
 
-_Abs' :: Identifier -> Prism' Expr Expr
+_Abs' :: Ident -> Prism' Expr Expr
 _Abs' name = prism' (Abs name) $
   \e -> case e of
     Abs name' e'

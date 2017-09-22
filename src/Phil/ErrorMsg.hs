@@ -1,6 +1,6 @@
 module Phil.ErrorMsg where
 
-import Text.PrettyPrint
+import Text.PrettyPrint.ANSI.Leijen
 
 errorMsg
   :: String -- ^ Message title
