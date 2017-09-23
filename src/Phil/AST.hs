@@ -33,7 +33,7 @@ toCoreBinding (L.VariableBinding name value) = C.Binding name $ toCoreExpr value
 toCoreBinding binding = error $ "toCore: invalid binding: " ++ show binding
 
 toCoreExpr :: L.Expr -> C.Expr
-toCoreExpr (L.Id name) = C.Id name
+toCoreExpr (L.Var name) = C.Var name
 toCoreExpr (L.Lit lit) = C.Lit lit
 toCoreExpr (L.Prod name vals) = C.Prod name $ fmap toCoreExpr vals
 toCoreExpr (L.App f x) = C.App (toCoreExpr f) (toCoreExpr x)
@@ -42,9 +42,9 @@ toCoreExpr (L.Let binding expr) = C.Let (toCoreBinding binding) (toCoreExpr expr
 toCoreExpr (L.Rec binding expr) = C.Rec (toCoreBinding binding) (toCoreExpr expr)
 toCoreExpr (L.Case expr branches) = C.Case (toCoreExpr expr) $ fmap (second toCoreExpr) branches
 toCoreExpr (L.Error err) = C.Error err
-toCoreExpr (L.DictVar a) = C.Id a
+toCoreExpr (L.DictVar a) = C.Var $ Left a
 toCoreExpr (L.DictInst className instArgs) =
-  C.Id . Ident $ (T.toLower . getCtor) className <>
+  C.Var . Left . Ident $ (T.toLower . getCtor) className <>
   foldMap getCtor instArgs
 toCoreExpr (L.DictSel className expr) = C.Select (toCoreExpr expr) $ getIdent className
 toCoreExpr (L.DictSuper className expr) = C.Select (toCoreExpr expr) $ getCtor className

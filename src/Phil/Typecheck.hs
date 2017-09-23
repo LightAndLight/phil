@@ -336,7 +336,7 @@ runWithContext ctxt
 inferType :: MonadW r s e m => Expr -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
 inferType e = case e of
   Error _ -> (,,,,) mempty [] [] <$> freshTyVar <*> pure e
-  Id name -> inferIdent name
+  Var name -> inferVar name
   Lit lit -> inferLiteral lit
   App f x -> inferApp f x
   Abs x expr -> inferAbs x expr
@@ -353,14 +353,14 @@ inferType e = case e of
             ((className, N.fromList instArgs) :)
             <$> consToPlaceholders rest
 
-    inferIdent
+    inferVar
       :: MonadW r e s m
-      => Ident
+      => Either Ident Ctor
       -> m (Substitution Type, [Type], [Placeholder], Type, Expr)
-    inferIdent name = do
-      entry <- lookupId (Left name)
-      case entry of
-        OEntry scheme -> do
+    inferVar name = do
+      entry <- lookupId name
+      case (entry, name) of
+        (OEntry scheme, Left name') -> do
           ([cons], ty) <- instantiate scheme
           ([placeholder], env) <- consToPlaceholders [cons]
           pure
@@ -368,9 +368,9 @@ inferType e = case e of
             , [cons]
             , env
             , ty
-            , DictSel name placeholder
+            , DictSel name' placeholder
             )
-        REntry scheme -> do
+        (REntry scheme, Left name') -> do
           (cons, ty) <- instantiate scheme
           (placeholders, env) <- consToPlaceholders cons
           pure
@@ -378,7 +378,7 @@ inferType e = case e of
             , cons
             , env
             , ty
-            , RecPlaceholder name
+            , RecPlaceholder name'
             )
         _ -> do
           (cons, ty) <- instantiate $ typeScheme entry
@@ -388,7 +388,7 @@ inferType e = case e of
             , cons
             , env
             , ty
-            , foldl' App (Id name) placeholders
+            , foldl' App (Var name) placeholders
             )
 
     inferLiteral lit = case lit of
@@ -451,7 +451,7 @@ inferType e = case e of
         s2 <- either (throwError . review _TUnificationError) pure . unify $ (t1,freshVar) : (first TyVar <$> getSubstitution s1)
         (s3, cons2, env2, t2, rest', value'') <- local (over context $ fmap (subContextEntry s1)) $ do
 
-          let replacement = foldl' App (Id name) $
+          let replacement = foldl' App (Var $ Left name) $
                 fmap (DictPlaceholder . over (_2.mapped) (substitute s2)) env1
 
           tcenv <- use tcContext
@@ -524,7 +524,7 @@ buildDataCon (ProdDecl dataCon argTys)
     in expr $ Prod dataCon args
   where
     go [] = ([], id)
-    go (var:vars) = bimap (Id var :) (Abs var <$>) $ go vars
+    go (var:vars) = bimap (Var (Left var) :) (Abs var <$>) $ go vars
 
 checkDefinition
   :: ( MonadFresh m

@@ -165,8 +165,12 @@ genPHPLiteral (LitChar c) = PHPString [c]
 genPHPLiteral (LitBool b) = PHPBool b
 
 genPHPExpr :: (HasScope s, MonadState s m) => Expr -> m PHPExpr
-genPHPExpr (Id name) = do
+genPHPExpr (Var (Left name)) = do
   let name' = phpId $ getIdent name
+  scope %= M.insertWith (flip const) name' Value
+  pure $ PHPExprVar name'
+genPHPExpr (Var (Right ctor)) = do
+  let name' = phpId $ getCtor ctor
   scope %= M.insertWith (flip const) name' Value
   pure $ PHPExprVar name'
 genPHPExpr (Lit lit) = pure . PHPExprLiteral $ genPHPLiteral lit

@@ -132,14 +132,15 @@ eval ::
   -> m Value
 eval (C.Lit lit) = pure $ VLiteral lit
 eval (C.Error message) = throwError $ _RuntimeError # message
-eval (C.Id name) = do
-  maybeExpr <- view $ at (Left name)
+eval (C.Var name) = do
+  maybeExpr <- view $ at name
   case maybeExpr of
     Just (VPointer expr) -> eval expr
     Just value -> pure value
-    Nothing -> do
-      table <- ask
-      throwError $ _VarNotBound # name
+    Nothing ->
+      case name of
+        Left name' -> throwError $ _VarNotBound # name'
+        Right name' -> throwError $ _CtorNotBound # name'
 eval (C.Abs name output) = VClosure <$> ask <*> pure name <*> pure output
 eval (C.App func input) = do
   func' <- eval func

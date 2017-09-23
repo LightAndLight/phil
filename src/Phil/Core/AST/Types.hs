@@ -155,5 +155,6 @@ renderTypeScheme (Forall vars cons ty)
       text "forall" <> space <>
       fold (intersperse space . fmap (text . unpack . getIdent) $ S.toList vars)
       <> text "." <> space <>
-      renderConstraints cons <> text "=>" <> space <>
+      renderConstraints cons <>
+      (if null cons then mempty else text "=>" <> space) <>
       renderType ty

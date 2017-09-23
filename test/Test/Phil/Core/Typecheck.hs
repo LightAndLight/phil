@@ -221,14 +221,14 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
       it "\\x. x : forall a. a -> a" $
         L.Abs
           (Ident "x")
-          (L.Id (Ident "x"))
+          (L.Var (Left $ Ident "x"))
 
         `hasType`
 
         (_Forall' [Ident "t0"] [] # _TyFun # (_TyVar # Ident "t0", _TyVar # Ident "t0"))
 
       it "\\x. \\y. x : forall a b. a -> b -> a" $
-        L.Abs (Ident "x") (L.Abs (Ident "y") $ L.Id (Ident "x"))
+        L.Abs (Ident "x") (L.Abs (Ident "y") $ L.Var (Left $ Ident "x"))
 
         `hasType`
 
@@ -236,8 +236,8 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
 
       it "rec fix f x = f (fix f) x in rec : forall a. (a -> a) -> a" $
         L.Rec
-          (L.VariableBinding (Ident "fix") $ L.Abs (Ident "f") $ L.App (L.Id (Ident "f")) $ L.App (L.Id $ Ident "fix") (L.Id (Ident "f")))
-          (L.Id $ Ident "fix")
+          (L.VariableBinding (Ident "fix") $ L.Abs (Ident "f") $ L.App (L.Var (Left $ Ident "f")) $ L.App (L.Var (Left $ Ident "fix")) (L.Var (Left $ Ident "f")))
+          (L.Var (Left $ Ident "fix"))
 
         `hasType`
 
@@ -245,7 +245,7 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
 
     describe "failure" $
       it "\\x. x x" $
-        runInferTypeScheme (L.Abs (Ident "x") $ L.App (L.Id (Ident "x")) $ L.Id (Ident "x")) `shouldSatisfy` has (_Left . _TUnificationError)
+        runInferTypeScheme (L.Abs (Ident "x") $ L.App (L.Var (Left $ Ident "x")) $ L.Var (Left $ Ident "x")) `shouldSatisfy` has (_Left . _TUnificationError)
 
     describe "typeclasses" $
       Test.Hspec.context "class Eq a where eq : a -> a -> Bool where ..." $ do
@@ -262,7 +262,7 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
           typeOf
             ctxt
             initialTestState
-            (L.Abs (Ident "x") $ L.Abs (Ident "y") $ L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "y")) $ L.Id (Ident "x"))
+            (L.Abs (Ident "x") $ L.Abs (Ident "y") $ L.App (L.App (L.Var (Left $ Ident "eq")) $ L.Var (Left $ Ident "y")) $ L.Var (Left $ Ident "x"))
 
           `shouldBe`
 
@@ -276,7 +276,7 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
           typeOf
             ctxt
             initialTestState
-            (L.Abs (Ident "x") $ L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "x")) $ L.Id (Ident "x"))
+            (L.Abs (Ident "x") $ L.App (L.App (L.Var (Left $ Ident "eq")) $ L.Var (Left $ Ident "x")) $ L.Var (Left $ Ident "x"))
 
           `shouldBe`
 
@@ -293,12 +293,12 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
                       # _TyFun # (_TyCtor # Ctor "Bool", _TyFun # (_TyCtor # Ctor "Bool", _TyCtor # Ctor "Bool"))
                 )
           it "\\x y. and (eq x x) (eq y y) : forall a a1. (Eq a, Eq a1) => a -> a1 -> Bool" $ do
-            let eqxx = L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "x")) $ L.Id (Ident "x")
-                eqyy = L.App (L.App (L.Id $ Ident "eq") $ L.Id (Ident "y")) $ L.Id (Ident "y")
+            let eqxx = L.App (L.App (L.Var (Left $ Ident "eq")) $ L.Var (Left $ Ident "x")) $ L.Var (Left $ Ident "x")
+                eqyy = L.App (L.App (L.Var (Left $ Ident "eq")) $ L.Var (Left $ Ident "y")) $ L.Var (Left $ Ident "y")
             typeOf
               ctxtWithAnd
               initialTestState
-              (L.Abs (Ident "x") $ L.Abs (Ident "y") $ L.App (L.App (L.Id $ Ident "and") eqxx) eqyy)
+              (L.Abs (Ident "x") $ L.Abs (Ident "y") $ L.App (L.App (L.Var (Left $ Ident "and")) eqxx) eqyy)
 
             `shouldBe`
 
@@ -321,9 +321,9 @@ typecheckSpec = describe "Phil.Core.Typecheck" $ do
                           # _TyFun # (_TyVar # Ident "a", _TyFun # (_TyVar # Ident "a", _TyCtor # Ctor "Bool"))
                     )
             it "\\x. and (eq x x) (gt x x) : forall a. (Eq a, Gt a) => a -> Bool" $ do
-              let eqxx = L.App (L.App (L.Id (Ident "eq")) $ L.Id (Ident "x")) $ L.Id (Ident "x")
-                  gtxx = L.App (L.App (L.Id (Ident "gt")) $ L.Id (Ident "x")) $ L.Id (Ident "x")
-              typeOf ctxtWithGt initialTestState (L.Abs (Ident "x") $ L.App (L.App (L.Id (Ident "and")) eqxx) gtxx)
+              let eqxx = L.App (L.App (L.Var (Left $ Ident "eq")) $ L.Var (Left $ Ident "x")) $ L.Var (Left $ Ident "x")
+                  gtxx = L.App (L.App (L.Var (Left $ Ident "gt")) $ L.Var (Left $ Ident "x")) $ L.Var (Left $ Ident "x")
+              typeOf ctxtWithGt initialTestState (L.Abs (Ident "x") $ L.App (L.App (L.Var (Left $ Ident "and")) eqxx) gtxx)
                 `shouldBe` (Right $
                   Forall
                     (S.singleton $ Ident "t10")

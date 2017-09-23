@@ -50,8 +50,14 @@ _Binding' :: Ident -> Prism' (Binding Expr) Expr
 _Binding' name = prism' (Binding name) $
   \(Binding name' e) -> if name == name' then Just e else Nothing
 
-_Id' :: Ident -> Prism' Expr ()
-_Id' = only . Id
+_Var' :: Either Ident Ctor -> Prism' Expr ()
+_Var' = only . Var
+
+_Ident' :: Ident -> Prism' Expr ()
+_Ident' = only . Var . Left
+
+_Ctor' :: Ctor -> Prism' Expr ()
+_Ctor' = only . Var . Right
 
 _Lit' :: Literal -> Prism' Expr ()
 _Lit' = only . Lit

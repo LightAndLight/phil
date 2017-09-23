@@ -16,7 +16,7 @@ subPlaceholders subs (DictPlaceholder (className, tyArgs))
 subPlaceholders _ expr = expr
 
 data Expr
-  = Id Ident
+  = Var (Either Ident Ctor)
   | Lit Literal
   | Prod Ctor [Expr]
   | App Expr Expr

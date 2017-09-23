@@ -9,7 +9,7 @@ import Phil.Core.AST.Literal
 import Phil.Core.AST.Pattern
 
 data Expr
-  = Id Ident
+  = Var (Either Ident Ctor)
   | Lit Literal
   | Prod Ctor [Expr]
   | App Expr Expr

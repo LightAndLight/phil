@@ -42,25 +42,25 @@ initialIndentationState =
   mkIndentationState
     0
     infIndentation
-    True
-    Ge
+    False
+    Gt
 
 program :: (TokenParsing m, IndentationParsing m, Monad m) => m [Definition]
 program = many definition <* eof
 
 definition :: (TokenParsing m, IndentationParsing m, Monad m) => m Definition
 definition =
-  (try dataDefinition <?> "data definition") <|>
-  (try functionDefinition <?> "function definition") <|>
+  (dataDefinition <?> "data definition") <|>
+  (classDefinition <?> "class definition") <|>
+  (instanceDefinition <?> "instance definition") <|>
   (try typeSignature <?> "type signature") <|>
-  (try classDefinition <?> "class definition") <|>
-  (instanceDefinition <?> "instance definition")
+  (functionDefinition <?> "function definition")
 
 identStyle :: CharParsing m => IdentifierStyle m
 identStyle =
   IdentifierStyle
   { _styleName = "identifier"
-  , _styleStart = letter <|> char '_'
+  , _styleStart = lower <|> char '_'
   , _styleLetter = alphaNum <|> char '_' <|> char '\''
   , _styleReserved =
     HS.fromList
@@ -101,65 +101,64 @@ constructor = Ctor <$> token (ident ctorStyle <?> "constructor")
       }
 
 type_ :: (TokenParsing m, IndentationParsing m, Monad m) => m Type
-type_ =
-  token $
-  (try tyFun <?> "function type") <|>
-  (chainl1 typeArg (pure TyApp) <?> "type application")
+type_ = token tyFun
   where
-    tyFun =
-      TyFun <$>
-      typeArg <*
-      symbol "->" <*>
-      type_
+    tyApp = chainl1 (localIndentation Gt typeArg) (pure TyApp) <?> "type application"
+    tyFun = chainr1 tyApp (localIndentation Gt $ symbol "->" $> TyFun) <?> "function type"
 
 typeArg :: (TokenParsing m, IndentationParsing m, Monad m) => m Type
 typeArg = token $ atomic <|> parens type_
   where
     atomic =
       (TyCon . TypeCon <$> constructor) <|>
-      TyVar <$> identifier
+      (TyVar <$> identifier)
 
 dataDefinition :: (TokenParsing m, IndentationParsing m, Monad m) => m Definition
 dataDefinition = do
   keyword "data"
-  tyCtor <- localIndentation Gt constructor
+  tyCtor <- constructor
   tyArgs <- many identifier
   symbolic '='
-  ctors <- sepByNonEmpty prodDecl (symbolic '|')
+  ctors <- localIndentation Gt $ sepByNonEmpty prodDecl (symbolic '|')
   pure $ Data tyCtor tyArgs ctors
   where
     prodDecl =
-      localIndentation Ge $
       ProdDecl <$>
       constructor <*>
       many typeArg
 
-functionDefinition :: (TokenParsing m, IndentationParsing m, Monad m) => m Definition
-functionDefinition =
-  fmap Function $
+functionBinding
+  :: ( TokenParsing m
+     , IndentationParsing m
+     , Monad m
+     )
+  => m (Binding Expr)
+functionBinding =
   FunctionBinding <$>
   identifier <*>
-  localIndentation Gt (many identifier) <*
+  many identifier <*
   symbolic '=' <*>
-  expr
+  localIndentation Gt expr
+
+functionDefinition :: (TokenParsing m, IndentationParsing m, Monad m) => m Definition
+functionDefinition = Function <$> functionBinding
 
 typeSignature :: (TokenParsing m, IndentationParsing m, Monad m) => m Definition
 typeSignature =
   TypeSignature <$>
   identifier <*
-  localIndentation Gt colon <*>
+  colon <*>
   typeScheme
 
 constraints :: (TokenParsing m, IndentationParsing m, Monad m) => m [Type]
-constraints =
-  (multiple <?> "one or more constraints") <|>
-  (pure <$> type_ <?> "a single constraint")
+constraints = option [] (try someConstraints <?> "constraints")
   where
-    multiple =
-      between
-        (symbolic '(')
-        (symbolic ')')
-        (sepBy1 type_ comma)
+    someConstraints = 
+      ((multiple <?> "one or more constraints") <|>
+      (pure <$> type_ <?> "a single constraint")) <*
+      localIndentation Gt (symbol "=>")
+
+    multiple = parens (sepBy1 type_ comma)
 
 typeScheme :: (TokenParsing m, IndentationParsing m, Monad m) => m TypeScheme
 typeScheme =
@@ -168,41 +167,62 @@ typeScheme =
   where
     quantified =
       Forall <$>
-      (try (keyword "forall") *>
-      (S.fromList <$> many identifier)) <*
-      dot <*>
-      ((try (constraints <* symbol "=>") <?> "constraints") <|> pure []) <*>
+      (try (localIndentation Gt $ keyword "forall") *>
+      (S.fromList <$> localIndentation Gt (many identifier))) <*
+      localIndentation Gt dot <*>
+      constraints <*>
       type_
 
     unquantified =
       Forall S.empty [] <$> type_
 
-classDefinition :: TokenParsing m => m Definition
-classDefinition = undefined
+classDefinition
+  :: ( Monad m
+     , IndentationParsing m
+     , TokenParsing m
+     )
+  => m Definition
+classDefinition =
+  Class <$>
+  (keyword "class" *> constraints) <*>
+  (type_ <* keyword "where") <*>
+  localIndentation Gt
+    (many
+      (absoluteIndentation
+        (liftA2 (,) identifier (colon *> type_) <?>
+        "type signature")))
 
-instanceDefinition :: TokenParsing m => m Definition
-instanceDefinition = undefined
+instanceDefinition
+  :: ( TokenParsing m
+     , IndentationParsing m
+     , Monad m
+     )
+  => m Definition
+instanceDefinition =
+  Instance <$>
+  (keyword "instance" *> constraints) <*>
+  (type_ <* keyword "where") <*>
+  localIndentation Gt (many $ absoluteIndentation functionBinding)
 
 variableBinding :: (TokenParsing m, IndentationParsing m, Monad m) => m (Binding Expr)
 variableBinding =
   VariableBinding <$>
   identifier <*
-  localIndentation Gt (symbolic '=') <*>
+  symbolic '=' <*>
   expr
 
 pattern_ :: (TokenParsing m, IndentationParsing m, Monad m) => m Pattern
 pattern_ =
   token $
-  (try patId <?> "variable pattern") <|>
+  (try patWildcard <?> "wildcard pattern") <|>
+  (patId <?> "variable pattern") <|>
   (patCon <?> "constructor pattern") <|>
-  (patLit <?> "literal pattern") <|>
-  (patWildcard <?> "wildcard pattern")
+  (patLit <?> "literal pattern")
   where
     patId = PatId <$> identifier
     patCon = PatCon <$> constructor <*> many identifier
     patLit = PatLit <$> literal
     patWildcard = symbolic '_' $> PatWildcard
-    
 
 expr :: (TokenParsing m, IndentationParsing m, Monad m) => m Expr
 expr =
@@ -236,8 +256,8 @@ expr =
 
     atom =
       (fmap Lit literal <?> "literal") <|>
-      (Id <$> identifier) <|>
-      (prod <?> "data constructor") <|>
+      (Var . Left <$> identifier) <|>
+      (Var . Right <$> constructor) <|>
       (parens expr <?> "parenthesised expression")
 
     case_ =
@@ -245,7 +265,7 @@ expr =
       (keyword "case" *>
        expr <*
        keyword "of") <*>
-      (localIndentation Gt branches)
+      localIndentation Gt branches
       where
         branches =
           some1 .
@@ -255,8 +275,6 @@ expr =
             pattern_
             (symbol "->" *>
              expr)
-
-    prod = Prod <$> constructor <*> many atom
 
     app = chainl1 atom (pure App)
 

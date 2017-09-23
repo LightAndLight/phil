@@ -30,9 +30,9 @@ let
       };
 
 in
-haskellPackages.callPackage
+nixpkgs.haskell.lib.dontHaddock (haskellPackages.callPackage
   ./phil.nix
   { inherit trifecta;
     inherit parsers;
     inherit indentation-trifecta;
-  }
+  })
