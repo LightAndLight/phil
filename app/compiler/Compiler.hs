@@ -42,16 +42,20 @@ instance AsSyntaxError CompilerError where
 
 data CompileOpts
   = CompileOpts
-  { filepath  :: FilePath
-  , useStdout :: Bool
+  { inputPath  :: FilePath
+  , outputPath :: Maybe FilePath
   }
 
 parseCompileOpts :: Parser CompileOpts
 parseCompileOpts = CompileOpts <$>
   strArgument
     (metavar "SOURCE" <> help "Source file") <*>
-  switch
-    (long "stdout" <> help "Print source to stdout")
+  optional
+    (strOption
+      (long "output" <>
+      short 'o' <>
+      metavar "OUTPUT" <>
+      help "Output path. Uses stdout if omitted."))
 
 compile ::
   ( AsTypeError e
@@ -64,7 +68,7 @@ compile ::
   => CompileOpts
   -> m ()
 compile opts = flip catches handlers $ do
-  content <- liftIO . readFile $ filepath opts
+  content <- liftIO . readFile $ inputPath opts
   case parseProgram content of
     Parse.Failure err -> liftIO . print $ Parse._errDoc err
     Parse.Success initialAST -> do
@@ -73,9 +77,9 @@ compile opts = flip catches handlers $ do
       let coreAST = fmap toCore typecheckedAST
       let phpAST = genPHP coreAST
       let phpSource = toSource "    " phpAST
-      liftIO $ if useStdout opts
-        then print phpSource
-        else T.writeFile (filepath opts <> ".php") phpSource
+      liftIO $ case outputPath opts of
+        Nothing -> T.putStrLn phpSource
+        Just p -> T.writeFile p phpSource
   where
     handlers =
       [ handler _TypeError $ liftIO . print . typeErrorMsg
