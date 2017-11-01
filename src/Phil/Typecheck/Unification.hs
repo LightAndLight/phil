@@ -14,9 +14,9 @@ module Phil.Typecheck.Unification (
   unify
 ) where
 
-import           Control.Applicative
-import           Data.Bifunctor
-import           Data.Monoid
+import Control.Applicative
+import Data.Bifunctor
+import Data.Monoid
 
 -- | Assertion that `term = term'`
 type Constraint t = (t, t)

@@ -1,14 +1,16 @@
 module Phil.Core.AST.Literal where
 
+import Text.PrettyPrint.ANSI.Leijen
+
 data Literal
-  = LitInt Int
+  = LitInt Integer
   | LitString String
   | LitChar Char
   | LitBool Bool
   deriving (Eq, Show)
 
-showLiteral :: Literal -> String
-showLiteral (LitInt a) = show a
-showLiteral (LitString a) = show a
-showLiteral (LitChar a) = show a
-showLiteral (LitBool b) = if b then "true" else "false"
+renderLiteral :: Literal -> Doc
+renderLiteral (LitInt a) = text $ show a
+renderLiteral (LitString a) = text $ show a
+renderLiteral (LitChar a) = text $ show a
+renderLiteral (LitBool b) = text $ if b then "true" else "false"

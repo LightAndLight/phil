@@ -1,7 +1,7 @@
 {-# language FlexibleContexts #-}
 {-# language FlexibleInstances #-}
+{-# language OverloadedStrings #-}
 {-# language TypeFamilies #-}
-
 module Phil.Core.Kinds
   ( HasKindTable(..)
   , checkDefinitionKinds
@@ -16,44 +16,39 @@ module Phil.Core.Kinds
   where
 
 import Control.Applicative
-import Control.Monad.Fresh
 import Control.Lens
-import Data.Foldable
-import Data.Traversable
-import Data.Functor
-import Data.Monoid
-import qualified Data.Set as S
-import Control.Monad.State
-import Control.Monad.Reader
-import Data.Maybe
 import Control.Monad.Except
+import Control.Monad.Fresh
+import Control.Monad.Reader
+import Data.Monoid
 import Data.Map (Map)
-import Data.Bifunctor
 import Data.List.NonEmpty (NonEmpty(..))
+
 import qualified Data.List.NonEmpty as N
 import qualified Data.Map as M
 
-import           Phil.Core.AST.Identifier
-import           Phil.Core.AST.Definitions
-import           Phil.Core.AST.ProdDecl
-import           Phil.Core.AST.Types
-import           Phil.Core.Kinds.Kind
-import           Phil.Core.Kinds.KindError
-import           Phil.Typecheck.Unification
+import Phil.Core.AST.Identifier
+import Phil.Core.AST.ProdDecl
+import Phil.Core.AST.Types
+import Phil.Core.Kinds.Kind
+import Phil.Core.Kinds.KindError
+import Phil.Typecheck.Unification
 
 
 class HasKindTable s where
-  kindTable :: Lens' s (Map Identifier Kind)
+  kindTable :: Lens' s (Map (Either Ident Ctor) Kind)
 
-instance HasKindTable (Map Identifier Kind) where
+instance HasKindTable (Map (Either Ident Ctor) Kind) where
   kindTable = lens id (flip const)
 
 freshKindVar :: MonadFresh m => m Kind
-freshKindVar = KindVar . ("k" ++) <$> fresh
+freshKindVar = KindVar . Ident . ("k" <>) <$> fresh
 
-lookupKind :: (AsKindError e, MonadError e m) => Identifier -> Map Identifier Kind -> m Kind
+lookupKind :: (AsKindError e, MonadError e m) => Either Ident Ctor -> Map (Either Ident Ctor) Kind -> m Kind
 lookupKind name table = case M.lookup name table of
-  Nothing -> throwError $ _KNotDefined # name
+  Nothing ->
+    throwError $
+    either (review _KVarNotDefined) (review _KCtorNotDefined) name
   Just kind -> pure kind
 
 subKindTable subs = fmap (substitute subs)
@@ -68,7 +63,7 @@ inferKind
   => Type
   -> m (Substitution Kind, Kind)
 inferKind (TyVar var) = do
-  kind <- lookupKind var =<< view kindTable
+  kind <- lookupKind (Left var) =<< view kindTable
   pure (mempty, kind)
 inferKind (TyApp con arg) = do
   (s1,conKind) <- inferKind con
@@ -80,10 +75,10 @@ inferKind (TyApp con arg) = do
 inferKind (TyCon tyCon) = case tyCon of
   FunCon -> pure (mempty, KindArrow Star $ KindArrow Star Star)
   TypeCon con -> do
-    kind <- lookupKind con =<< view kindTable
+    kind <- lookupKind (Right con) =<< view kindTable
     pure (mempty, kind)
 
-runInferKind :: (AsKindError e, MonadError e m) => Type -> Map Identifier Kind -> m (Substitution Kind, Kind)
+runInferKind :: (AsKindError e, MonadError e m) => Type -> Map (Either Ident Ctor) Kind -> m (Substitution Kind, Kind)
 runInferKind ty = runFreshT . runReaderT (inferKind ty)
 
 checkDefinitionKinds
@@ -93,14 +88,16 @@ checkDefinitionKinds
      , AsKindError e
      , MonadError e m
      )
-  => Identifier
-  -> [Identifier]
+  => Ctor
+  -> [Ident]
   -> NonEmpty ProdDecl
   -> m Kind
 checkDefinitionKinds tyCon tyVars prods = do
   kinds <- traverse (const freshKindVar) tyVars
   let constructorKind = foldr KindArrow Star kinds
-  let update = M.insert tyCon constructorKind . M.union (M.fromList $ zip tyVars kinds)
+  let update =
+        M.insert (Right tyCon) constructorKind .
+        M.union (M.fromList $ zip (Left <$> tyVars) kinds)
   subs <- local (over kindTable update) . checkConstructors $ N.toList prods
   pure . instantiateKind $ substitute subs constructorKind
   where

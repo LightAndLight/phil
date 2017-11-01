@@ -1,16 +1,25 @@
 module Phil.Core.AST.Pattern where
 
-import           Phil.Core.AST.Identifier
-import           Phil.Core.AST.Literal
+import Data.Monoid
+import Data.Text (Text)
+
+import qualified Data.Text as T
+
+import Phil.Core.AST.Identifier
+import Phil.Core.AST.Literal
+
+import Text.PrettyPrint.ANSI.Leijen hiding ((<>))
 
 data Pattern
-  = PatId Identifier
-  | PatCon Identifier [Identifier]
+  = PatId Ident
+  | PatCon Ctor [Ident]
   | PatLit Literal
   | PatWildcard
   deriving (Eq, Show)
 
-showPattern :: Pattern -> String
-showPattern (PatId a) = a
-showPattern (PatCon name args) = name ++ unwords args
-showPattern (PatLit lit) = showLiteral lit
+renderPattern :: Pattern -> Doc
+renderPattern (PatId a) = text . T.unpack $ getIdent a
+renderPattern (PatCon name args) =
+  text . T.unpack $ getCtor name <> T.unwords (fmap getIdent args)
+renderPattern (PatLit lit) = renderLiteral lit
+renderPattern PatWildcard = text "_"

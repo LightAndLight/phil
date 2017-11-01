@@ -15,8 +15,8 @@ import Phil.Core.AST.Types
 -- | more type variables.
 data InstanceHead
   = InstanceHead
-  { _ihClassName :: Identifier
-  , _ihInstArgs :: NonEmpty (Identifier, [Identifier])
+  { _ihClassName :: Ctor
+  , _ihInstArgs :: NonEmpty (Ctor, [Ident])
   } deriving (Eq, Show)
 
 makeLenses ''InstanceHead

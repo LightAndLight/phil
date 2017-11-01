@@ -8,39 +8,40 @@ module Phil.Typecheck.Entailment
   , simplify
   ) where
 
-import           Control.Applicative
+import Control.Applicative
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.Fresh
 import Control.Monad.State
-import           Data.Bifunctor
+import Data.Bifunctor
 import Data.Either
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as N
 import qualified Data.Map as M
 import Data.Map (Map)
-import           Data.Foldable
-import           Data.Maybe
-import           Data.Semigroup
+import Data.Foldable
+import Data.Maybe
+import Data.Semigroup
 import qualified Data.Set as S
 import Data.Set (Set)
+import Data.Text (pack)
 
 import Phil.AST
 import Phil.AST.Expr
-import           Phil.Core.AST.Identifier
-import           Phil.Core.AST.InstanceHead
-import           Phil.Core.AST.Types
-import           Phil.Sugar
-import           Phil.Typecheck.TypeError
-import           Phil.Typecheck.Unification
-import           Phil.Typeclasses
+import Phil.Core.AST.Identifier
+import Phil.Core.AST.InstanceHead
+import Phil.Core.AST.Types
+import Phil.Sugar
+import Phil.Typecheck.TypeError
+import Phil.Typecheck.Unification
+import Phil.Typeclasses
 
 -- | Rename all the type variables in a class / instance declaration to fresh
 -- | and return the substitution that was created
 standardizeApart
   :: MonadFresh m
   => TypeclassEntry a
-  -> m (Map Identifier Identifier, TypeclassEntry a)
+  -> m (Map Ident Ident, TypeclassEntry a)
 standardizeApart entry = case entry of
   TceInst supers instHead impls -> do
     let frees = foldr S.insert S.empty . fold $ snd <$> (instHead ^. ihInstArgs)
@@ -64,7 +65,10 @@ standardizeApart entry = case entry of
     fromMapping subs a = fromJust $ M.lookup a subs
     makeSubs
       = foldrM
-          (\var subs -> M.insert var <$> (("t" ++) <$> fresh) <*> pure subs)
+          (\var subs ->
+             M.insert var <$>
+             (Ident . (pack "t" <>) <$> fresh)
+             <*> pure subs)
           M.empty
 
 -- | Reduce a list of predicates to a normal form where no predicate
@@ -125,10 +129,10 @@ resolveAllPlaceholders
      )
   => Bool -- ^ Defer errors?
   -> [TypeclassEntry a] -- ^ Typeclass environment
-  -> Set Identifier -- ^ Type variables bound in the outer context
+  -> Set Ident -- ^ Type variables bound in the outer context
   -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
   -> Expr -- ^ Target expression
-  -> m ([Placeholder], [Identifier], Expr) -- ^ Deferred placeholders, dictionary variables, resulting expression
+  -> m ([Placeholder], [Ident], Expr) -- ^ Deferred placeholders, dictionary variables, resulting expression
 resolveAllPlaceholders shouldDeferErrors ctxt bound env expr = do
   (expr, (deferred, env')) <- runStateT (everywhereM go expr) ([], M.fromList env)
   let resolved = M.foldrWithKey justs M.empty env'
@@ -167,7 +171,7 @@ resolvePlaceholder
      )
   => Bool -- ^ Defer errors?
   -> [TypeclassEntry a] -- ^ Typeclass environment
-  -> Set Identifier -- ^ Type variables bound in the outer context
+  -> Set Ident -- ^ Type variables bound in the outer context
   -> [(Placeholder, Maybe Expr)] -- ^ Dictionary parameter environment
   -> Placeholder -- ^ The placeholder to construct a dictionary for
   -> m ([(Placeholder, Maybe Expr)], Maybe Expr)
@@ -189,7 +193,7 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
       , any isTyVar args
       = case value of
           Nothing -> do
-            dictVar <- DictVar . ("dict" ++) <$> fresh
+            dictVar <- DictVar . Ident . (pack "dict" <>) <$> fresh
             pure ([], Just dictVar)
           Just expr -> pure ([], Just expr)
 
@@ -209,7 +213,13 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
               -> flip catchError (const $ go goal entries) $ do
                   let tyArgs = substitute (Substitution $ N.toList subs) .
                         TyVar <$> tyVars
-                  (others, res) <- loop shouldDeferErrors ctxt bound env (className, tyArgs)
+                  (others, res) <-
+                    loop
+                      shouldDeferErrors
+                      ctxt
+                      bound
+                      env
+                      (className, tyArgs)
                   pure (((className, tyArgs), res) : others, DictSuper superName <$> res)
 
               | otherwise -> go goal entries
@@ -228,7 +238,7 @@ resolvePlaceholder shouldDeferErrors ctxt bound env goal = do
                     ( join $ fst <$> res
                     , do
                       res' <- sequence (snd <$> res)
-                      let args' = ctorAndArgs <$> args :: NonEmpty (Identifier, [Type])
+                      let args' = ctorAndArgs <$> args :: NonEmpty (Ctor, [Type])
                       pure $ foldl' App (DictInst con $ fst <$> args') res'
                     )
 

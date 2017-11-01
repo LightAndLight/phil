@@ -5,6 +5,6 @@ import Phil.Core.AST.Types
 
 data ProdDecl
   = ProdDecl
-  { prodName     :: Identifier
+  { prodName :: Ctor
   , prodArgTypes :: [Type]
   } deriving (Eq, Show)

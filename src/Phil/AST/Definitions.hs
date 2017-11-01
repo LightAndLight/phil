@@ -13,14 +13,14 @@ import Phil.Core.AST.InstanceHead
 import Phil.Core.AST.ProdDecl
 import Phil.Core.AST.Types
 
-type Context = [(Identifier, NonEmpty Identifier)]
+type Context = [(Ctor, NonEmpty Ident)]
 
 data Definition
-  = Data Identifier [Identifier] (NonEmpty ProdDecl)
-  | TypeSignature Identifier TypeScheme
+  = Data Ctor [Ident] (NonEmpty ProdDecl)
+  | TypeSignature Ident TypeScheme
   | Function (Binding Expr)
-  | Class [Type] Type [(Identifier, Type)]
-  | ValidClass Context Identifier (NonEmpty Identifier) [(Identifier, Type)]
+  | Class [Type] Type [(Ident, Type)]
+  | ValidClass Context Ctor (NonEmpty Ident) [(Ident, Type)]
   | Instance [Type] Type [Binding Expr]
   | ValidInstance Context InstanceHead [Binding Expr] [Expr]
   deriving (Eq, Show)

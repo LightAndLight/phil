@@ -1,26 +1,33 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell            #-}
-
 module Phil.PHP (toSource) where
 
-import           Control.Lens        (makeLenses, use, (%=), (+=), (-=), (.=))
-import           Control.Monad.State
-import           Data.DList          (DList, empty, snoc, toList)
-import           Data.Foldable       (traverse_)
-import           Data.List           (intercalate)
-import           Data.Monoid
+import Control.Lens (makeLenses, use, (%=), (+=), (-=), (.=))
+import Control.Monad.State
+import Data.DList (DList, empty, snoc, toList)
+import Data.Text (Text)
+import Data.Foldable (traverse_)
+import Data.Monoid
 
-import           Phil.PHP.AST
+import qualified Data.Text as T
 
-data SourceState = SourceState { _indentSequence :: String, _indentLevel :: Int, _output :: DList String }
+import Phil.PHP.AST
+
+data SourceState
+  = SourceState
+  { _indentSequence :: Text
+  , _indentLevel :: Int
+  , _output :: DList Text
+  }
 makeLenses ''SourceState
 
 newtype SourceM a = SourceM { unSourceM :: State SourceState a }
   deriving (Functor, Applicative, Monad, MonadState SourceState)
 
-toSource :: String -> PHP -> String
+toSource :: Text -> PHP -> Text
 toSource indentSeq php
-  = unlines .
+  = T.unlines .
     toList $
     evalState (unSourceM $ phpToSource php >> use output) (SourceState indentSeq 0 empty)
 
@@ -32,19 +39,19 @@ dedent = do
   level <- use indentLevel
   when (level > 0) (indentLevel -= 1)
 
-lineWords :: [String] -> SourceM ()
-lineWords = line . unwords
+lineWords :: [Text] -> SourceM ()
+lineWords = line . T.unwords
 
-line :: String -> SourceM ()
+line :: Text -> SourceM ()
 line input = do
   level <- use indentLevel
   indentSeq <- use indentSequence
-  output %= flip snoc (join (replicate level indentSeq) <> input)
+  output %= flip snoc (T.replicate level indentSeq <> input)
 
-semicolon :: (String -> SourceM a) -> String -> SourceM a
+semicolon :: (Text -> SourceM a) -> Text -> SourceM a
 semicolon f s = f (s <> ";")
 
-linesAdded :: SourceM a -> SourceM (DList String)
+linesAdded :: SourceM a -> SourceM (DList Text)
 linesAdded source = do
   initial <- use output
   output .= empty
@@ -52,9 +59,6 @@ linesAdded source = do
   result <- use output
   output .= initial
   return result
-
-manyLines :: [String] -> SourceM ()
-manyLines = traverse_ line
 
 indented :: SourceM a -> SourceM ()
 indented body = do
@@ -69,15 +73,15 @@ phpToSource (PHP decls) = do
   traverse phpDeclToSource decls
   line "?>"
 
-variable :: PHPId -> String
+variable :: PHPId -> Text
 variable name = "$" <> unPHPId name
 
-phpArg :: PHPArg -> String
+phpArg :: PHPArg -> Text
 phpArg (PHPArgValue name) = variable name
-phpArg (PHPArgReference name) = "&" ++ variable name
+phpArg (PHPArgReference name) = "&" <> variable name
 
-phpArgs :: [PHPArg] -> String
-phpArgs = intercalate ", " . fmap phpArg
+phpArgs :: [PHPArg] -> Text
+phpArgs = T.intercalate ", " . fmap phpArg
 
 phpDeclToSource :: PHPDecl -> SourceM ()
 phpDeclToSource (PHPDeclFunc name args body) = do
@@ -94,13 +98,13 @@ phpDeclToSource (PHPDeclStatement st) = do
   phpStatementToSource st
   line ""
 
-bracketed :: String -> String
+bracketed :: Text -> Text
 bracketed input = "(" <> input <> ")"
 
-functionValuesToSource :: [PHPExpr] -> SourceM String
-functionValuesToSource = fmap (bracketed . intercalate ", ") . traverse phpExprToSource
+functionValuesToSource :: [PHPExpr] -> SourceM Text
+functionValuesToSource = fmap (bracketed . T.intercalate ", ") . traverse phpExprToSource
 
-phpExprToSource :: PHPExpr -> SourceM String
+phpExprToSource :: PHPExpr -> SourceM Text
 phpExprToSource (PHPExprVar name) = return $ variable name
 phpExprToSource (PHPExprName name) = return $ unPHPId name
 phpExprToSource (PHPExprNew className args) = do
@@ -118,7 +122,7 @@ phpExprToSource (PHPExprArrayAccess array index) = do
 phpExprToSource (PHPExprBinop op left right) = do
   left' <- phpExprToSource left
   right' <- phpExprToSource right
-  return $ unwords
+  return $ T.unwords
     [ case left of
         PHPExprBinop{} -> bracketed left'
         _ -> left'
@@ -133,7 +137,7 @@ phpExprToSource (PHPExprUnop op arg) = do
 phpExprToSource (PHPExprAssign left expr) = do
   left' <- phpExprToSource left
   expr' <- phpExprToSource expr
-  return $ unwords
+  return $ T.unwords
     [ left'
     , "="
     , expr'
@@ -145,7 +149,7 @@ phpExprToSource (PHPExprFunction args use body) = do
         [] -> ""
         use -> " use " <> bracketed (phpArgs use)
   return $ "function" <> bracketed (phpArgs args) <> useVars <> " {\n" <>
-    (unlines . toList $ added) <>
+    (T.unlines . toList $ added) <>
     (head . toList $ bracket)
 phpExprToSource (PHPExprFunctionCall func args) = do
   func' <- phpExprToSource func
@@ -155,14 +159,14 @@ phpExprToSource (PHPExprFunctionCall func args) = do
         PHPExprName{} -> func'
         _ -> bracketed func'
   args' <- traverse phpExprToSource args
-  pure $ functionPart <> bracketed (intercalate "," args')
+  pure $ functionPart <> bracketed (T.intercalate "," args')
 
-visibilityToSource :: Visibility -> String
+visibilityToSource :: Visibility -> Text
 visibilityToSource Public = "public"
 visibilityToSource Private = "private"
 visibilityToSource Protected = "protected"
 
-classMemberPrefix :: Bool -> Visibility -> [String]
+classMemberPrefix :: Bool -> Visibility -> [Text]
 classMemberPrefix True visibility = [visibilityToSource visibility, "static"]
 classMemberPrefix False visibility = [visibilityToSource visibility]
 
@@ -177,7 +181,8 @@ phpClassMemberToSource (PHPClassVar static visibility name value) = do
       e' <- phpExprToSource e
       return ["=", e']
     Nothing -> return []
-  line . unwords $ classMemberPrefix static visibility <> [variable name] <> value'
+  line . T.unwords $
+    classMemberPrefix static visibility <> [variable name] <> value'
 
 phpSwitchCaseToSource :: PHPSwitchCase -> SourceM ()
 phpSwitchCaseToSource (PHPSwitchCase match body br) = do
@@ -197,7 +202,7 @@ phpDefaultCaseToSource (PHPDefaultCase body br) = do
 phpStatementToSource :: PHPStatement -> SourceM ()
 phpStatementToSource (PHPStatementReturn expr) = do
   expr' <- phpExprToSource expr
-  semicolon line $ unwords ["return", expr']
+  semicolon line $ T.unwords ["return", expr']
 phpStatementToSource (PHPStatementSwitch cond switches def) = do
   cond' <- phpExprToSource cond
   lineWords ["switch", bracketed cond', "{"]
@@ -217,23 +222,23 @@ phpStatementToSource (PHPStatementIfThenElse cond ifTrue ifFalse) = do
   line "}"
 phpStatementToSource (PHPStatementThrow expr) = do
   expr' <- phpExprToSource expr
-  semicolon line $ unwords ["throw", expr']
+  semicolon line $ T.unwords ["throw", expr']
 phpStatementToSource (PHPStatementExpr expr) = semicolon line =<< phpExprToSource expr
 
-phpLiteralToSource :: PHPLiteral -> SourceM String
+phpLiteralToSource :: PHPLiteral -> SourceM Text
 phpLiteralToSource (PHPBool b) = return $ if b then "true" else "false"
-phpLiteralToSource (PHPInt n) = return $ show n
-phpLiteralToSource (PHPString str) = return $ "\"" <> str <> "\""
+phpLiteralToSource (PHPInt n) = return . T.pack $ show n
+phpLiteralToSource (PHPString str) = return $ "\"" <> T.pack str <> "\""
 phpLiteralToSource PHPNull = return "null"
 phpLiteralToSource (PHPArray vals) = do
   vals' <- traverse phpExprToSource vals
-  return $ "array" <> bracketed (intercalate ", " vals')
+  return $ "array" <> bracketed (T.intercalate ", " vals')
 
-unOpToSource :: UnOp -> String
+unOpToSource :: UnOp -> Text
 unOpToSource Negate = "-"
 unOpToSource Not = "!"
 
-binOpToSource :: BinOp -> String
+binOpToSource :: BinOp -> Text
 binOpToSource Add = "+"
 binOpToSource Subtract = "-"
 binOpToSource Multiply = "*"

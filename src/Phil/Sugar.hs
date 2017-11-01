@@ -40,7 +40,7 @@ generalize constraints ty
     vars _ = S.empty
 
 -- | Converts a type to the form T a_1 a_2 .. a_n, where a_i are type variables
-asClassDef :: (AsSyntaxError e, MonadError e m) => Type -> m (Identifier, NonEmpty Identifier)
+asClassDef :: (AsSyntaxError e, MonadError e m) => Type -> m (Ctor, NonEmpty Ident)
 asClassDef (TyApp (TyCon (TypeCon con)) (TyVar arg)) = pure (con, arg :| [])
 asClassDef (TyApp left (TyVar arg)) = do
   (con, args) <- asClassDef left

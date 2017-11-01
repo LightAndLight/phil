@@ -2,18 +2,21 @@
 
 module Phil.Core.Kinds.Kind where
 
-import           Phil.Core.AST.Identifier
-import           Phil.Typecheck.Unification
+import Data.Text (unpack)
+import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+
+import Phil.Core.AST.Identifier
+import Phil.Typecheck.Unification
 
 data Kind
   = Star
   | KindArrow Kind Kind
-  | KindVar Identifier
+  | KindVar Ident
   | Constraint
   deriving (Eq, Show, Ord)
 
 instance Unify Kind where
-  type Variable Kind = Identifier
+  type Variable Kind = Ident
 
   substitute (Substitution []) k = k
   substitute subs (KindArrow k1 k2) = KindArrow (substitute subs k1) (substitute subs k2)
@@ -39,14 +42,17 @@ instance Unify Kind where
   toVariable (KindVar name) = Just name
   toVariable _ = Nothing
 
-showKind :: Kind -> String
-showKind Star = "*"
-showKind Constraint = "Constraint"
-showKind (KindArrow k1 k2) = unwords [nested k1, "->", showKind k2]
+renderKind :: Kind -> Doc
+renderKind Star = text "*"
+renderKind Constraint = text "Constraint"
+renderKind (KindArrow k1 k2) =
+  nested k1 <> space <>
+  text "->" <> space <>
+  renderKind k2
   where
-    nested k@KindArrow{} = "(" ++ showKind k ++ ")"
-    nested k = showKind k
-showKind (KindVar name) = name
+    nested k@KindArrow{} = parens $ renderKind k
+    nested k = renderKind k
+renderKind (KindVar name) = text . unpack $ getIdent name
 
 -- If we don't instantiate the result of kind inference then we have Kind Polymorphism
 instantiateKind :: Kind -> Kind

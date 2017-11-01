@@ -13,8 +13,8 @@ import Control.Monad.Free
 import Control.Monad.Fresh.Class as Fresh
 import Control.Monad.Reader
 import Control.Monad.State
-import Control.Monad.Trans
 import Control.Monad.Writer
+import Data.Text (pack)
 
 newtype FreshT m a = FreshT { runFreshT' :: StateT Int m a }
   deriving (Functor, Applicative, Monad)
@@ -43,7 +43,7 @@ instance Monad m => MonadFresh (FreshT m) where
   fresh = FreshT $ do
     n <- get 
     put (n + 1)
-    pure $ show n
+    pure . pack $ show n
 
 instance MonadTrans FreshT where
   lift = FreshT . lift
